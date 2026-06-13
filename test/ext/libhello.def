@@ -1,0 +1,6 @@
+LIBRARY libhello.dll
+
+EXPORTS
+process_float
+process_int
+say_hello
