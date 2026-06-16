@@ -238,7 +238,7 @@ final class Compiler
 
     private function compileWindows(ProgramNode $program): void
     {
-        // ---- Phase 1: Generate code ----
+        // ---- Phase 1: Generate code with default IAT ----
         $cg = new CodeGeneratorWindows();
         $cg->setLibPaths($this->libPaths);
         $cg->generate($program);
@@ -262,17 +262,25 @@ final class Compiler
             }
         }
 
-        // ---- Phase 2: Prepare PE layout (computes import table, string RVAs) ----
+        // ---- Phase 2: Prepare PE layout (computes rdataRva + import table + string RVAs) ----
         $code = $builder->getCode();
         $writer = new PEWriter($this->outputFile);
         $writer->setPayload($code, $strings, $finalIat);
         $stringRvas = $writer->prepare();
 
-        // ---- Phase 3: Resolve patches in the builder's code buffer ----
+        // ---- Phase 3: If rdataRva shifted, offset IAT patch targets ----
+        $actualIatBase = $writer->getIatRva();
+        $defaultIatBase = 0x3070;
+        $iatDelta = $actualIatBase - $defaultIatBase;
+        if ($iatDelta !== 0) {
+            $builder->offsetIatPatches($iatDelta);
+        }
+
+        // ---- Phase 4: Resolve patches in the builder's code buffer ----
         $writer->resolveIatPatches($builder);
         $writer->resolveStringPatches($builder);
 
-        // ---- Phase 4: Re-set payload with patched code, then write ----
+        // ---- Phase 5: Re-set payload with patched code, then write ----
         $patchedCode = $builder->getCode();
         $writer->setPayload($patchedCode, $strings, $finalIat);
         $writer->write();

@@ -119,7 +119,8 @@ tphp 是一个用纯 PHP 编写的 AOT 编译器，将类 PHP 源码直接编译
 - **方法调用**：`$obj->method(args)` / `$this->method(args)` → `MethodCallNode`
 - **属性访问**：`$obj->prop` / `$i->value` → 返回 VarRefNode（typedef）
 - **$this**：→ `ThisExprNode`
-- **闭包/数组/索引**：同前
+- **数组简写语法**：`[elem1, elem2, ...]` → `parseArrayShorthand()`，自动推断元素类型（int/float/string/bool/callback），混合类型报错，空数组默认 int
+- **闭包/索引**：同前
 
 ### 3. AST (`src/AST/`)
 
@@ -219,23 +220,26 @@ AST 节点已按语义类别拆分到 4 个文件：
 
 ### 7. PEWriter (`src/PEWriter.php`)
 
-**IAT 布局**：`IAT_RVA = 0x3070`（因 `.text` 代码段可超过 0x1000 字节，`.rdata` 从 0x2000 移至 0x3000 避免虚拟地址重叠），8 个 IAT 函数：LoadLibraryA, GetProcAddress, GetStdHandle, WriteFile, ExitProcess, SetConsoleOutputCP, HeapAlloc, GetProcessHeap。
+**IAT 布局**：`.rdata` 段 RVA 动态计算（`max(0x3000, TEXT_RVA + textVirtSize 对齐)`），避免与 `.text` 段虚拟地址重叠。`.text` 文件段最小为 `SECTION_ALIGN + FILE_ALIGN (0x1200)`，确保 Windows PE Loader 接受可执行文件。8 个 IAT 函数：LoadLibraryA, GetProcAddress, GetStdHandle, WriteFile, ExitProcess, SetConsoleOutputCP, HeapAlloc, GetProcessHeap。
 
-`CodeGeneratorWindows` 中 IAT 常量必须与 `PEWriter::IAT_RVA` 保持同步。
+IAT 常量在 `CodeGeneratorWindows` 中为实例属性，`.`rdata` RVA 偏移时通过 `Compiler::compileWindows` 自动检测 delta 并调用 `X64Builder::offsetIatPatches()` 同步修补目标 RVA。
 
 ### 8. 类型转换 (`genCast`)
 
-`genCast` 统一处理三种目标类型：
+`genCast` 统一处理四种目标类型：
 
 | 目标 | 实现 |
 |------|------|
 | `(int)` | Float→int (cvttsd2si), String→int (atoi), Array→int (0/1), Bool/Null→int (直通) |
 | `(float)` | Int/Bool→float (cvtsi2sd), String→float (编译期 PHP `(float)` 解析), Null→0 (xorps), Array→0/1 |
 | `(string)` | Int/Bool→itoa, Float→ftoa, Null→空串, String→直通, Array→编译错误 |
+| `(bool)` | Int/Bool→(test/setnz), Float→(ucomisd/setnz), String→(空或"0"→false), Null→false, Array→编译期折叠 (count>0), Object→true |
 
 **`(float)` 字符串编译期解析**：对 `StringLiteralNode` 在编译时调用 `PHP (float)$s` → `pack('d', $f)` → IEEE 754 位模式 → `mov rax, imm64` (0 值用 xorps 避免 10 字节指令)。
 
 **`(string)` 栈缓冲**：itoa/ftoa 写入 `[RBP + itoaBufOffset]` 栈缓冲区，通过 `mov rax, rsi` 返回指针。栈缓冲在同一函数内不会被后续操作覆盖（除非再次调用 itoa/ftoa）。
+
+**`(bool)` 数组字面量编译期折叠**：`ArrayLiteralNode` 的 `genExpr` 为 no-op，因此 `(bool)array(...)` 在调用 `genExpr` 前编译期折叠为 `count($elements) > 0 ? 1 : 0`。
 
 ### 9. 字符串插值 (`"$var"`)
 
@@ -245,10 +249,78 @@ AST 节点已按语义类别拆分到 4 个文件：
 
 **printString 处理**：`CastExprNode` → genExpr(genCast) → 直接 WriteFile，不再经 printByType（避免递归）。
 
-### 10. 子函数支持
+### 10. foreach 循环
+
+`foreach` 通过**语法糖展开**实现：
+
+| 语法 | 展开结果 |
+|------|----------|
+| `foreach($arr as $v)` | `for($iN=0; $iN<count($arr); $iN++){$v=$arr[$iN]; body}` |
+| `foreach($arr as $k=>$v)` | `for($iN=0; $iN<count($arr); $iN++){$k=$iN; $v=$arr[$iN]; body}` |
+
+使用唯一迭代器名 `$i1`, `$i2`...，`PostIncrementNode` 的 `isDecrement` 参数为 `false`（第三个参数名为 `isDecrement`，非 `isIncrement`）。
+
+### 11. 子函数支持
 
 - **stdout 初始化**：子函数 prologue 调用 `GetStdHandle(-11)` 并存入 `[RBP + stdoutStackOffset]`
 - **itoa(0) 修复**：zero 路径写 `'0'` 到 `[RDI]` 而非 `[RSP+0x10]`，避免 `leave` 后缓冲区失效
+
+### 12. 类型推断上下文传递
+
+`collectVariables` 递归时需要**传递已收集的变量上下文**，否则 `inferIndexType` 无法通过 `$this->vars`（此时为空）找到数组的 `elemType`。
+
+修复方案：
+- `collectVariables(array $stmts, array $parentVars = [])` — 递归时传递父级 `$vars`
+- 每次调用 `inferTypeInfo` 前设置 `$this->collectionVars = $vars`
+- `inferIndexType` 和 `inferType(VarRefNode)` 回退到 `$this->collectionVars`
+
+**注意**：两个 `CodeGenerator` 类有各自的 `collectVariables`（非 trait 版本），需要**同时修改**。
+
+### 13. `loadStringAtAddr` 寄存器自毁修复
+
+原代码：
+```php
+$this->b->movRM64(RAX, $addrReg, 0); // RAX = [addrReg] — 若 addrReg==RAX，自毁！
+$this->b->movRM64(RDX, $addrReg, 8); // RDX = [addrReg+8] — addrReg 已变
+```
+
+修复：**先读 RDX，再读 RAX**：
+```php
+$this->b->movRM64(RDX, $addrReg, 8); // 先读 len（RAX 尚未被覆盖）
+$this->b->movRM64(RAX, $addrReg, 0); // 再读 ptr
+```
+
+### 14. 逻辑运算符
+
+| 运算符 | 实现 |
+|--------|------|
+| `!` | `test rax,rax; sete al; movzx rax,al` |
+| `&&` | 短路求值：左 false → 跳过右 → 返回 0 |
+| `||` | 短路求值：左 true → 跳过右 → 返回 1 |
+
+`inferBinType` 中逻辑/比较运算符**优先于** Float 类型检查，确保返回 `Bool`。
+
+### 15. 复合赋值
+
+`+=` `-=` `.=` 在 Parser 中展开为普通赋值：
+- `$a += expr` → `$a = $a + expr`
+- `$a -= expr` → `$a = $a - expr`  
+- `$a .= expr` → `$a = $a . expr`
+
+### 16. 浮点比较
+
+`genFloatCmp` / `genFloatCmpWin` 使用 **SETcc** 指令替代 `jp/je` 短跳转：
+```php
+$this->b->emit(match ($op) {
+    '==' => '\x0F\x94\xC0', // sete al
+    '!=' => '\x0F\x95\xC0', // setne al
+    '<'  => '\x0F\x92\xC0', // setb al
+    '>'  => '\x0F\x97\xC0', // seta al
+    '<=' => '\x0F\x96\xC0', // setbe al
+    '>=' => '\x0F\x93\xC0', // setae al
+});
+$this->b->emit('\x48\x0F\xB6\xC0'); // movzx rax, al
+```
 
 ---
 
@@ -258,12 +330,12 @@ AST 节点已按语义类别拆分到 4 个文件：
 
 | 特性 | 状态 | 说明 |
 |------|------|------|
-| `foreach` | 未实现 | |
 | `continue` | 未实现 | |
 | `do-while` | 未实现 | |
 | 类属性/字段 | 未实现 | 类实例无属性 |
 | 类继承 | 未实现 | |
 | string 枚举参数 | ⚠️ 部分 | typeName 追踪待完善 |
+| 多个 foreach + `$k=>$v` 同变量名 | ⚠️ | 避免使用相同值变量名（如都用 `$v`） |
 
 ### 运行时限制
 
@@ -277,13 +349,10 @@ AST 节点已按语义类别拆分到 4 个文件：
 
 | 问题 | 说明 |
 |------|------|
-| IAT RVA 硬编码 | IAT 常量与 PEWriter 布局耦合；已从 0x2070 移至 0x3070（因 .text > 0x1000） |
 | 两套 CodeGenerator | 已通过 traits 大幅消除重复（`BaseGenerator` + 平台专用 traits） |
 | 闭包仅支持 calleeVars | 不能捕获外部变量 |
 | RIP-relative 字符串 | FFI/枚举字符串值需栈上构建躲避 resolveStringPatches |
 | HeapFree IAT 未注册 | `IAT_HEAPFREE` 常量已定义但未加入 IAT 导入表 |
-| `.rdata` 段固定 RVA | `RDATA_RVA = 0x3000` 硬编码，`.text` 段超过 0x2000 时需手动调整 |
-| genBinOp 子函数问题 | 子函数中调用 `GetProcessHeap`/`HeapAlloc` IAT 会 crash（预存），`"$var"` 通过 genVarDecl 拦截绕过 |
 
 ---
 
@@ -340,12 +409,11 @@ cd test/ext && php ../../tphp.php main.php -lib libhello.dll && ./main.exe
 | 常量 | 值 | 文件 |
 |------|----|------|
 | `MAX_ARRAY_CAP` | 64 | `CodeGen/BaseGenerator.php`（共享） |
-| `IAT_RVA` | 0x3070 | `PEWriter` (`RDATA_RVA + IAT_OFFSET`) |
-| `IAT_BASE_RVA` | 0x3070 | `CodeGeneratorWindows` |
-| `IAT_HEAPFREE` | 0x30B0 | `CodeGeneratorWindows`（已定义，但未加入 IAT 表） |
+| `IAT_BASE_RVA` | 0x3070（默认，大程序自动偏移）| `CodeGeneratorWindows`（实例属性） |
+| `IAT_HEAPFREE` | 跟随 IAT_BASE_RVA | `CodeGeneratorWindows` |
 | `IMAGE_BASE` | 0x140000000 | `PEWriter` |
 | `TEXT_RVA` | 0x1000 | `PEWriter` |
-| `RDATA_RVA` | 0x3000 | `PEWriter`（从 0x2000 上调，避免 .text > 0x1000 时重叠） |
+| `MIN_RDATA_RVA` | 0x3000 | `PEWriter`（`.rdata` 最小 RVA，随 `.text` 增长自动上浮） |
 | `IAT_OFFSET` | 0x70 | `PEWriter` |
 | `SECTION_ALIGN` | 0x1000 | `PEWriter` |
 | `FILE_ALIGN` | 0x200 | `PEWriter` |

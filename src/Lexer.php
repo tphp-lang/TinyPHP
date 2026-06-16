@@ -168,6 +168,11 @@ final class Lexer
     private function tryDot(string $ch): bool
     {
         if ($ch === '.') {
+            if ($this->peekAhead() === '=') {
+                $this->addToken(TokenType::ConcatAssign, '.=');
+                $this->pos += 2; $this->column += 2;
+                return true;
+            }
             if ($this->pos + 1 < $this->length && ctype_digit($this->source[$this->pos + 1])) {
                 $this->readNumber();
                 return true;
@@ -396,6 +401,7 @@ final class Lexer
             '+' => TokenType::Plus,     '*' => TokenType::Star,
             '/' => TokenType::Slash,    '%' => TokenType::Percent,
             '\\' => TokenType::Backslash,
+            '!' => TokenType::Not_,
         ];
         if (isset($map[$ch])) {
             $this->addToken($map[$ch], $ch);
@@ -429,13 +435,32 @@ final class Lexer
             return true;
         }
         if ($ch === '!' && $this->peekAhead() === '=') {
-            // Check for !==
             if ($this->pos + 2 < $this->length && $this->source[$this->pos + 2] === '=') {
                 $this->addToken(TokenType::StrictNeq, '!==');
                 $this->pos += 3; $this->column += 3;
                 return true;
             }
             $this->addToken(TokenType::Neq, '!=');
+            $this->pos += 2; $this->column += 2;
+            return true;
+        }
+        if ($ch === '&' && $this->peekAhead() === '&') {
+            $this->addToken(TokenType::And_, '&&');
+            $this->pos += 2; $this->column += 2;
+            return true;
+        }
+        if ($ch === '|' && $this->peekAhead() === '|') {
+            $this->addToken(TokenType::Or_, '||');
+            $this->pos += 2; $this->column += 2;
+            return true;
+        }
+        if ($ch === '+' && $this->peekAhead() === '=') {
+            $this->addToken(TokenType::PlusAssign, '+=');
+            $this->pos += 2; $this->column += 2;
+            return true;
+        }
+        if ($ch === '-' && $this->peekAhead() === '=') {
+            $this->addToken(TokenType::MinusAssign, '-=');
             $this->pos += 2; $this->column += 2;
             return true;
         }

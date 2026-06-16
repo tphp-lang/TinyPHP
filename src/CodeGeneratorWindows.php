@@ -47,16 +47,16 @@ final class CodeGeneratorWindows
     use FFI;
 
     /** IAT RVAs (fixed layout, MUST match PEWriter::IAT_RVA) */
-    public const int IAT_BASE_RVA          = 0x3070;
-    public const int IAT_LOADLIBRARYA      = 0x3070;
-    public const int IAT_GETPROCADDRESS    = 0x3078;
-    public const int IAT_GETSTDHANDLE      = 0x3080;
-    public const int IAT_WRITEFILE         = 0x3088;
-    public const int IAT_EXITPROCESS       = 0x3090;
-    public const int IAT_SETCONSOLEOUTPUTCP = 0x3098;
-    public const int IAT_HEAPALLOC         = 0x30A0;
-    public const int IAT_GETPROCESSHEAP    = 0x30A8;
-    public const int IAT_HEAPFREE         = 0x30B0;
+    public int $IAT_BASE_RVA = 0x3070;
+    public int $IAT_LOADLIBRARYA = 0x3070;
+    public int $IAT_GETPROCADDRESS = 0x3078;
+    public int $IAT_GETSTDHANDLE = 0x3080;
+    public int $IAT_WRITEFILE = 0x3088;
+    public int $IAT_EXITPROCESS = 0x3090;
+    public int $IAT_SETCONSOLEOUTPUTCP = 0x3098;
+    public int $IAT_HEAPALLOC = 0x30A0;
+    public int $IAT_GETPROCESSHEAP = 0x30A8;
+    public int $IAT_HEAPFREE = 0x30B0;
 
     /** Handle to stdout (cached in a stack variable for main) */
     private int $stdoutStackOffset = 0;
@@ -296,7 +296,7 @@ final class CodeGeneratorWindows
 
         // Initialize stdout handle for this sub-function
         $this->b->movRI32(X64Builder::RCX, -11);              // STD_OUTPUT_HANDLE
-        $this->b->emit("\x48\x83\xEC\x28"); $this->b->callIat(self::IAT_GETSTDHANDLE); $this->b->emit("\x48\x83\xC4\x28");
+        $this->b->emit("\x48\x83\xEC\x28"); $this->b->callIat($this->IAT_GETSTDHANDLE); $this->b->emit("\x48\x83\xC4\x28");
         $this->b->movMR64(X64Builder::RBP, $this->stdoutStackOffset, X64Builder::RAX);
 
         // Set up calleeVars for params
@@ -351,7 +351,7 @@ final class CodeGeneratorWindows
         // Acquire stdout handle for this user function
         $this->b->movRI32(X64Builder::RCX, -11);          // STD_OUTPUT_HANDLE
         $this->b->emit("\x48\x83\xEC\x28");
-        $this->b->callIat(self::IAT_GETSTDHANDLE);
+        $this->b->callIat($this->IAT_GETSTDHANDLE);
         $this->b->emit("\x48\x83\xC4\x28");
         $this->b->movMR64(X64Builder::RBP, $this->stdoutStackOffset, X64Builder::RAX);
 
@@ -508,30 +508,31 @@ final class CodeGeneratorWindows
     }
 
     /** @param StmtNode[] $stmts */
-    private function collectVariables(array $stmts): array
+    private function collectVariables(array $stmts, array $parentVars = []): array
     {
-        $vars = [];
+        $vars = $parentVars;
         foreach ($stmts as $stmt) {
             if ($stmt instanceof VarDeclNode) {
+                $this->collectionVars = $vars;
                 $typeInfo = $this->inferTypeInfo($stmt->init);
                 $vars[$stmt->name] = $typeInfo;
             } elseif ($stmt instanceof IfStmtNode) {
-                $vars = array_merge($vars, $this->collectVariables($stmt->thenBody));
-                $vars = array_merge($vars, $this->collectVariables($stmt->elseBody));
+                $vars = array_merge($vars, $this->collectVariables($stmt->thenBody, $vars));
+                $vars = array_merge($vars, $this->collectVariables($stmt->elseBody, $vars));
             } elseif ($stmt instanceof WhileStmtNode) {
-                $vars = array_merge($vars, $this->collectVariables($stmt->body));
+                $vars = array_merge($vars, $this->collectVariables($stmt->body, $vars));
             } elseif ($stmt instanceof ForStmtNode) {
-                // Collect for-init variable declaration
                 if ($stmt->init instanceof VarDeclNode) {
+                    $this->collectionVars = $vars;
                     $typeInfo = $this->inferTypeInfo($stmt->init->init);
                     $vars[$stmt->init->name] = $typeInfo;
                 }
-                $vars = array_merge($vars, $this->collectVariables($stmt->body));
+                $vars = array_merge($vars, $this->collectVariables($stmt->body, $vars));
             } elseif ($stmt instanceof SwitchStmtNode) {
                 foreach ($stmt->cases as $case) {
-                    $vars = array_merge($vars, $this->collectVariables($case->body));
+                    $vars = array_merge($vars, $this->collectVariables($case->body, $vars));
                 }
-                $vars = array_merge($vars, $this->collectVariables($stmt->defaultBody));
+                $vars = array_merge($vars, $this->collectVariables($stmt->defaultBody, $vars));
             }
         }
         return $vars;
@@ -579,7 +580,10 @@ final class CodeGeneratorWindows
             $e instanceof FuncCallNode       => $this->inferCallType($e),
             $e instanceof CFuncCallNode      => $this->inferCFuncType($e),
             $e instanceof VarRefNode         => (
-                $this->calleeVars[$e->name]['type'] ?? $this->vars[$e->name]['type'] ?? TphpType::Int
+                $this->calleeVars[$e->name]['type']
+                ?? $this->vars[$e->name]['type']
+                ?? $this->collectionVars[$e->name]['type']
+                ?? TphpType::Int
             ),
             $e instanceof IndexAccessNode    => $this->inferIndexType($e),
             $e instanceof StringRangeNode   => TphpType::String,
@@ -632,7 +636,9 @@ final class CodeGeneratorWindows
     private function inferIndexType(IndexAccessNode $e): TphpType
     {
         if ($e->target instanceof VarRefNode) {
-            $info = $this->vars[$e->target->name] ?? null;
+            $info = $this->vars[$e->target->name]
+                ?? $this->collectionVars[$e->target->name]
+                ?? null;
             if ($info !== null && isset($info['elemType'])) {
                 return $info['elemType'];
             }
@@ -818,7 +824,7 @@ final class CodeGeneratorWindows
         $this->b->emit("\x48\xC7\x44\x24\x20\x00\x00\x00\x00");
 
         // call WriteFile
-        $this->b->callIat(self::IAT_WRITEFILE);
+        $this->b->callIat($this->IAT_WRITEFILE);
 
         // add rsp, 0x30
         $this->b->emit("\x48\x83\xC4\x30");
@@ -838,14 +844,14 @@ final class CodeGeneratorWindows
         // This ensures Unicode characters display correctly via WriteFile
         $this->b->movRI32(X64Builder::RCX, 65001);       // CP_UTF8
         $this->b->emit("\x48\x83\xEC\x28");              // sub rsp, 0x28 (32 shadow + 8 alignment)
-        $this->b->callIat(self::IAT_SETCONSOLEOUTPUTCP);
+        $this->b->callIat($this->IAT_SETCONSOLEOUTPUTCP);
         $this->b->emit("\x48\x83\xC4\x28");              // add rsp, 0x28
 
         // ---- Step 2: Get stdout handle ----
         // stdoutStackOffset is already set during frame layout in generateFunctionBody()
         $this->b->movRI32(X64Builder::RCX, -11);          // STD_OUTPUT_HANDLE
         $this->b->emit("\x48\x83\xEC\x28");              // sub rsp, 0x28 (32 shadow + 8 alignment)
-        $this->b->callIat(self::IAT_GETSTDHANDLE);
+        $this->b->callIat($this->IAT_GETSTDHANDLE);
         $this->b->emit("\x48\x83\xC4\x28");              // add rsp, 0x28
 
         // Cache handle at [rbp + stdoutStackOffset]
@@ -864,7 +870,7 @@ final class CodeGeneratorWindows
     {
         $this->b->movRI32(X64Builder::RCX, $code);
         $this->b->emit("\x48\x83\xEC\x20");              // sub rsp, 0x20 (32 shadow)
-        $this->b->callIat(self::IAT_EXITPROCESS);
+        $this->b->callIat($this->IAT_EXITPROCESS);
         // No return from ExitProcess
     }
 
@@ -1435,7 +1441,7 @@ final class CodeGeneratorWindows
 
         // Step 4: Call GetProcessHeap() to get the heap handle
         $this->b->emit("\x48\x83\xEC\x28");               // sub rsp, 40 (shadow space + alignment)
-        $this->b->callIat(self::IAT_GETPROCESSHEAP);
+        $this->b->callIat($this->IAT_GETPROCESSHEAP);
         $this->b->emit("\x48\x83\xC4\x28");               // add rsp, 40
 
         // Step 5: Call HeapAlloc(hHeap, HEAP_ZERO_MEMORY, totalLen)
@@ -1445,7 +1451,7 @@ final class CodeGeneratorWindows
         $this->b->addRR(X64Builder::R8, X64Builder::R15);  // dwBytes += right len = total len
 
         $this->b->emit("\x48\x83\xEC\x28");               // sub rsp, 40 (shadow space + alignment)
-        $this->b->callIat(self::IAT_HEAPALLOC);
+        $this->b->callIat($this->IAT_HEAPALLOC);
         $this->b->emit("\x48\x83\xC4\x28");               // add rsp, 40
 
         // RAX = allocated buffer pointer
@@ -1820,7 +1826,7 @@ final class CodeGeneratorWindows
         // Re-acquire stdout handle for this closure's rbp
         $this->b->movRI32(X64Builder::RCX, -11);          // STD_OUTPUT_HANDLE
         $this->b->emit("\x48\x83\xEC\x28");              // sub rsp, 0x28 (32 shadow + 8 alignment)
-        $this->b->callIat(self::IAT_GETSTDHANDLE);
+        $this->b->callIat($this->IAT_GETSTDHANDLE);
         $this->b->emit("\x48\x83\xC4\x28");              // add rsp, 0x28
         $this->b->movMR64(X64Builder::RBP, $this->stdoutStackOffset, X64Builder::RAX);
 

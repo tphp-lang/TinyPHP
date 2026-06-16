@@ -204,6 +204,17 @@ final class X64Builder
     }
 
     /**
+     * Offset all IAT patch target RVAs by a delta.
+     * Used when .rdata section RVA shifts to accommodate large .text sections.
+     */
+    public function offsetIatPatches(int $delta): void
+    {
+        foreach ($this->rvaPatches as $offset => $targetRva) {
+            $this->rvaPatches[$offset] = $targetRva + $delta;
+        }
+    }
+
+    /**
      * Resolve string label patches using absolute RVAs (for Windows PE mode).
      *
      * For LEA [rip+disp32] and similar RIP-relative instructions:

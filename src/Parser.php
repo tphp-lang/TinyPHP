@@ -25,6 +25,7 @@ final class Parser
 
     /** @var array<string, FunctionDeclNode> */
     private array $functionDecls = [];
+    private int $foreachCounter = 0;
 
     /** @var array<string, ClosureNode> */
     private array $closureDecls = [];
@@ -437,6 +438,13 @@ final class Parser
     {
         $stmts = [];
         while (!$this->lexer->isEof() && !$this->lexer->current()->isType(TokenType::RBrace)) {
+            // Handle foreach specially — it returns multiple statements
+            if ($this->lexer->current()->isType(TokenType::Foreach)) {
+                foreach ($this->parseForeachStmts() as $s) {
+                    $stmts[] = $s;
+                }
+                continue;
+            }
             $stmt = $this->parseStatement();
             if ($stmt !== null) {
                 $stmts[] = $stmt;
@@ -474,6 +482,26 @@ final class Parser
                 $expr = $this->parseExpression();
                 $this->lexer->expect(TokenType::Semicolon);
                 return new VarDeclNode($varTok->line, $varTok->value, $expr);
+            }
+
+            // Compound assignment: $x += expr → VarDeclNode($x = $x + expr)
+            // $x -= expr → VarDeclNode($x = $x - expr)
+            // $x .= expr → VarDeclNode($x = $x . expr)
+            if ($next->isType(TokenType::PlusAssign) || $next->isType(TokenType::MinusAssign) || $next->isType(TokenType::ConcatAssign)) {
+                $varTok = $this->lexer->next(); // consume $x
+                $opTok = $this->lexer->next();  // consume += or -= or .=
+                $expr = $this->parseExpression();
+                $this->lexer->expect(TokenType::Semicolon);
+                $varRef = new VarRefNode($varTok->line, $varTok->value);
+                $op = match ($opTok->type) {
+                    TokenType::PlusAssign  => '+',
+                    TokenType::MinusAssign => '-',
+                    TokenType::ConcatAssign => '.',
+                    default => '+',
+                };
+                return new VarDeclNode($varTok->line, $varTok->value,
+                    new BinaryOpNode($varTok->line, $varRef, $op, $expr)
+                );
             }
 
             // Otherwise: $b[2](), $b[0] + 1, etc. → expression statement
@@ -643,6 +671,63 @@ final class Parser
         return new WhileStmtNode($line, $condition, $body);
     }
 
+    /**
+     * Parse foreach. Supports:
+     *   foreach ($arr as $val) { body }
+     *   foreach ($arr as $key => $val) { body }
+     *
+     * Desugaring (per user suggestion):
+     *   for ($i = 0; $i < count($arr); $i++) { $key = $i; $val = $arr[$i]; body }
+     */
+    private function parseForeachStmts(): array
+    {
+        $line = $this->lexer->current()->line;
+        $this->lexer->next(); // consume foreach
+        $this->lexer->expect(TokenType::LParen);
+        $arrayExpr = $this->parseExpression();
+        $this->lexer->expect(TokenType::As);
+
+        // Check for key => value syntax
+        $keyVarTok = null;
+        $firstTok = $this->lexer->expect(TokenType::Variable); // $val or $key
+        if ($this->lexer->current()->isType(TokenType::Arrow)) {
+            $keyVarTok = $firstTok;       // this was actually $key
+            $this->lexer->next();          // consume =>
+            $firstTok = $this->lexer->expect(TokenType::Variable); // $val
+        }
+        $valueVarTok = $firstTok;
+
+        $this->lexer->expect(TokenType::RParen);
+        $this->lexer->expect(TokenType::LBrace);
+        $body = $this->parseStatementList();
+        $this->lexer->expect(TokenType::RBrace);
+
+        $this->foreachCounter++;
+        $valueName = $valueVarTok->value;
+        $this->foreachCounter++;
+        $iterName = '$i' . $this->foreachCounter;
+
+        // for ($i = 0; $i < count($arr); $i++) { ... }
+        $init = new VarDeclNode($line, $iterName, new IntegerLiteralNode($line, 0));
+        $cond = new BinaryOpNode($line, new VarRefNode($line, $iterName), '<',
+            new FuncCallNode($line, 'count', [$arrayExpr]));
+        $incr = new PostIncrementNode($line, $iterName); // isDecrement=false → increment
+
+        // body statements
+        $bodyStmts = [];
+        if ($keyVarTok !== null) {
+            $bodyStmts[] = new VarDeclNode($line, $keyVarTok->value,
+                new VarRefNode($line, $iterName)); // $key = $i
+        }
+        $bodyStmts[] = new VarDeclNode($line, $valueName,
+            new IndexAccessNode($line, $arrayExpr, new VarRefNode($line, $iterName))); // $val = $arr[$i]
+        $bodyStmts = array_merge($bodyStmts, $body);
+
+        $forStmt = new ForStmtNode($line, $init, $cond, $incr, $bodyStmts);
+
+        return [$forStmt];
+    }
+
     // ---- Expression Parsing (Pratt parser style) ----
 
     private function parseExpression(): ExprNode
@@ -652,12 +737,38 @@ final class Parser
 
     private function parseConcat(): ExprNode
     {
-        $left = $this->parseComparison();
+        $left = $this->parseLogicalOr();
 
         while ($this->lexer->current()->isType(TokenType::Concat)) {
             $opTok = $this->lexer->next();
-            $right = $this->parseComparison();
+            $right = $this->parseLogicalOr();
             $left = new BinaryOpNode($opTok->line, $left, '.', $right);
+        }
+
+        return $left;
+    }
+
+    private function parseLogicalOr(): ExprNode
+    {
+        $left = $this->parseLogicalAnd();
+
+        while ($this->lexer->current()->isType(TokenType::Or_)) {
+            $opTok = $this->lexer->next();
+            $right = $this->parseLogicalAnd();
+            $left = new BinaryOpNode($opTok->line, $left, '||', $right);
+        }
+
+        return $left;
+    }
+
+    private function parseLogicalAnd(): ExprNode
+    {
+        $left = $this->parseComparison();
+
+        while ($this->lexer->current()->isType(TokenType::And_)) {
+            $opTok = $this->lexer->next();
+            $right = $this->parseComparison();
+            $left = new BinaryOpNode($opTok->line, $left, '&&', $right);
         }
 
         return $left;
@@ -720,6 +831,16 @@ final class Parser
                 $operand = $this->parseUnary(); // may chain (int)(float)$x
                 return new CastExprNode($line, $castType, $operand);
             }
+        }
+
+        // logical not: !expr
+        if ($this->lexer->match(TokenType::Not_)) {
+            $operand = $this->parseUnary();
+            return new BinaryOpNode($operand->line,
+                $operand,
+                '!',
+                new IntegerLiteralNode($operand->line, 0)
+            );
         }
 
         // negative numbers
@@ -872,6 +993,11 @@ final class Parser
             return $this->parseArrayLiteral();
         }
 
+        // array shorthand: [elem1, elem2, ...]  or  []
+        if ($cur->isType(TokenType::LBracket)) {
+            return $this->parseArrayShorthand();
+        }
+
         // count() builtin
         if ($cur->isType(TokenType::Count)) {
             $this->lexer->next();
@@ -978,6 +1104,70 @@ final class Parser
         $this->lexer->expect(TokenType::RParen);
 
         return new ArrayLiteralNode($line, $elementType, $elements);
+    }
+
+    /**
+     * Parse array shorthand: [elem1, elem2, ...]  or  []
+     * Element type is inferred from the literal elements.
+     * Equivalent to array("type", [...])
+     */
+    private function parseArrayShorthand(): ArrayLiteralNode
+    {
+        $line = $this->lexer->current()->line;
+        $this->lexer->next(); // consume [
+
+        $elements = [];
+        if (!$this->lexer->current()->isType(TokenType::RBracket)) {
+            do {
+                $elements[] = $this->parseExpression();
+            } while ($this->lexer->match(TokenType::Comma));
+        }
+
+        $this->lexer->expect(TokenType::RBracket);
+
+        $elementType = $this->inferElementType($elements);
+
+        return new ArrayLiteralNode($line, $elementType, $elements);
+    }
+
+    /**
+     * Infer the array element type from the literal elements.
+     * Empty arrays default to int. Non-literal elements (variables, expressions)
+     * cannot be typed at parse time, default to int.
+     */
+    private function inferElementType(array $elements): TphpType
+    {
+        if (empty($elements)) {
+            return TphpType::Int;
+        }
+
+        $types = [];
+        foreach ($elements as $e) {
+            if ($e instanceof IntegerLiteralNode) {
+                $types[] = 'int';
+            } elseif ($e instanceof FloatLiteralNode) {
+                $types[] = 'float';
+            } elseif ($e instanceof StringLiteralNode) {
+                $types[] = 'string';
+            } elseif ($e instanceof BoolLiteralNode) {
+                $types[] = 'bool';
+            } elseif ($e instanceof ClosureNode) {
+                $types[] = 'callback';
+            } else {
+                // Variables, expressions, etc. — cannot type at parse time, default to int
+                return TphpType::Int;
+            }
+        }
+
+        $uniqueTypes = array_unique($types);
+        if (count($uniqueTypes) === 1) {
+            return $this->parseTypeFromString($uniqueTypes[0]);
+        }
+
+        throw new \RuntimeException(
+            'Array shorthand requires uniform element types. ' .
+            'Mixed types not supported in tphp. Use array("type", [...]) syntax instead.'
+        );
     }
 
     private function parseUnset(): UnsetStmtNode

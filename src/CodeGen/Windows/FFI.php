@@ -37,7 +37,7 @@ trait FFI
             $this->b->emit8(ord($dllBytes[$i]));
         }
         $this->b->emit("\x48\x8D\x4C\x24\x20"); // lea rcx, [rsp + 32]
-        $this->b->callIat(self::IAT_LOADLIBRARYA);
+        $this->b->callIat($this->IAT_LOADLIBRARYA);
         $this->b->emit("\x48\x83\xC4"); $this->b->emit8($totalAlloc);
         $this->b->movRR(X64Builder::R12, X64Builder::RAX);
 
@@ -46,7 +46,7 @@ trait FFI
         $this->b->jneLabel($loadOk);
         $this->b->emit("\x48\x83\xEC\x20");
         $this->b->movRI32(X64Builder::RCX, 1);
-        $this->b->callIat(self::IAT_EXITPROCESS);
+        $this->b->callIat($this->IAT_EXITPROCESS);
         $this->b->defineLabel($loadOk);
 
         $slot = 0;
@@ -65,7 +65,7 @@ trait FFI
             }
             $this->b->emit("\x48\x8D\x54\x24\x20");             // lea rdx, [rsp + 32]
             $this->b->movRR(X64Builder::RCX, X64Builder::R12);
-            $this->b->callIat(self::IAT_GETPROCADDRESS);
+            $this->b->callIat($this->IAT_GETPROCADDRESS);
             $this->b->emit("\x48\x83\xC4"); $this->b->emit8($fnTotal);
 
             $off = $this->stdoutStackOffset - 8 * ($ffiCount - $slot);
@@ -87,7 +87,7 @@ trait FFI
         $this->b->movRR(X64Builder::R13, X64Builder::RDX);
 
         $this->b->emit("\x48\x83\xEC\x28");
-        $this->b->callIat(self::IAT_GETPROCESSHEAP);
+        $this->b->callIat($this->IAT_GETPROCESSHEAP);
         $this->b->emit("\x48\x83\xC4\x28");
         $this->b->movRR(X64Builder::RCX, X64Builder::RAX);
 
@@ -95,7 +95,7 @@ trait FFI
         $this->b->movRR(X64Builder::R8, X64Builder::R13);
         $this->b->emitAddRI32(X64Builder::R8, 1);
         $this->b->emit("\x48\x83\xEC\x28");
-        $this->b->callIat(self::IAT_HEAPALLOC);
+        $this->b->callIat($this->IAT_HEAPALLOC);
         $this->b->emit("\x48\x83\xC4\x28");
         $this->b->movRR(X64Builder::R14, X64Builder::RAX);
 
@@ -167,13 +167,13 @@ trait FFI
         $this->b->movRR(X64Builder::R13, X64Builder::RCX);
 
         $this->b->emit("\x48\x83\xEC\x28");
-        $this->b->callIat(self::IAT_GETPROCESSHEAP);
+        $this->b->callIat($this->IAT_GETPROCESSHEAP);
         $this->b->emit("\x48\x83\xC4\x28");
         $this->b->movRR(X64Builder::RCX, X64Builder::RAX);
         $this->b->xorRR(X64Builder::RDX, X64Builder::RDX);
         $this->b->movRR(X64Builder::R8, X64Builder::R13);
         $this->b->emit("\x48\x83\xEC\x28");
-        $this->b->callIat(self::IAT_HEAPALLOC);
+        $this->b->callIat($this->IAT_HEAPALLOC);
         $this->b->emit("\x48\x83\xC4\x28");
         $this->b->movRR(X64Builder::R14, X64Builder::RAX);
 

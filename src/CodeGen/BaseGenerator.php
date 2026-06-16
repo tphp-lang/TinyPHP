@@ -34,6 +34,9 @@ trait BaseGenerator
 
     private const int MAX_ARRAY_CAP = 64;
 
+    /** @var array<string, array> Temporary variable context during collectVariables */
+    private array $collectionVars = [];
+
     private int $calleeStackOffset = 0;
     private int $labelCounter = 0;
     private int $frameSize = 0;
@@ -96,29 +99,31 @@ trait BaseGenerator
     // ==================== Variable collection ====================
 
     /** @param StmtNode[] $stmts */
-    private function collectVariables(array $stmts): array
+    private function collectVariables(array $stmts, array $parentVars = []): array
     {
-        $vars = [];
+        $vars = $parentVars;
         foreach ($stmts as $stmt) {
             if ($stmt instanceof VarDeclNode) {
+                $this->collectionVars = $vars;
                 $typeInfo = $this->inferTypeInfo($stmt->init);
                 $vars[$stmt->name] = $typeInfo;
             } elseif ($stmt instanceof IfStmtNode) {
-                $vars = array_merge($vars, $this->collectVariables($stmt->thenBody));
-                $vars = array_merge($vars, $this->collectVariables($stmt->elseBody));
+                $vars = array_merge($vars, $this->collectVariables($stmt->thenBody, $vars));
+                $vars = array_merge($vars, $this->collectVariables($stmt->elseBody, $vars));
             } elseif ($stmt instanceof WhileStmtNode) {
-                $vars = array_merge($vars, $this->collectVariables($stmt->body));
+                $vars = array_merge($vars, $this->collectVariables($stmt->body, $vars));
             } elseif ($stmt instanceof ForStmtNode) {
                 if ($stmt->init instanceof VarDeclNode) {
+                    $this->collectionVars = $vars;
                     $typeInfo = $this->inferTypeInfo($stmt->init->init);
                     $vars[$stmt->init->name] = $typeInfo;
                 }
-                $vars = array_merge($vars, $this->collectVariables($stmt->body));
+                $vars = array_merge($vars, $this->collectVariables($stmt->body, $vars));
             } elseif ($stmt instanceof SwitchStmtNode) {
                 foreach ($stmt->cases as $case) {
-                    $vars = array_merge($vars, $this->collectVariables($case->body));
+                    $vars = array_merge($vars, $this->collectVariables($case->body, $vars));
                 }
-                $vars = array_merge($vars, $this->collectVariables($stmt->defaultBody));
+                $vars = array_merge($vars, $this->collectVariables($stmt->defaultBody, $vars));
             }
         }
         return $vars;
@@ -150,7 +155,9 @@ trait BaseGenerator
     private function inferIndexType(IndexAccessNode $e): TphpType
     {
         if ($e->target instanceof VarRefNode) {
-            $info = $this->vars[$e->target->name] ?? null;
+            $info = $this->vars[$e->target->name]
+                ?? $this->collectionVars[$e->target->name]
+                ?? null;
             if ($info !== null && isset($info['elemType'])) {
                 return $info['elemType'];
             }
@@ -161,10 +168,11 @@ trait BaseGenerator
     private function inferBinType(BinaryOpNode $e): TphpType
     {
         if ($e->op === '.') return TphpType::String;
+        // Comparison and logical operators always return Bool
+        if (in_array($e->op, ['==', '===', '!=', '!==', '<', '>', '<=', '>=', '!', '&&', '||'], true)) return TphpType::Bool;
         $lt = $this->inferType($e->left);
         $rt = $this->inferType($e->right);
         if ($lt === TphpType::Float || $rt === TphpType::Float) return TphpType::Float;
-        if (in_array($e->op, ['==', '===', '!=', '!==', '<', '>', '<=', '>='], true)) return TphpType::Bool;
         return TphpType::Int;
     }
 
@@ -173,8 +181,9 @@ trait BaseGenerator
     /** Load string (ptr+len) from memory at [addrReg] into rax:rdx */
     private function loadStringAtAddr(int $addrReg): void
     {
-        $this->b->movRM64(self::b::RAX, $addrReg, 0);
-        $this->b->movRM64(self::b::RDX, $addrReg, 8);
+        // Load len FIRST in case addrReg == RAX (avoid clobbering base register)
+        $this->b->movRM64(X64Builder::RDX, $addrReg, 8);
+        $this->b->movRM64(X64Builder::RAX, $addrReg, 0);
     }
 
     /** Load float from memory at [addrReg] into xmm0 */
@@ -186,8 +195,8 @@ trait BaseGenerator
     /** Store string (rax:rdx) to memory at [addrReg] */
     private function storeStringAt(int $addrReg): void
     {
-        $this->b->movMR64($addrReg, 0, self::b::RAX);
-        $this->b->movMR64($addrReg, 8, self::b::RDX);
+        $this->b->movMR64($addrReg, 0, X64Builder::RAX);
+        $this->b->movMR64($addrReg, 8, X64Builder::RDX);
     }
 
     /** Store float (xmm0) to memory at [addrReg] */

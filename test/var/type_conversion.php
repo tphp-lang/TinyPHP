@@ -13,6 +13,9 @@ function main(): void
     echo "string\n";
     typeString();
     echo "string-end\n";
+    echo "bool\n";
+    typeBool();
+    echo "bool-end\n";
 }
 
 // 各个类型转换为int
@@ -102,3 +105,25 @@ function typeString(): void
     // 数组/对象转字符串：会报错，数组不能转换为字符串
     // echo (string)array("int", [1, 2]) . "\n";  // Error: Array cannot be converted to string
 }
+
+// 各个类型转换为bool
+function typeBool(): void
+{
+    // 转换为false的情况
+    var_dump((bool)0);      // false（整数0）
+    var_dump((bool)0.0);    // false（浮点数0.0）
+    var_dump((bool)"");     // false（空字符串）
+    var_dump((bool)"0");    // false（字符串"0"）
+    var_dump((bool)null);   // false（null）
+    var_dump((bool)array("int", []));     // false（空数组）
+
+    // // 转换为true的情况（注意以下容易混淆的情况）
+    var_dump((bool)"0.0");  // true（非"0"的数字字符串）
+    var_dump((bool)"false"); // true（非空字符串）
+    var_dump((bool)array("int", [0]));    // true（非空数组）
+    var_dump((bool)new Demo()); // true（任何对象，包括空对象）
+    var_dump((bool)-1);     // true（非零整数）
+}
+
+
+class Demo {}

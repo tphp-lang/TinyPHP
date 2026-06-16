@@ -25,7 +25,7 @@ trait Helpers
 
         // GetProcessHeap() → R12 (callee-saved, survives HeapFree calls)
         $this->b->emit("\x48\x83\xEC\x28");
-        $this->b->callIat(self::IAT_GETPROCESSHEAP);
+        $this->b->callIat($this->IAT_GETPROCESSHEAP);
         $this->b->emit("\x48\x83\xC4\x28");
         $this->b->movRR(X64Builder::R12, X64Builder::RAX);
 
@@ -41,7 +41,7 @@ trait Helpers
             $this->b->xorRR(X64Builder::RDX, X64Builder::RDX);
             $this->b->movRM64(X64Builder::R8, X64Builder::RBP, $offset);
             $this->b->emit("\x48\x83\xEC\x28");
-            $this->b->callIat(self::IAT_HEAPFREE);
+            $this->b->callIat($this->IAT_HEAPFREE);
             $this->b->emit("\x48\x83\xC4\x28");
 
             $this->b->defineLabel($skipLabel);

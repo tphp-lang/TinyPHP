@@ -53,6 +53,9 @@ enum TokenType: string
     case StringLiteral  = 'string_literal';
 
     case Assign         = '=';
+    case PlusAssign     = '+=';
+    case MinusAssign    = '-=';
+    case ConcatAssign   = '.=';
     case Concat         = '.';
     case Comma          = ',';
     case Semicolon      = ';';
@@ -84,6 +87,11 @@ enum TokenType: string
     case Gte            = '>=';
 
     case DollarString   = 'dollar_string';
+
+    // Logical operators
+    case And_           = '&&';
+    case Or_            = '||';
+    case Not_           = '!';
 
     case Backslash      = '\\';
     case ObjectArrow    = '->';

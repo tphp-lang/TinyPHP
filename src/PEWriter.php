@@ -44,9 +44,8 @@ final class PEWriter
 
     // Fixed section RVAs (matched by CodeGeneratorWindows constants)
     public  const int TEXT_RVA        = 0x1000;
-    private const int RDATA_RVA       = 0x3000; // was 0x2000; bumped for .text > 0x1000
+    private const int MIN_RDATA_RVA   = 0x3000; // minimum .rdata RVA
     private const int IAT_OFFSET      = 0x70;   // 0x28 (IDT) + 0x48 (ILT: 9 entries × 8 = 72 bytes)
-    public  const int IAT_RVA         = self::RDATA_RVA + self::IAT_OFFSET; // 0x3070
 
     private string $outputPath;
 
@@ -56,6 +55,7 @@ final class PEWriter
     private string $importData = '';
     private string $stringsData = '';
     private int $rdataRawSize = 0;
+    private int $rdataRva = 0;    // dynamically computed in write()
 
     /** @var array<string, int> string label → RVA */
     private array $stringRvas = [];
@@ -77,6 +77,13 @@ final class PEWriter
             if (strlen($v) > 65536) throw new \RuntimeException('String too large (>64KB)');
         }
         $this->payload = ['code' => $code, 'strings' => $strings, 'iatFns' => $iatFns];
+
+        // Pre-compute .rdata RVA: must not overlap with .text
+        $textVirtSize = self::alignUp(strlen($code), self::SECTION_ALIGN);
+        $this->rdataRva = max(
+            self::MIN_RDATA_RVA,
+            self::alignUp(self::TEXT_RVA + $textVirtSize, self::SECTION_ALIGN)
+        );
     }
 
     /**
@@ -96,7 +103,7 @@ final class PEWriter
         $dataOffset = strlen($this->importData);
 
         foreach ($strings as $label => $data) {
-            $this->stringRvas[$label] = self::RDATA_RVA + $dataOffset;
+            $this->stringRvas[$label] = $this->rdataRva + $dataOffset;
             $this->stringsData .= $data;
             $dataOffset += strlen($data);
         }
@@ -120,6 +127,12 @@ final class PEWriter
     public function resolveIatPatches(X64Builder $builder): void
     {
         $builder->resolveRvaPatches(self::TEXT_RVA);
+    }
+
+    /** Get the actual IAT RVA (IAT_OFFSET bytes into the .rdata section) */
+    public function getIatRva(): int
+    {
+        return $this->rdataRva + self::IAT_OFFSET;
     }
 
     /**
@@ -147,6 +160,11 @@ final class PEWriter
 
             $textFileOffset = $headersFileSize;
             $textFileSize   = self::alignUp($codeSize, self::FILE_ALIGN);
+            // Windows PE loader rejects executables whose SizeOfCode is too small
+            $minTextSize = self::SECTION_ALIGN + self::FILE_ALIGN;
+            if ($textFileSize < $minTextSize) {
+                $textFileSize = $minTextSize;
+            }
 
             $rdataFileOffset = $textFileOffset + $textFileSize;
             $rdataFileSize   = self::alignUp($rdataRawSize, self::FILE_ALIGN);
@@ -154,7 +172,17 @@ final class PEWriter
             // Virtual sizes
             $textVirtSize  = self::alignUp($codeSize, self::SECTION_ALIGN);
             $rdataVirtSize = self::alignUp($rdataRawSize, self::SECTION_ALIGN);
-            $imageSize     = self::RDATA_RVA + $rdataVirtSize;
+            // Use pre-computed rdataRva from setPayload(), don't recompute
+            $imageSize     = $this->rdataRva + $rdataVirtSize;
+            // Ensure SizeOfImage >= 0x5000 for Windows loader compatibility
+            if ($imageSize < 0x5000) {
+                $imageSize = 0x5000;
+            }
+            // Ensure the file is at least 10KB — Windows refuses smaller PE files
+            $rdataEnd = $rdataFileOffset + $rdataFileSize;
+            if ($rdataEnd < 0x2A00) {
+                $rdataFileSize += (0x2A00 - $rdataEnd);
+            }
 
             // ---- DOS Header ----
             $this->writeDosHeader();
@@ -202,7 +230,7 @@ final class PEWriter
             // [0] Export: empty
             $this->write32(0); $this->write32(0);
             // [1] Import
-            $this->write32(self::RDATA_RVA);
+            $this->write32($this->rdataRva);
             $this->write32($importSize);
             // [2..15]: empty
             for ($i = 2; $i < 16; $i++) {
@@ -215,7 +243,7 @@ final class PEWriter
                 $textFileSize, $textFileOffset, 0x60000020,
             );
             $this->writeSectionHeader(
-                '.rdata', $rdataVirtSize, self::RDATA_RVA,
+                '.rdata', $rdataVirtSize, $this->rdataRva,
                 $rdataFileSize, $rdataFileOffset, 0x40000040,
             );
 
@@ -299,8 +327,8 @@ final class PEWriter
 
         // ---- Build buffer ----
         // All RVAs must be absolute (image-base-relative), not buffer-relative.
-        // The import table sits at .rdata offset 0 = RVA self::RDATA_RVA.
-        $rdataBase = self::RDATA_RVA;
+        // The import table sits at .rdata offset 0.
+        $rdataBase = $this->rdataRva;
 
         // IDT
         $buf  = pack('V', $rdataBase + $iltOff);     // ImportLookupTableRVA (absolute)

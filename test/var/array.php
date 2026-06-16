@@ -51,5 +51,11 @@ function main(): void
     var_dump($a); // 输出 (array(int)) [1, 3, 4]
 
     // ...以此类推
-    
+
+
+    $c = []; // 默认为int 空数组 等效 array("int", [])
+    var_dump($c);
+    $cc = [1, 2, 3]; // 推断为 int 数组 等效为 array("int", [1, 2, 3])
+    $ccc = ["asd", "asd"]; // 推断为 string 数组 等效为 array("string", ["asd", "asd"])
+    // ... 以此类推
 }

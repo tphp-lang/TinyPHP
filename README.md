@@ -208,10 +208,18 @@ $obj->hello();          // 输出: (string) private method
 
 ### 数组
 
-数组是强类型的，声明时指定元素类型，最大容量 64 个元素：
+数组是强类型的，声明时指定元素类型，最大容量 64 个元素。支持两种语法：
 
 ```php
+// 显式类型语法
 $a = array("int", [1, 2, 3]);       // int 数组
+// 简写语法（自动推断类型）
+$b = [1, 2, 3];                      // 等价于 array("int", [1, 2, 3])
+$c = ["a", "b"];                     // 等价于 array("string", ["a", "b"])
+$d = [1.0, 2.0];                     // 等价于 array("float", [1.0, 2.0])
+$e = [true, false];                  // 等价于 array("bool", [true, false])
+$f = [];                             // 等价于 array("int", [])
+
 var_dump($a);                        // (array(int)) [1, 2, 3]
 var_dump(count($a));                 // (int) 3
 var_dump($a[1]);                     // (int) 2
@@ -220,12 +228,17 @@ $a[] = 4;                            // 追加元素
 unset($a[1]);                        // 删除元素
 
 // callback 数组 — 存储闭包
-$b = array("callback", [
+$cb = array("callback", [
     function (int $a, int $b): int { return $a + $b; },
     function (string $a, string $b): string { return $a . $b; },
 ]);
-var_dump($b[0](1, 2));              // (int) 3
-var_dump($b[1]("hello", "world"));  // (string) helloworld
+var_dump($cb[0](1, 2));              // (int) 3
+var_dump($cb[1]("hello", "world"));  // (string) helloworld
+
+// callback 简写
+$cb2 = [
+    function (int $a, int $b): int { return $a + $b; },
+];
 ```
 
 ### 闭包
@@ -278,6 +291,18 @@ echo (string)true . "\n";     // "1"
 echo (string)false . "\n";    // "0"
 echo (string)null . "\n";     // ""
 
+// (bool) — 非零/非空→true，零/空→false
+var_dump((bool)0);               // false    整数0
+var_dump((bool)0.0);             // false    浮点0.0
+var_dump((bool)"");              // false    空字符串
+var_dump((bool)"0");             // false    字符串"0"
+var_dump((bool)null);            // false    null
+var_dump((bool)array("int",[])); // false    空数组
+var_dump((bool)1);               // true     非零整数
+var_dump((bool)3.14);            // true     非零浮点
+var_dump((bool)"hello");         // true     非空字符串
+var_dump((bool)new Demo());      // true     任何对象
+
 // $var 字符串插值
 $a = 456;
 $b = "$a";    // "456" — 等价于 (string)$a
@@ -310,6 +335,16 @@ switch ($cmd) {
     case 1: print("start\n"); break;
     default: print("unknown\n");
 }
+
+// foreach — 强类型数组遍历
+$arr = array("int", [10, 20, 30]);
+foreach ($arr as $v) {
+    var_dump($v);            // (int) 10, (int) 20, (int) 30
+}
+// 带键名
+foreach ($arr as $k => $v) {
+    echo $k . " => " . $v . "\n";
+}
 ```
 
 ### 表达式
@@ -327,6 +362,12 @@ $a++;    $a--;
 
 // 字符串拼接
 $c . $c . "-$c";
+
+// 逻辑运算（短路求值，返回 0 或 1）
+$a && $b;   $a || $b;   !$a;
+
+// 复合赋值（语法糖）
+$a += 5;    $a -= 3;    $s .= " world";
 ```
 
 ### FFI（C 动态库调用）
@@ -369,6 +410,10 @@ php tphp.php main.php -lib .\libhello.dll
 | `(int)`      | 类型转换为整数       |
 | `(float)`    | 类型转换为浮点（含编译期字符串解析） |
 | `(string)`   | 类型转换为字符串（itoa/ftoa） |
+| `(bool)`     | 类型转换为布尔（非零/非空→true） |
+| `&&` `\|\|` `!` | 逻辑运算符（短路求值） |
+| `+=` `-=` `.=` | 复合赋值（语法糖展开） |
+| `foreach`    | 遍历强类型数组       |
 | `enum`       | 定义枚举类型         |
 | `#extern`    | 声明外部 C 函数      |
 
@@ -409,7 +454,7 @@ Win32 API    syscall
 | 输出格式   | PE32+                       | ELF64                    |
 | 输出方式   | Win32 API (WriteFile)       | syscall (write, exit)    |
 | 调用约定   | Microsoft x64 (RCX,RDX,R8,R9)| System V (RDI,RSI,RDX,RCX) |
-| 字符串存储 | .rdata 段 (RVA 0x3000+), RIP 相对寻址 | .text 段末尾内嵌         |
+| 字符串存储 | .rdata 段 (动态 RVA), RIP 相对寻址   | .text 段末尾内嵌         |
 | 字符串拼接 | HeapAlloc + rep movsb       | 顺序输出                 |
 | IAT 导入   | kernel32.dll (8 函数, 含 GetStdHandle/HapAlloc/GetProcessHeap) | 不需要 |
 
@@ -487,13 +532,16 @@ tphp/
 - [x] **Class / OOP**：class 定义、`new`/`$this`/`->`、构造/析构、public/private
 - [x] **枚举**：`enum Name: int/string`、`Name::Case`、`->value`、`(enum)` var_dump
 - [x] **控制流**：`for` / `switch` / `else if` / `break` / `===` / `!==` / `$i++`
-- [x] **类型转换**：`(int)` / `(float)` / `(string)` 三类型，`(float)` 编译期字符串解析
+- [x] **类型转换**：`(int)` / `(float)` / `(string)` / `(bool)` 四类型，`(float)` 编译期字符串解析
 - [x] **常量**：`const` 声明 + 引用
 - [x] **echo/print**：两种输出方式
 - [x] **字符串插值**：`"$var"` 表达式自动转换为字符串
 - [x] **内存管理**：字符串拼接 HeapAlloc → 离开作用域自动 HeapFree
 - [x] **C 动态库调用 (FFI)**：`#extern` + `C->` + `-lib`（LoadLibrary/GetProcAddress）
-- [ ] **foreach** / **continue** / **do-while**
+- [x] **foreach**：强类型数组遍历，支持 `$k => $v` 键值语法
+- [ ] **continue** / **do-while**
+- [x] **逻辑运算符**：`!` `&&` `||`（短路求值）
+- [x] **复合赋值**：`+=` `-=` `.=`（语法糖展开）
 - [x] **浮点精度输出**：ftoa 支持小数部分
 - [ ] **类属性/字段**：class 中的成员变量
 

@@ -461,6 +461,7 @@ final class CodeGenerator
             $e instanceof VarRefNode         => (
                 $this->vars[$e->name]['type'] ??
                 $this->calleeVars[$e->name]['type'] ??
+                $this->collectionVars[$e->name]['type'] ??
                 TphpType::Int
             ),
             $e instanceof IndexAccessNode    => $this->inferIndexType($e),
@@ -484,7 +485,9 @@ final class CodeGenerator
     private function inferIndexType(IndexAccessNode $e): TphpType
     {
         if ($e->target instanceof VarRefNode) {
-            $info = $this->vars[$e->target->name] ?? null;
+            $info = $this->vars[$e->target->name]
+                ?? $this->collectionVars[$e->target->name]
+                ?? null;
             if ($info !== null && isset($info['elemType'])) {
                 return $info['elemType'];
             }
@@ -799,6 +802,51 @@ final class CodeGenerator
             if ($handled) return;
         }
 
+        // Logical ! (unary, wrapped as left ! right where right is dummy 0)
+        if ($e->op === '!') {
+            $this->genExpr($e->left);
+            $this->b->emit("\x48\x85\xC0");     // test rax, rax
+            $this->b->emit("\x0F\x94\xC0");     // sete al  (set if zero)
+            $this->b->emit("\x48\x0F\xB6\xC0"); // movzx rax, al
+            return;
+        }
+
+        // Logical && (short-circuit)
+        if ($e->op === '&&') {
+            $falseL = $this->newLabel('.L.and0');
+            $endL   = $this->newLabel('.L.and1');
+            $this->genExpr($e->left);
+            $this->b->emit("\x48\x85\xC0");     // test rax, rax
+            $this->b->jeLabel($falseL);         // left false → short-circuit
+            $this->genExpr($e->right);
+            $this->b->emit("\x48\x85\xC0");     // test rax, rax
+            $this->b->emit("\x0F\x95\xC0");     // setnz al
+            $this->b->emit("\x48\x0F\xB6\xC0"); // movzx rax, al
+            $this->b->jmpLabel($endL);
+            $this->b->defineLabel($falseL);
+            $this->b->xorRR(X64Builder::RAX, X64Builder::RAX);
+            $this->b->defineLabel($endL);
+            return;
+        }
+
+        // Logical || (short-circuit)
+        if ($e->op === '||') {
+            $trueL = $this->newLabel('.L.or1');
+            $endL  = $this->newLabel('.L.ore');
+            $this->genExpr($e->left);
+            $this->b->emit("\x48\x85\xC0");     // test rax, rax
+            $this->b->jneLabel($trueL);         // left true → short-circuit
+            $this->genExpr($e->right);
+            $this->b->emit("\x48\x85\xC0");     // test rax, rax
+            $this->b->emit("\x0F\x95\xC0");     // setnz al
+            $this->b->emit("\x48\x0F\xB6\xC0"); // movzx rax, al
+            $this->b->jmpLabel($endL);
+            $this->b->defineLabel($trueL);
+            $this->b->movRI32(X64Builder::RAX, 1);
+            $this->b->defineLabel($endL);
+            return;
+        }
+
         // Numeric: left → rax, right → rcx
         $lType = $this->inferType($e->left);
         $rType = $this->inferType($e->right);
@@ -820,7 +868,7 @@ final class CodeGenerator
                 '-' => $this->b->emit("\xF2\x0F\x5C\xC1"),     // subsd xmm0, xmm1
                 '*' => $this->b->emit("\xF2\x0F\x59\xC1"),     // mulsd xmm0, xmm1
                 '/' => $this->b->emit("\xF2\x0F\x5E\xC1"),     // divsd xmm0, xmm1
-                '==', '===', '<', '>', '<=', '>=' => $this->genFloatCmp($e->op),
+                '==', '===', '!=', '!==', '<', '>', '<=', '>=' => $this->genFloatCmp($e->op),
                 default => null,
             };
             $this->b->movqFromXmm(X64Builder::RAX, 0);
@@ -942,34 +990,23 @@ final class CodeGenerator
     private function genFloatCmp(string $op): void
     {
         // xmm0 = left, xmm1 = right
-        // comisd xmm0, xmm1
-        $this->b->emit("\x66\x0F\x2F\xC1"); // comisd xmm0, xmm1
+        $this->b->emit("\x66\x0F\x2E\xC1"); // ucomisd xmm0, xmm1
 
-        $falseLab = $this->newLabel('.L.fcmp0');
-        $endLab   = $this->newLabel('.L.fcmp1');
+        $trueLab  = $this->newLabel('.L.fcmpt');
+        $endLab   = $this->newLabel('.L.fcmpe');
 
-        match ($op) {
-            '==' => $this->b->emit("\x7A\x06\xEB\x04"), // jp false; jz end? No...
-            '!=' => null,
-            '<'  => null,
-            '>'  => null,
-            '<=' => null,
-            '>=' => null,
-            default => null,
-        };
-
-        // For float comparison, we need to handle the flags properly
-        // Simplified: just set al = 1 or 0
-        // comisd sets: ZF, PF, CF
-        // PF=1 if unordered (NaN)
-        // ZF=1 if equal
-        // CF=1 if left < right
-
-        match ($op) {
-            '==' => $this->b->emit("\x7A\x04\x0F\x94\xC0\xEB\x06\xB0\x00\xEB\x02\xB0\x01"),
-            // Actually let's use a cleaner approach
-            default => $this->b->movRI32(X64Builder::RAX, 0),
-        };
+        // After ucomisd: ZF=1 if equal, CF=1 if left < right, PF=1 if NaN
+        // Use SETcc for simplicity (works correctly with NaN)
+        $this->b->emit(match ($op) {
+            '==', '==='  => "\x0F\x94\xC0", // sete al
+            '!=', '!=='  => "\x0F\x95\xC0", // setne al
+            '<'   => "\x0F\x92\xC0", // setb al  (CF=1)
+            '>'   => "\x0F\x97\xC0", // seta al  (CF=0 AND ZF=0)
+            '<='  => "\x0F\x96\xC0", // setbe al (CF=1 OR ZF=1)
+            '>='  => "\x0F\x93\xC0", // setae al (CF=0)
+            default => "\xB0\x00",   // mov al, 0
+        });
+        $this->b->emit("\x48\x0F\xB6\xC0"); // movzx rax, al
 
         $this->b->defineLabel($endLab);
     }
@@ -1225,7 +1262,70 @@ final class CodeGenerator
     {
         $srcType = $this->inferType($e->operand);
 
-        // 对象不能转换为 int
+        if ($e->targetType === TphpType::Bool) {
+            // Compile-time fold for string literals
+            if ($srcType === TphpType::String && $e->operand instanceof StringLiteralNode) {
+                $val = $e->operand->value;
+                $this->b->movRI32(X64Builder::RAX, ($val !== '' && $val !== '0') ? 1 : 0);
+                return;
+            }
+
+            // Object → always true
+            if ($this->isObjectExpr($e->operand)) {
+                $this->b->movRI32(X64Builder::RAX, 1);
+                return;
+            }
+
+            // Compile-time fold for array literals (genExpr is a no-op for them)
+            if ($srcType === TphpType::Array_ && $e->operand instanceof ArrayLiteralNode) {
+                $this->b->movRI32(X64Builder::RAX, count($e->operand->elements) > 0 ? 1 : 0);
+                return;
+            }
+
+            $this->genExpr($e->operand);
+
+            if ($srcType === TphpType::Int || $srcType === TphpType::Bool) {
+                // Non-zero → true(1), zero → false(0)
+                $this->b->emit("\x48\x85\xC0");     // test rax, rax
+                $this->b->emit("\x0F\x95\xC0");     // setnz al
+                $this->b->emit("\x48\x0F\xB6\xC0"); // movzx rax, al
+            } elseif ($srcType === TphpType::Float) {
+                // 0.0 → false, otherwise → true (NaN → true via unordered compare)
+                $this->b->emit("\x66\x0F\x57\xC9"); // xorpd xmm1, xmm1
+                $this->b->emit("\x66\x0F\x2E\xC1"); // ucomisd xmm0, xmm1
+                $this->b->emit("\x0F\x95\xC0");     // setnz al (ZF=0→1; NaN: unordered→ZF=0→1)
+                $this->b->emit("\x48\x0F\xB6\xC0"); // movzx rax, al
+            } elseif ($srcType === TphpType::String) {
+                // false if empty OR "0"; true otherwise
+                $trueL  = $this->newLabel('.L.bct');
+                $falseL = $this->newLabel('.L.bcf');
+                $endL   = $this->newLabel('.L.bce');
+                $this->b->emit("\x48\x85\xD2");     // test rdx, rdx
+                $this->b->jeLabel($falseL);         // len=0 → false
+                $this->b->emit("\x48\x83\xFA\x01"); // cmp rdx, 1
+                $this->b->jneLabel($trueL);         // len≠1 → true
+                $this->b->emit("\x80\x38\x30");     // cmp byte [rax], '0'
+                $this->b->jneLabel($trueL);         // not '0' → true
+                // false:
+                $this->b->defineLabel($falseL);
+                $this->b->xorRR(X64Builder::RAX, X64Builder::RAX);
+                $this->b->jmpLabel($endL);
+                // true:
+                $this->b->defineLabel($trueL);
+                $this->b->movRI32(X64Builder::RAX, 1);
+                $this->b->defineLabel($endL);
+            } elseif ($srcType === TphpType::Null) {
+                $this->b->xorRR(X64Builder::RAX, X64Builder::RAX);
+            } elseif ($srcType === TphpType::Array_) {
+                // Null pointer → false (empty array), non-null → true
+                $this->b->emit("\x48\x85\xC0");     // test rax, rax
+                $this->b->emit("\x0F\x95\xC0");     // setnz al
+                $this->b->emit("\x48\x0F\xB6\xC0"); // movzx rax, al
+            }
+            return;
+        }
+
+        // 对象不能转换为 int/float/string
         if ($this->isObjectExpr($e->operand)) {
             throw new \RuntimeException(
                 "Object cannot be converted to int at line {$e->line}"
