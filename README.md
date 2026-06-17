@@ -1,6 +1,6 @@
 # TinyPHP
 
-> PHP → C 转译编译器，将 PHP 子集转为安全 C 代码，由 TCC 编译为原生可执行文件。
+> PHP → C 转译编译器，将 PHP 子集转为安全 C 代码，由 TCC 编译为原生产物（可执行文件、静态库、动态库等）。
 
 ## 快速开始
 
@@ -18,7 +18,7 @@ php tphp.php .
 php tphp.php main.php -o app.exe
 ```
 
-编译后直接运行生成的 `.exe` 即可。
+编译后直接运行生成的产物即可（Windows 为 `.exe`，Linux/macOS 为无后缀可执行文件）。
 
 ## 编译流水线
 

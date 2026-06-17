@@ -29,13 +29,21 @@ require_once __DIR__ . '/src/Compiler.php';
 
 // --- 参数解析 ---
 $options = getopt('f:o:h', ['help']);
-$args = array_values(array_filter($argv, fn($a) => !str_starts_with($a, '-') && $a !== $argv[0]));
+$cc      = null;
+
+// 手动解析 -cc xxx（PHP getopt 不支持 -cc 格式）
+$posArgs = [];
+for ($i = 1, $n = count($argv); $i < $n; $i++) {
+    if ($argv[$i] === '-cc' && isset($argv[$i + 1])) {
+        $cc = $argv[++$i];
+    } elseif (!str_starts_with($argv[$i], '-')) {
+        $posArgs[] = $argv[$i];
+    }
+}
+$args = $posArgs;
 
 if (isset($options['f'])) {
-    $args = [$options['f']];
-    // 收集额外位置参数
-    $extra = array_slice($args, 1);
-    if (!empty($extra)) $args = array_merge($args, $extra);
+    $args = array_merge([$options['f']], array_diff($args, [$options['f']]));
 }
 
 if ((empty($args) && !isset($options['f'])) || isset($options['h']) || isset($options['help'])) {
@@ -57,13 +65,25 @@ $entryFile = $files[0];
 // 路径
 $cwd        = getcwd();
 $includeDir = __DIR__ . DIRECTORY_SEPARATOR . 'include';
-$tccExe     = __DIR__ . DIRECTORY_SEPARATOR . 'tcc'
-    . (PHP_OS_FAMILY === 'Windows'
-        ? DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe'
-        : DIRECTORY_SEPARATOR . 'tcc');
+
+// 编译器选择：-cc 指定外部编译器，否则用内置 TCC
+if ($cc !== null) {
+    $ccExe = $cc;
+    // 简单检测：如果是纯名称（无路径分隔符），依赖系统 PATH
+    if (!str_contains($ccExe, '/') && !str_contains($ccExe, '\\')) {
+        // 不做文件检查，交给 exec 处理
+    } elseif (!file_exists($ccExe)) {
+        die("错误: 指定编译器未找到: {$ccExe}\n");
+    }
+} else {
+    $ccExe = __DIR__ . DIRECTORY_SEPARATOR . 'tcc'
+        . (PHP_OS_FAMILY === 'Windows'
+            ? DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe'
+            : DIRECTORY_SEPARATOR . 'tcc');
+    if (!file_exists($ccExe)) die("错误: 内置 TCC 未找到: {$ccExe}\n请先编译 TCC 或使用 -cc 指定其他编译器\n");
+}
 
 if (!is_dir($includeDir))    die("错误: include 目录不存在: {$includeDir}\n");
-if (!file_exists($tccExe))   die("错误: TCC 编译器未找到: {$tccExe}\n");
 
 // --- Phase 1: 转译所有 PHP → C ---
 $allFilesStr = implode(', ', array_map(fn($f) => basename($f), $files));
@@ -134,12 +154,12 @@ try {
     die("✗ 转译失败: " . $e->getMessage() . "\n");
 }
 
-// --- Phase 2: TCC 编译 C → .exe ---
-echo "[2/2] TCC 编译 → {$outExe}...\n";
+// --- Phase 2: C 编译 → 产物 ---
+echo "[2/2] 编译 → {$outExe}...\n";
 
 $cmd = sprintf(
     '"%s" -I"%s" -o "%s" "%s" 2>&1',
-    $tccExe, $includeDir, $outExe, $cFile
+    $ccExe, $includeDir, $outExe, $cFile
 );
 
 $tccOutput = [];
@@ -211,18 +231,21 @@ function showHelp(): never
 TinyPHP — PHP → C 转译编译器（支持多文件）
 
 用法:
-  php tphp.php <file.php> [<file2.php> ...] [-o <output.exe>]
-  php tphp.php -f <file.php> [-o <output.exe>]
-  php tphp.php .                      编译当前目录所有 .php
+  php tphp.php <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>]
+  php tphp.php -f <file.php> [-o <output>]
+  php tphp.php .                     编译当前目录所有 .php
 
 选项:
-  -o <output.exe>  输出的 .exe 文件路径 (可选，默认入口文件名)
-  -h, --help       显示帮助
+  -o <output>       输出文件路径（默认执行目录下以入口文件名命名）
+  -cc <compiler>    指定 C 编译器（默认使用内置 TCC）
+  -h, --help        显示帮助
 
 示例:
-  php tphp.php test/files/main.php test/files/demo.php test/files/other/demo.php
+  php tphp.php main.php demo.php
   php tphp.php .
   php tphp.php main.php -o app.exe
+  php tphp.php main.php -cc gcc
+  php tphp.php main.php -cc "clang -O2"
 
 HELP;
     exit(0);
