@@ -8,3 +8,4 @@
 *.dylib
 *.log
 *.tmp
+/test/*build

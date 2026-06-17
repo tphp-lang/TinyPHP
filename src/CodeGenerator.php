@@ -27,10 +27,19 @@ class CodeGenerator implements ASTVisitor
         'bool' => 't_bool', 'void' => 'void', 'array' => 't_array*',
     ];
 
+    /** 临时变量计数器，用于数组字面量的复合表达式 */
+    private int $tmpVarCounter = 0;
+
+    /** 闭包函数计数器 */
+    private int $closureCounter = 0;
+    /** 收集所有闭包函数的 C 实现，在 visitProgram 末尾统一输出 */
+    private array $closureImpls = [];
+
     // ============================================================
     public function generate(ProgramNode $program, string $phpFile, string $outputDir): string
     {
-        $this->className = $program->mainClass->name;
+        $this->className = $program->mainClass ? self::classCName($program->mainClass) : '';
+        $this->resetState();
         $outPath = $outputDir . '/' . pathinfo($phpFile, PATHINFO_FILENAME) . '.c';
         $code = $program->accept($this);
         file_put_contents($outPath, $code);
@@ -49,13 +58,16 @@ class CodeGenerator implements ASTVisitor
         $p[] = '#include "common.h"';
         $p[] = '';
 
-        $allClasses = array_merge([$node->mainClass], $node->extraClasses);
-        $mainClassName = $node->mainClass->name;
+        $allClasses = array_merge(
+            $node->mainClass ? [$node->mainClass] : [],
+            $node->extraClasses
+        );
+        $mainClassName = $node->mainClass ? self::classCName($node->mainClass) : '';
 
         // ── Phase 1: 所有类的 struct + 前置声明 (保证类型可见) ──
         foreach ($allClasses as $class) {
-            $this->className = $class->name;
-            $isMain = ($class->name === $mainClassName);
+            $this->className = self::classCName($class);
+            $isMain = (self::classCName($class) === $mainClassName);
             $p[] = $this->emitClassForward($class, $isMain);
         }
 
@@ -63,14 +75,14 @@ class CodeGenerator implements ASTVisitor
         foreach ($node->functions as $fn) {
             $ret = self::mapType($fn->returnType);
             $params = array_map(fn($p) => $this->visitParam($p), $fn->params);
-            $p[] = "static {$ret} tphp_{$fn->name}(" . implode(', ', $params) . ');';
+            $p[] = 'static ' . $ret . ' tphp_' . self::funcCName($fn) . '(' . implode(', ', $params) . ');';
         }
         if ($node->functions) $p[] = '';
 
         // ── Phase 2: 所有类的方法实现 + allocator ──
         foreach ($allClasses as $class) {
-            $this->className = $class->name;
-            $isMain = ($class->name === $mainClassName);
+            $this->className = self::classCName($class);
+            $isMain = (self::classCName($class) === $mainClassName);
             $p[] = $this->emitClassImpl($class, $isMain);
         }
 
@@ -80,17 +92,39 @@ class CodeGenerator implements ASTVisitor
             $p[] = '';
         }
 
+        // ── 闭包函数实现（文件作用域 static 函数） ──
+        if (!empty($this->closureImpls)) {
+            $p[] = "/* ── 闭包函数实现 ──────────────────────────── */";
+            foreach ($this->closureImpls as $impl) {
+                $p[] = $impl;
+                $p[] = '';
+            }
+        }
+
         // C 入口
-        $this->className = $node->mainClass->name;
-        $p[] = $this->generateCEntry();
+        if ($node->mainClass !== null) {
+            $this->className = self::classCName($node->mainClass);
+            $p[] = $this->generateCEntry();
+        }
 
         return implode("\n", $p) . "\n";
+    }
+
+    /** 重置状态（每次 generate 调用时） */
+    private function resetState(): void
+    {
+        $this->varTypes = [];
+        $this->declaredVars = [];
+        $this->scopeObjects = [];
+        $this->tmpVarCounter = 0;
+        $this->closureCounter = 0;
+        $this->closureImpls = [];
     }
 
     /** Phase 1: struct + 前置声明 */
     private function emitClassForward(ClassNode $class, bool $isMain): string
     {
-        $cn = $class->name;
+        $cn = self::classCName($class);
         $ctor = $dtor = null;
         $methods = [];
         foreach ($class->methods as $m) {
@@ -123,7 +157,7 @@ class CodeGenerator implements ASTVisitor
     /** Phase 2: VTable + 方法实现 + allocator */
     private function emitClassImpl(ClassNode $class, bool $isMain): string
     {
-        $cn = $class->name;
+        $cn = self::classCName($class);
         $ctor = $dtor = null;
         $methods = [];
         foreach ($class->methods as $m) {
@@ -208,7 +242,7 @@ class CodeGenerator implements ASTVisitor
             $this->declaredVars[self::varName($p->name)] = true;
         }
         $lines = [];
-        $lines[] = "static {$ret} tphp_{$node->name}(" . implode(', ', $params) . ') {';
+        $lines[] = 'static ' . $ret . ' tphp_' . self::funcCName($node) . '(' . implode(', ', $params) . ') {';
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         // 自动析构本作用域内的对象变量
         foreach ($this->scopeObjects as $ov) {
@@ -299,11 +333,22 @@ class CodeGenerator implements ASTVisitor
         $isDeclared = isset($this->declaredVars[$var]);
         $this->declaredVars[$var] = true;
 
-        // new ClassName(...) → ClassName* var = expr; + 记录为对象变量
+        // new ClassName(...) → tphp_ClassName* var = expr; + 记录为对象变量
         if ($node->expr instanceof NewExpr) {
-            $this->varTypes[$var] = $node->expr->className;
+            $cn = self::classRefName($node->expr->className);
+            $this->varTypes[$var] = $cn;
             $this->scopeObjects[] = $var;
-            return "{$node->expr->className}* {$var} = {$expr};";
+            return "{$cn}* {$var} = {$expr};";
+        }
+
+        // null 赋值 → PHP 类型为 null，C 类型用 void* 占位
+        if ($node->expr instanceof NullLiteralExpr) {
+            if (!$isDeclared) {
+                $this->varTypes[$var] = 'null';
+                return "void* {$var} = null;";
+            }
+            $this->varTypes[$var] = 'null';
+            return "{$var} = null;";
         }
 
         // 首次赋值 → 推导类型并声明
@@ -323,8 +368,17 @@ class CodeGenerator implements ASTVisitor
         if (isset(self::$litTypeMap[$class])) {
             return self::$litTypeMap[$class];
         }
+        if ($expr instanceof NullLiteralExpr) {
+            return 'null';
+        }
         if ($expr instanceof BinaryExpr) {
             return $this->inferType($expr->left); // 取左操作数类型
+        }
+        if ($expr instanceof ArrayLiteralExpr) {
+            return 't_array*';
+        }
+        if ($expr instanceof ClosureExpr) {
+            return 't_callback';
         }
         if ($expr instanceof VariableExpr) {
             $vn = self::varName($expr->name);
@@ -353,6 +407,113 @@ class CodeGenerator implements ASTVisitor
     public function visitBoolLiteral(BoolLiteralExpr $node): string   { return $node->value ? 'true' : 'false'; }
     public function visitNullLiteral(NullLiteralExpr $node): string   { return 'null'; }
 
+    public function visitArrayLiteral(ArrayLiteralExpr $node): string
+    {
+        // 生成复合语句表达式，创建 t_array* 并填充
+        $tmpName = "_arr_" . (++$this->tmpVarCounter);
+        return "({ " . $this->genArrayLiteralInline($node, $tmpName) . " " . $tmpName . "; })";
+    }
+
+    /** 生成数组字面量的声明+填充代码（不含外层 ({})） */
+    private function genArrayLiteralInline(ArrayLiteralExpr $node, string $varName): string
+    {
+        $parts = [];
+        $parts[] = "t_array* {$varName} = tphp_arr_create();";
+        $parts[] = "if ({$varName} != NULL) {";
+        foreach ($node->elements as $el) {
+            $code = $el->accept($this);
+            // 根据元素类型包装为 t_var
+            if ($el instanceof StringLiteralExpr) {
+                $parts[] = "tphp_arr_push({$varName}, VAR_STRING({$code}));";
+            } elseif ($el instanceof IntLiteralExpr) {
+                $parts[] = "tphp_arr_push({$varName}, VAR_INT({$code}));";
+            } elseif ($el instanceof FloatLiteralExpr) {
+                $parts[] = "tphp_arr_push({$varName}, VAR_FLOAT({$code}));";
+            } elseif ($el instanceof BoolLiteralExpr) {
+                $parts[] = "tphp_arr_push({$varName}, VAR_BOOL({$code}));";
+            } elseif ($el instanceof NullLiteralExpr) {
+                $parts[] = "tphp_arr_push({$varName}, VAR_NULL());";
+            } elseif ($el instanceof ArrayLiteralExpr) {
+                // 嵌套数组
+                $subCode = $el->accept($this);
+                $parts[] = "tphp_arr_push({$varName}, VAR_ARRAY({$subCode}));";
+            } elseif ($el instanceof ClosureExpr) {
+                // 闭包作为数组元素
+                $subCode = $el->accept($this);
+                $parts[] = "tphp_arr_push({$varName}, VAR_CALLBACK({$subCode}));";
+            } elseif ($el instanceof VariableExpr) {
+                $vn = self::varName($el->name);
+                $vt = $this->varTypes[$vn] ?? 't_int';
+                $wrap = match ($vt) {
+                    't_int'      => "VAR_INT({$vn})",
+                    't_float'    => "VAR_FLOAT({$vn})",
+                    't_string'   => "VAR_STRING({$vn})",
+                    't_bool'     => "VAR_BOOL({$vn})",
+                    't_array*'   => "VAR_ARRAY({$vn})",
+                    't_callback' => "VAR_CALLBACK({$vn})",
+                    default      => "VAR_NULL()",
+                };
+                $parts[] = "tphp_arr_push({$varName}, {$wrap});";
+            } else {
+                // BinaryExpr, CallExpr 等 —— 默认 int 类型
+                $parts[] = "tphp_arr_push({$varName}, VAR_INT({$code}));";
+            }
+        }
+        $parts[] = '}';
+        return implode(' ', $parts);
+    }
+
+    public function visitClosure(ClosureExpr $node): string
+    {
+        $id = ++$this->closureCounter;
+        $name = "_closure_{$id}";
+        $ret = self::mapType($node->returnType);
+        $paramDecls = array_map(fn($p) => $this->visitParam($p), $node->params);
+        $paramStr = implode(', ', $paramDecls);
+
+        // 构建闭包函数的 C 实现（文件作用域，不缩进）
+        $savedDeclared = $this->declaredVars;
+        $savedObjs     = $this->scopeObjects;
+        $savedTypes    = $this->varTypes;
+        $savedIndent   = $this->indent;
+
+        $this->declaredVars = [];
+        $this->scopeObjects = [];
+        $this->varTypes     = [];
+        $this->indent       = 0;
+        foreach ($node->params as $p) {
+            $this->declaredVars[self::varName($p->name)] = true;
+        }
+
+        $implLines = [];
+        $implLines[] = "{$ret} {$name}({$paramStr}) {";
+        if (empty($node->body)) {
+            foreach ($node->params as $p) {
+                $implLines[] = '    (void)' . self::varName($p->name) . ';';
+            }
+        } else {
+            foreach ($node->body as $s) {
+                $implLines[] = '    ' . $s->accept($this);
+            }
+        }
+        foreach ($this->scopeObjects as $ov) {
+            $implLines[] = '    ' . "tphp_object_free(&{$ov}->_base);";
+        }
+        $implLines[] = '}';
+
+        $this->closureImpls[] = implode("\n", $implLines);
+
+        // 恢复外层作用域
+        $this->declaredVars = $savedDeclared;
+        $this->scopeObjects = $savedObjs;
+        $this->varTypes     = $savedTypes;
+        $this->indent       = $savedIndent;
+
+        // 返回 GNU 复合表达式：非 static 前向声明（块作用域合法）+ t_callback
+        return "({ {$ret} {$name}({$paramStr});"
+            . " (t_callback){ .func = (void*){$name}, .env = NULL }; })";
+    }
+
     public function visitVariable(VariableExpr $node): string
     {
         $n = self::varName($node->name);
@@ -366,22 +527,101 @@ class CodeGenerator implements ASTVisitor
 
     public function visitCall(CallExpr $node): string
     {
+        // var_dump 内置函数 —— 包装参数为 t_var 并调用 tphp_var_dump
+        if ($node->callee === null && $node->name === 'var_dump') {
+            return $this->generateVarDump($node->args);
+        }
+
+        // 闭包调用: $h() → ((t_int(*)(...))h.func)(args)
+        if ($node->callee !== null && $node->name === '__invoke') {
+            return $this->generateClosureCall($node->callee, $node->args);
+        }
+
         $args = array_map(fn($a) => $a->accept($this), $node->args);
         if ($node->callee === null) {
-            // 独立函数加 tphp_ 前缀，避免与 C 标准库冲突
-            return 'tphp_' . $node->name . '(' . implode(', ', $args) . ')';
+            // 独立函数加 tphp_ 前缀，命名空间名已 mangled
+            return 'tphp_' . self::mangleCName($node->name) . '(' . implode(', ', $args) . ')';
         }
         $callee = $node->callee->accept($this);
         // 方法调用：self 作为第一个参数
         $allArgs = array_merge([$callee], $args);
-        // 类名推导
+        // 类名推导（self 用 className，其他从 varTypes 查）
         if ($callee === 'self') {
             $cn = $this->className;
         } else {
-            // 从变量类型追踪中查找
-            $cn = $this->varTypes[$callee] ?? $callee;
+            $raw = $this->varTypes[$callee] ?? $callee;
+            // 如果 varTypes 里存的是 PHP 命名空间名（含 \），转 C 名
+            $cn = str_contains($raw, '\\') ? self::classRefName($raw) : $raw;
         }
         return "{$cn}_{$node->name}(" . implode(', ', $allArgs) . ')';
+    }
+
+    /** 生成 var_dump 调用：将参数包装为 t_var */
+    private function generateVarDump(array $args): string
+    {
+        $wrapped = [];
+        foreach ($args as $arg) {
+            $wrapped[] = $this->wrapVar($arg);
+        }
+        return 'tphp_var_dump(' . implode(', ', $wrapped) . ')';
+    }
+
+    /** 生成闭包调用: ((t_int(*)(t_int,...))var.func)(args) */
+    private function generateClosureCall(ExprNode $callee, array $args): string
+    {
+        $calleeCode = $callee->accept($this);
+        $argCodes = array_map(fn($a) => $a->accept($this), $args);
+        $argStr = implode(', ', $argCodes);
+        $nargs = count($args);
+
+        if ($nargs === 0) {
+            return "((t_int(*)(void)){$calleeCode}.func)()";
+        }
+        $paramTypes = implode(', ', array_fill(0, $nargs, 't_int'));
+        return "((t_int(*)({$paramTypes})){$calleeCode}.func)({$argStr})";
+    }
+
+    /** 将表达式包装为 t_var */
+    private function wrapVar(ExprNode $expr): string
+    {
+        if ($expr instanceof StringLiteralExpr) {
+            return 'VAR_STRING(' . $expr->accept($this) . ')';
+        }
+        if ($expr instanceof IntLiteralExpr) {
+            return 'VAR_INT(' . $expr->accept($this) . ')';
+        }
+        if ($expr instanceof FloatLiteralExpr) {
+            return 'VAR_FLOAT(' . $expr->accept($this) . ')';
+        }
+        if ($expr instanceof BoolLiteralExpr) {
+            return 'VAR_BOOL(' . $expr->accept($this) . ')';
+        }
+        if ($expr instanceof NullLiteralExpr) {
+            return 'VAR_NULL()';
+        }
+        if ($expr instanceof VariableExpr) {
+            $vn = self::varName($expr->name);
+            $vt = $this->varTypes[$vn] ?? 't_int';
+            return match ($vt) {
+                't_int'      => "VAR_INT({$vn})",
+                't_float'    => "VAR_FLOAT({$vn})",
+                't_string'   => "VAR_STRING({$vn})",
+                't_bool'     => "VAR_BOOL({$vn})",
+                't_array*'   => "VAR_ARRAY({$vn})",
+                't_callback' => "VAR_CALLBACK({$vn})",
+                'null'       => "VAR_NULL()",
+                default      => "VAR_NULL()",
+            };
+        }
+        if ($expr instanceof ArrayLiteralExpr) {
+            // GNU 复合表达式: VAR_ARRAY(({ t_array* _a = ...; ...; _a; }))
+            $tmpName = "_vd_arr_" . (++$this->tmpVarCounter);
+            $arrCode = $this->genArrayLiteralInline($expr, $tmpName);
+            return "VAR_ARRAY(({ {$arrCode} {$tmpName}; }))";
+        }
+        // 默认 int
+        $code = $expr->accept($this);
+        return "VAR_INT({$code})";
     }
 
     public function visitCast(CastExpr $node): string
@@ -391,12 +631,12 @@ class CodeGenerator implements ASTVisitor
 
     public function visitNew(NewExpr $node): string
     {
+        $cn = self::classRefName($node->className);
         $args = array_map(fn($a) => $a->accept($this), $node->args);
-        // 如果没传参且不是 Main，使用 void 版本
-        if (empty($args) && $node->className !== $this->className) {
-            return "new_{$node->className}()";
+        if (empty($args) && $cn !== $this->className) {
+            return "new_{$cn}()";
         }
-        return "new_{$node->className}(" . implode(', ', $args) . ')';
+        return "new_{$cn}(" . implode(', ', $args) . ')';
     }
 
     // ============================================================
@@ -429,6 +669,31 @@ class CodeGenerator implements ASTVisitor
 
     public static function mapType(string $t): string { return self::$typeMap[$t] ?? "{$t}*"; }
     public static function varName(string $v): string { return $v === '$this' ? 'self' : ltrim($v, '$'); }
+
+    /** 将 PHP 命名空间名转为 C 标识符: Demo\Foo → Demo_Foo */
+    public static function mangleCName(string $name): string {
+        return str_replace('\\', '_', $name);
+    }
+
+    /** 从类节点获取 C 标识符: tphp_namespace_Name */
+    private static function classCName(ClassNode $class): string {
+        $base = ($class->namespace !== '')
+            ? self::mangleCName($class->namespace) . '_' . $class->name
+            : $class->name;
+        return 'tphp_' . $base;
+    }
+
+    /** 从已解析类名生成 C 引用名（visitNew/Call 等非 ClassNode 上下文中使用） */
+    private static function classRefName(string $resolvedName): string {
+        return 'tphp_' . self::mangleCName($resolvedName);
+    }
+
+    /** 从函数节点获取 C 标识符: namespace_name */
+    private static function funcCName(FunctionNode $fn): string {
+        return ($fn->namespace !== '')
+            ? self::mangleCName($fn->namespace) . '_' . $fn->name
+            : $fn->name;
+    }
 
     private function indentStr(): string { return str_repeat('    ', $this->indent); }
     private function ind(string $l): string { return $this->indentStr() . $l; }

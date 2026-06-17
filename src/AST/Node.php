@@ -17,7 +17,7 @@ class ProgramNode extends ASTNode
     /** @param ClassNode[] $extraClasses */
     /** @param FunctionNode[] $functions */
     public function __construct(
-        public readonly ClassNode $mainClass,
+        public readonly ?ClassNode $mainClass = null,
         /** @var ClassNode[] */
         public readonly array $extraClasses = [],
         public readonly array $functions = [],
@@ -40,6 +40,7 @@ class FunctionNode extends ASTNode
         public readonly string $returnType,
         /** @var StmtNode[] */
         public readonly array $body,
+        public readonly string $namespace = '',  // 所属命名空间
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -55,6 +56,7 @@ class ClassNode extends ASTNode
     public function __construct(
         public readonly string $name,
         public readonly array $methods,
+        public readonly string $namespace = '',  // 所属命名空间
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -225,6 +227,39 @@ class NullLiteralExpr extends ExprNode
     }
 }
 
+// 数组字面量 [1, 2, 3]
+class ArrayLiteralExpr extends ExprNode
+{
+    /** @param ExprNode[] $elements */
+    public function __construct(
+        /** @var ExprNode[] */
+        public readonly array $elements,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitArrayLiteral($this);
+    }
+}
+
+// 匿名函数 / 闭包: function(): int { return 10; }
+class ClosureExpr extends ExprNode
+{
+    /** @param ParamNode[] $params */
+    public function __construct(
+        /** @var ParamNode[] */
+        public readonly array $params,
+        public readonly string $returnType,
+        /** @var StmtNode[] */
+        public readonly array $body,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitClosure($this);
+    }
+}
+
 // 变量
 class VariableExpr extends ExprNode
 {
@@ -322,4 +357,6 @@ interface ASTVisitor
     public function visitCall(CallExpr $node): string;
     public function visitCast(CastExpr $node): string;
     public function visitNew(NewExpr $node): string;
+    public function visitArrayLiteral(ArrayLiteralExpr $node): string;
+    public function visitClosure(ClosureExpr $node): string;
 }

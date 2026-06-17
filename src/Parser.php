@@ -32,6 +32,13 @@ class Parser
     private array $tokens;
     private int $current = 0;
 
+    /** 当前文件的命名空间（空字符串表示全局） */
+    private string $currentNamespace = '';
+    /** use 类导入: 短名 → 完全限定名 (如 Demo → Demo\Demo) */
+    private array $classImports = [];
+    /** use 函数导入: 短名 → 完全限定名 (如 myDemoFn → Demo\myDemoFn) */
+    private array $functionImports = [];
+
     /** @param Token[] $tokens */
     public function __construct(array $tokens)
     {
@@ -51,29 +58,159 @@ class Parser
     }
 
     // ============================================================
-    // program → PHP_OPEN class_decl (class_decl | function)* EOF
+    // program → PHP_OPEN namespace_decl? (use_decl | free_code?)* decl* EOF
+    //   free_code: 不在任何声明内的 echo/赋值等（不支持，直接报错）
     // ============================================================
     private function parseProgram(): ProgramNode
     {
+        $this->currentNamespace = '';
+        $this->classImports = [];
+        $this->functionImports = [];
+
         $this->consume(TokenType::PHP_OPEN, '期望 <?php 开头');
 
-        // 第一个类 = Main（入口）
-        $mainClass = $this->parseClassDecl();
+        // 可选 namespace 声明
+        if ($this->match(TokenType::NAMESPACE)) {
+            $this->currentNamespace = $this->parseQualifiedName();
+            $this->consume(TokenType::SEMICOLON, '期望 ;');
+        }
 
-        // 后续：辅助类 / 独立函数（可交错）
+        // 连续 use 声明
+        while ($this->match(TokenType::USE)) {
+            $this->parseUseDecl();
+        }
+
+        // 第一个类 = Main（入口）
+        $mainClass = null;
         $extraClasses = [];
         $functions = [];
+
         while (!$this->check(TokenType::EOF)) {
             if ($this->check(TokenType::CLASS_KW)) {
-                $extraClasses[] = $this->parseClassDecl();
+                $cls = $this->parseClassDecl();
+                if ($mainClass === null) {
+                    $mainClass = $cls;
+                } else {
+                    $extraClasses[] = $cls;
+                }
             } elseif ($this->check(TokenType::FUNCTION)) {
                 $functions[] = $this->parseFunction();
+            } elseif ($this->check(TokenType::ECHO_KW) || $this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP)) {
+                // 文件中有游离代码——拒绝（多文件场景仍保持严格）
+                $tok = $this->peek();
+                $this->error("不支持的全局游离代码 '{$tok->lexeme}'（多文件编译只接受 namespace/use/class/function 声明）");
             } else {
-                $this->error('期望 class 或 function，得到 ' . $this->peek()->lexeme);
+                $this->error('期望 namespace/use/class/function，得到 ' . $this->peek()->lexeme);
             }
         }
 
+        // 允许只有函数没有类的情况（多文件编译时类可能在别的文件）
         return new ProgramNode($mainClass, $extraClasses, $functions);
+    }
+
+    // ============================================================
+    // 命名空间 & use
+    // ============================================================
+
+    /** 解析完全限定名: IDENTIFIER (NS_SEP IDENTIFIER)* → "A\B\C" */
+    private function parseQualifiedName(): string
+    {
+        $name = $this->consume(TokenType::IDENTIFIER, '期望标识符')->lexeme;
+        while ($this->match(TokenType::NS_SEP)) {
+            $name .= '\\' . $this->consume(TokenType::IDENTIFIER, '期望标识符')->lexeme;
+        }
+        return $name;
+    }
+
+    /** use X\Y\Z; | use function X\Y; | use X\{ A, B, function F }; */
+    private function parseUseDecl(): void
+    {
+        // use function ... ?
+        if ($this->match(TokenType::FUNCTION)) {
+            $fqName = $this->parseQualifiedName();
+            $this->parseUseAlias(function: true, fqName: $fqName);
+            $this->consume(TokenType::SEMICOLON, '期望 ;');
+            return;
+        }
+
+        // 读取第一部分标识符
+        $base = $this->consume(TokenType::IDENTIFIER, '期望标识符')->lexeme;
+
+        // use Demo\{ ... } → 组合语法（提前探测，不消耗 token）
+        if ($this->check(TokenType::NS_SEP) && $this->peek(1)->type === TokenType::LBRACE) {
+            $this->advance(); // skip \
+            $this->advance(); // skip {
+            do {
+                // 允许尾部逗号 (PHP 7.3+)
+                if ($this->check(TokenType::RBRACE)) break;
+                if ($this->match(TokenType::FUNCTION)) {
+                    $fnName = $this->consume(TokenType::IDENTIFIER, '期望函数名')->lexeme;
+                    $this->parseUseAlias(function: true, fqName: $base . '\\' . $fnName, alias: $fnName);
+                } else {
+                    $itemName = $this->consume(TokenType::IDENTIFIER, '期望标识符')->lexeme;
+                    $this->parseUseAlias(function: false, fqName: $base . '\\' . $itemName, alias: $itemName);
+                }
+            } while ($this->match(TokenType::COMMA));
+            $this->consume(TokenType::RBRACE, '期望 }');
+            $this->consume(TokenType::SEMICOLON, '期望 ;');
+            return;
+        }
+
+        // 继续读取完整限定名: base\next\...
+        $full = $base;
+        while ($this->match(TokenType::NS_SEP)) {
+            $full .= '\\' . $this->consume(TokenType::IDENTIFIER, '期望标识符')->lexeme;
+        }
+        $baseName = $full;
+
+        // use X as Alias;
+        if ($this->match(TokenType::AS_KW)) {
+            $alias = $this->consume(TokenType::IDENTIFIER, '期望别名')->lexeme;
+            $this->classImports[$alias] = $baseName;
+            $this->consume(TokenType::SEMICOLON, '期望 ;');
+            return;
+        }
+
+        // use X\Y; (alias = 最后一段)
+        $short = substr(strrchr($baseName, '\\') ?: ('\\' . $baseName), 1);
+        $this->classImports[$short] = $baseName;
+        $this->consume(TokenType::SEMICOLON, '期望 ;');
+    }
+
+    /** 注册 use 别名 */
+    private function parseUseAlias(bool $function, string $fqName, string $alias = ''): void
+    {
+        if ($this->match(TokenType::AS_KW)) {
+            $alias = $this->consume(TokenType::IDENTIFIER, '期望别名')->lexeme;
+        }
+        $key = ($alias !== '') ? $alias : substr(strrchr($fqName, '\\') ?: ('\\' . $fqName), 1);
+        if ($function) {
+            $this->functionImports[$key] = $fqName;
+        } else {
+            $this->classImports[$key] = $fqName;
+        }
+    }
+
+    /** 解析类名引用：先查 use 导入表，找不到则假定在当前命名空间 */
+    private function resolveClassName(string $name): string
+    {
+        if (isset($this->classImports[$name])) {
+            return $this->classImports[$name];
+        }
+        return ($this->currentNamespace !== '')
+            ? $this->currentNamespace . '\\' . $name
+            : $name;
+    }
+
+    /** 解析函数名引用 */
+    private function resolveFunctionName(string $name): string
+    {
+        if (isset($this->functionImports[$name])) {
+            return $this->functionImports[$name];
+        }
+        return ($this->currentNamespace !== '')
+            ? $this->currentNamespace . '\\' . $name
+            : $name;
     }
 
     // ============================================================
@@ -104,7 +241,7 @@ class Parser
         }
         $this->consume(TokenType::RBRACE, '期望 }');
 
-        return new FunctionNode($name, $params, $returnType, $body);
+        return new FunctionNode($name, $params, $returnType, $body, $this->currentNamespace);
     }
 
     // ============================================================
@@ -122,7 +259,7 @@ class Parser
         }
 
         $this->consume(TokenType::RBRACE, '期望 }');
-        return new ClassNode($name, $methods);
+        return new ClassNode($name, $methods, $this->currentNamespace);
     }
 
     // ============================================================
@@ -293,6 +430,14 @@ class Parser
         if ($this->match(TokenType::NULL_KW)) {
             return new NullLiteralExpr();
         }
+        // 匿名函数 / 闭包: function(): type { ... }
+        if ($this->match(TokenType::FUNCTION)) {
+            return $this->parseClosure();
+        }
+        // 数组字面量: [ expr, expr, ... ]
+        if ($this->match(TokenType::LBRACKET)) {
+            return $this->parseArrayLiteral();
+        }
         // new ClassName(args)
         if ($this->match(TokenType::NEW_KW)) {
             return $this->parseNewExpr();
@@ -309,7 +454,7 @@ class Parser
             }
         }
         // 变量
-        if ($this->check(TokenType::IDENTIFIER)) {
+        if ($this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP)) {
             $name = $this->advance()->lexeme;
 
             // 方法调用: $obj->method(args) 或 Class::method(args)
@@ -321,10 +466,18 @@ class Parser
                 return new CallExpr(new VariableExpr($name), $methodName, $args);
             }
 
-            // 普通函数调用
+            // 函数调用（含 var_dump、闭包调用 $var()）
             if ($this->match(TokenType::LPAREN)) {
                 $args = $this->parseArgs();
                 $this->consume(TokenType::RPAREN, '期望 )');
+                // $var() → 闭包调用
+                if (str_starts_with($name, '$')) {
+                    return new CallExpr(new VariableExpr($name), '__invoke', $args);
+                }
+                // 内置函数不解析命名空间
+                if ($name !== 'var_dump') {
+                    $name = $this->resolveFunctionName($name);
+                }
                 return new CallExpr(null, $name, $args);
             }
 
@@ -332,6 +485,44 @@ class Parser
         }
 
         $this->error("期望表达式，得到 '{$this->peek()->lexeme}'");
+    }
+
+    /** 数组字面量: [ expr (, expr)* ] */
+    private function parseArrayLiteral(): ArrayLiteralExpr
+    {
+        $elements = [];
+        if (!$this->check(TokenType::RBRACKET)) {
+            do {
+                $elements[] = $this->parseExpr();
+            } while ($this->match(TokenType::COMMA));
+        }
+        $this->consume(TokenType::RBRACKET, '期望 ]');
+        return new ArrayLiteralExpr($elements);
+    }
+
+    /** 匿名函数: function ( params? ) : type? { body } */
+    private function parseClosure(): ClosureExpr
+    {
+        $this->consume(TokenType::LPAREN, '期望 (');
+        $params = [];
+        if (!$this->check(TokenType::RPAREN)) {
+            $params = $this->parseParams();
+        }
+        $this->consume(TokenType::RPAREN, '期望 )');
+
+        $returnType = 'void';
+        if ($this->match(TokenType::COLON)) {
+            $returnType = $this->parseType();
+        }
+
+        $this->consume(TokenType::LBRACE, '期望 {');
+        $body = [];
+        while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+            $body[] = $this->parseStmt();
+        }
+        $this->consume(TokenType::RBRACE, '期望 }');
+
+        return new ClosureExpr($params, $returnType, $body);
     }
 
     /** @return ExprNode[] */
@@ -352,7 +543,7 @@ class Parser
         $this->consume(TokenType::LPAREN, '期望 (');
         $args = $this->parseArgs();
         $this->consume(TokenType::RPAREN, '期望 )');
-        return new NewExpr($className, $args);
+        return new NewExpr($this->resolveClassName($className), $args);
     }
 
     private function parseCastExpr(): CastExpr

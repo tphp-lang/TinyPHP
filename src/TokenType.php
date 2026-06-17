@@ -38,6 +38,12 @@ enum TokenType: string
     case FLOAT_LIT  = 'FLOAT_LIT';
     case STRING_LIT = 'STRING_LIT';
 
+    // 关键字 (继续)
+    case VAR_DUMP   = 'var_dump';
+    case NAMESPACE  = 'namespace';
+    case USE        = 'use';
+    case AS_KW      = 'as';
+
     // 符号
     case PLUS         = '+';
     case MINUS        = '-';
@@ -48,10 +54,13 @@ enum TokenType: string
     case RPAREN       = ')';
     case LBRACE       = '{';
     case RBRACE       = '}';
+    case LBRACKET     = '[';
+    case RBRACKET     = ']';
     case COLON        = ':';
     case SEMICOLON    = ';';
     case COMMA        = ',';
     case EQUALS       = '=';
     case ARROW        = '->';
     case DOUBLE_COLON = '::';
+    case NS_SEP       = '\\';
 }

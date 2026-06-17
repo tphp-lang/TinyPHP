@@ -30,4 +30,5 @@
 #define VAR_BOOL(v)   ((t_var){.type = TYPE_BOOL,   .value._bool   = (v)})
 #define VAR_STRING(s) ((t_var){.type = TYPE_STRING, .value._string = (s)})
 #define VAR_ARRAY(a)  ((t_var){.type = TYPE_ARRAY,  .value._array  = (a)})
+#define VAR_CALLBACK(c) ((t_var){.type = TYPE_CALLBACK, .value._callback = (c)})
 #define VAR_NULL()    ((t_var){.type = TYPE_NULL})

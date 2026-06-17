@@ -31,6 +31,10 @@ class Lexer
         'array'       => TokenType::TYPE_ARRAY,
         '__construct' => TokenType::CONSTRUCT,
         '__destruct'  => TokenType::DESTRUCT,
+        'var_dump'    => TokenType::VAR_DUMP,
+        'namespace'   => TokenType::NAMESPACE,
+        'use'         => TokenType::USE,
+        'as'          => TokenType::AS_KW,
     ];
 
     public function __construct(string $source)
@@ -85,6 +89,10 @@ class Lexer
                 $this->skipLineComment();
                 return;
             }
+            if ($this->peek(1) === '*') {
+                $this->skipBlockComment();
+                return;
+            }
             $this->addToken(TokenType::SLASH, '/');
             $this->advance();
             return;
@@ -121,11 +129,19 @@ class Lexer
             ')' => TokenType::RPAREN,
             '{' => TokenType::LBRACE,
             '}' => TokenType::RBRACE,
+            '[' => TokenType::LBRACKET,
+            ']' => TokenType::RBRACKET,
             ':' => TokenType::COLON,
             ';' => TokenType::SEMICOLON,
             ',' => TokenType::COMMA,
             '=' => TokenType::EQUALS,
         ];
+        // \ 命名空间分隔符
+        if ($ch === '\\') {
+            $this->addToken(TokenType::NS_SEP, '\\');
+            $this->advance();
+            return;
+        }
         if (isset($singleChars[$ch])) {
             $this->addToken($singleChars[$ch], $ch);
             $this->advance();
@@ -189,6 +205,19 @@ class Lexer
         while ($this->pos < strlen($this->source) && $this->peek() !== "\n") {
             $this->advance();
         }
+    }
+
+    private function skipBlockComment(): void
+    {
+        $this->advance(2); // skip /*
+        while ($this->pos < strlen($this->source)) {
+            if ($this->peek() === '*' && $this->peek(1) === '/') {
+                $this->advance(2);
+                return;
+            }
+            $this->advance();
+        }
+        $this->error('未闭合的块注释');
     }
 
     private function scanString(): void
