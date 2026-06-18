@@ -14,6 +14,7 @@ class Lexer
 
     private static array $keywords = [
         'class'       => TokenType::CLASS_KW,
+        'enum'        => TokenType::ENUM_KW,
         'public'      => TokenType::PUBLIC_KW,
         'private'     => TokenType::PRIVATE_KW,
         'function'    => TokenType::FUNCTION,
@@ -33,9 +34,28 @@ class Lexer
         '__destruct'  => TokenType::DESTRUCT,
         'var_dump'    => TokenType::VAR_DUMP,
         'count'       => TokenType::COUNT,
+        'exit'        => TokenType::EXIT,
+        'die'         => TokenType::DIE,
+        'isset'       => TokenType::ISSET,
+        'empty'       => TokenType::EMPTY_KW,
+        'list'        => TokenType::LIST_KW,
         'namespace'   => TokenType::NAMESPACE,
         'use'         => TokenType::USE,
         'as'          => TokenType::AS_KW,
+        'const'       => TokenType::CONST_KW,
+        'self'        => TokenType::SELF_KW,
+        'if'          => TokenType::IF_KW,
+        'else'        => TokenType::ELSE_KW,
+        'elseif'      => TokenType::ELSEIF_KW,
+        'do'          => TokenType::DO_KW,
+        'switch'      => TokenType::SWITCH_KW,
+        'case'        => TokenType::CASE_KW,
+        'default'     => TokenType::DEFAULT_KW,
+        'for'         => TokenType::FOR_KW,
+        'while'       => TokenType::WHILE_KW,
+        'foreach'     => TokenType::FOREACH_KW,
+        'break'       => TokenType::BREAK_KW,
+        'continue'    => TokenType::CONTINUE_KW,
     ];
 
     public function __construct(string $source)
@@ -91,7 +111,7 @@ class Lexer
             return;
         }
 
-        // 注释 / 除号
+        // 注释 / 除号 / 复合赋值
         if ($ch === '/') {
             if ($this->peek(1) === '/') {
                 $this->skipLineComment();
@@ -101,23 +121,59 @@ class Lexer
                 $this->skipBlockComment();
                 return;
             }
+            if ($this->peek(1) === '=') {
+                $this->addToken(TokenType::SLASH_EQ, '/=');
+                $this->advance(2);
+                return;
+            }
             $this->addToken(TokenType::SLASH, '/');
             $this->advance();
             return;
         }
 
-        // -> (必须在单字符运算符之前检查)
-        if ($ch === '-' && $this->peek(1) === '>') {
-            $this->addToken(TokenType::ARROW, '->');
+        // 多字符运算符 (必须在单字符之前检查)
+        $multiOps = [
+            '->' => TokenType::ARROW,
+            '=>' => TokenType::DOUBLE_ARROW,
+            '==' => TokenType::EQ,
+            '!=' => TokenType::NE,
+            '<=' => TokenType::LE,
+            '>=' => TokenType::GE,
+            '&&' => TokenType::AND_AND,
+            '||' => TokenType::OR_OR,
+            '++' => TokenType::INC,
+            '--' => TokenType::DEC,
+            '+=' => TokenType::PLUS_EQ,
+            '-=' => TokenType::MINUS_EQ,
+            '*=' => TokenType::STAR_EQ,
+            '/=' => TokenType::SLASH_EQ,
+            '.=' => TokenType::DOT_EQ,
+            '??' => TokenType::QUEST_QUEST,
+            '<<' => TokenType::LT_LT,
+            '>>' => TokenType::GT_GT,
+        ];
+        $two = $ch . $this->peek(1);
+        if (isset($multiOps[$two])) {
+            $this->addToken($multiOps[$two], $two);
             $this->advance(2);
             return;
         }
 
-        // 运算符
+        // 单字符运算符
         $opChars = [
             '+' => TokenType::PLUS,
             '-' => TokenType::MINUS,
             '*' => TokenType::STAR,
+            '/' => TokenType::SLASH,
+            '%' => TokenType::MOD,
+            '<' => TokenType::LT,
+            '>' => TokenType::GT,
+            '!' => TokenType::BANG,
+            '&' => TokenType::AMP,
+            '|' => TokenType::PIPE,
+            '^' => TokenType::CARET,
+            '~' => TokenType::TILDE,
+            '?' => TokenType::QUEST,
         ];
         if (isset($opChars[$ch])) {
             $this->addToken($opChars[$ch], $ch);
@@ -139,7 +195,6 @@ class Lexer
             '}' => TokenType::RBRACE,
             '[' => TokenType::LBRACKET,
             ']' => TokenType::RBRACKET,
-            ':' => TokenType::COLON,
             ';' => TokenType::SEMICOLON,
             ',' => TokenType::COMMA,
             '=' => TokenType::EQUALS,
@@ -148,6 +203,18 @@ class Lexer
         // \ 命名空间分隔符
         if ($ch === '\\') {
             $this->addToken(TokenType::NS_SEP, '\\');
+            $this->advance();
+            return;
+        }
+        // :: 必须在单字符 : 之前
+        if ($ch === ':' && $this->peek(1) === ':') {
+            $this->addToken(TokenType::DOUBLE_COLON, '::');
+            $this->advance(2);
+            return;
+        }
+        // : 单字符
+        if ($ch === ':') {
+            $this->addToken(TokenType::COLON, ':');
             $this->advance();
             return;
         }
@@ -160,13 +227,6 @@ class Lexer
         // $ 变量
         if ($ch === '$') {
             $this->scanVariable();
-            return;
-        }
-
-        // ::
-        if ($ch === ':' && $this->peek(1) === ':') {
-            $this->addToken(TokenType::DOUBLE_COLON, '::');
-            $this->advance(2);
             return;
         }
 

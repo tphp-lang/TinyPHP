@@ -13,6 +13,14 @@ class CodeGenerator implements ASTVisitor
     private array $declaredVars = [];
     /** 当前作用域内的对象变量名列表（用于自动析构） */
     private array $scopeObjects = [];
+    /** 类属性类型追踪：className → [propName → C type] */
+    private array $classPropTypes = [];
+    /** 类方法返回类型：className → [methodName → C type] */
+    private array $classMethodRetTypes = [];
+    /** 枚举 backing 类型：enumName → 'int'|'string' (FQN 和短名均可查) */
+    private array $enumBackingTypes = [];
+    /** 枚举 C 类型名：enumName → 'tphp_enum_X*' (FQN 和短名均可查) */
+    private array $enumCTypes = [];
 
     /** 字面量 → C 类型的映射 */
     private static array $litTypeMap = [
@@ -58,6 +66,18 @@ class CodeGenerator implements ASTVisitor
         $p[] = '#include "common.h"';
         $p[] = '';
 
+        // ── 常量 ──
+        foreach ($node->constants as $c) {
+            $p[] = $c->accept($this);
+        }
+        if ($node->constants) $p[] = '';
+
+        // ── 枚举 ──
+        foreach ($node->enums as $e) {
+            $p[] = $e->accept($this);
+        }
+        if ($node->enums) $p[] = '';
+
         $allClasses = array_merge(
             $node->mainClass ? [$node->mainClass] : [],
             $node->extraClasses
@@ -75,7 +95,7 @@ class CodeGenerator implements ASTVisitor
         foreach ($node->functions as $fn) {
             $ret = self::mapType($fn->returnType);
             $params = array_map(fn($p) => $this->visitParam($p), $fn->params);
-            $p[] = 'static ' . $ret . ' tphp_' . self::funcCName($fn) . '(' . implode(', ', $params) . ');';
+            $p[] = 'static ' . $ret . ' ' . self::funcCName($fn) . '(' . implode(', ', $params) . ');';
         }
         if ($node->functions) $p[] = '';
 
@@ -137,9 +157,30 @@ class CodeGenerator implements ASTVisitor
         $o[] = "/* ── Struct: {$cn} ──────────────────────────── */";
         $o[] = 'typedef struct {';
         $o[] = $this->ind('t_object _base;');
+        // 属性字段 + 记录类型
+        $propTypes = [];
+        foreach ($class->properties as $prop) {
+            $ptype = self::mapType($prop->type);
+            $pname = ltrim($prop->name, '$');
+            $o[] = $this->ind("{$ptype} {$pname};");
+            $propTypes[$pname] = $ptype;
+        }
+        $this->classPropTypes[$cn] = $propTypes;
+        // 记录方法返回类型
+        $methodRets = ['__construct' => 'void', '__destruct' => 'void'];
+        foreach ($methods as $m) {
+            $methodRets[$m->name] = $this->mapType($m->returnType);
+        }
+        $this->classMethodRetTypes[$cn] = $methodRets;
         $o[] = "} {$cn};";
         $o[] = '';
-        $o[] = "void {$cn}___construct({$cn}* self, t_int argc, t_array* argv);";
+        // __construct 声明
+        if ($isMain) {
+            $o[] = "void {$cn}___construct({$cn}* self, t_int argc, t_array* argv);";
+        } else {
+            $ctorParams = $this->ctorParamStr($ctor);
+            $o[] = "void {$cn}___construct({$cn}* self" . ($ctorParams ? ', ' . $ctorParams : '') . ");";
+        }
         $o[] = "void {$cn}___destruct({$cn}* self);";
         foreach ($methods as $m) {
             $o[] = $this->methodDecl($m) . ';';
@@ -147,11 +188,19 @@ class CodeGenerator implements ASTVisitor
         if ($isMain) {
             $o[] = "{$cn}* new_{$cn}(t_int argc, t_array* argv);";
         } else {
-            $o[] = "{$cn}* new_{$cn}(void);";
+            $ctorParams = $this->ctorParamStr($ctor);
+            $o[] = "{$cn}* new_{$cn}(" . ($ctorParams ? $ctorParams : 'void') . ");";
         }
         $o[] = '';
 
         return implode("\n", $o);
+    }
+
+    /** 生成构造参数声明字符串（不含 self），如 "t_string bb" */
+    private function ctorParamStr(?MethodNode $ctor): string
+    {
+        if ($ctor === null) return '';
+        return implode(', ', array_map(fn($p) => $this->visitParam($p), $ctor->params));
     }
 
     /** Phase 2: VTable + 方法实现 + allocator */
@@ -177,23 +226,83 @@ class CodeGenerator implements ASTVisitor
         $o[] = $this->ind("};");
         $o[] = '';
 
-        // __construct（固定签名）
-        $o[] = "void {$cn}___construct({$cn}* self, t_int argc, t_array* argv) {";
+        // __construct — 注入参数类型到 varTypes
+        $this->declaredVars = ['self' => true];
+        $this->varTypes = [];
+        $this->scopeObjects = [];
+
+        if ($isMain) {
+            $this->declaredVars['argc'] = true;
+            $this->declaredVars['argv'] = true;
+            $this->varTypes['argc'] = 't_int';
+            $this->varTypes['argv'] = 't_array*';
+        } else if ($ctor) {
+            foreach ($ctor->params as $p) {
+                $vn = self::varName($p->name);
+                $this->declaredVars[$vn] = true;
+                $this->varTypes[$vn] = self::mapType($p->type);
+            }
+        }
+
+        $ctorSig = $isMain
+            ? "void {$cn}___construct({$cn}* self, t_int argc, t_array* argv) {"
+            : "void {$cn}___construct({$cn}* self" . ($this->ctorParamStr($ctor) ? ', ' . $this->ctorParamStr($ctor) : '') . ") {";
+        $o[] = $ctorSig;
         $o[] = $this->ind('if (self == NULL) return;');
+
+        // 属性默认值初始化 — 字符串用深拷贝
+        foreach ($class->properties as $prop) {
+            if ($prop->default !== null) {
+                $pname = ltrim($prop->name, '$');
+                $def = $prop->default->accept($this);
+                if ($prop->type === 'string' && $prop->default instanceof StringLiteralExpr) {
+                    // 字符串默认值：深拷贝到堆
+                    $o[] = $this->ind("self->{$pname} = tphp_rt_str_dup({$def});");
+                } else {
+                    $o[] = $this->ind("self->{$pname} = {$def};");
+                }
+            }
+        }
+
+        // 构造函数参数中的字符串属性：深拷贝到堆（防止栈/临时内存悬空）
+        if (!$isMain && $ctor) {
+            foreach ($ctor->params as $p) {
+                $pname = ltrim($p->name, '$');
+                // 检查是否为字符串属性参数
+                $isStrProp = false;
+                foreach ($class->properties as $prop) {
+                    if (ltrim($prop->name, '$') === $pname && $prop->type === 'string') {
+                        $isStrProp = true;
+                        break;
+                    }
+                }
+                if ($isStrProp) {
+                    $o[] = $this->ind("self->{$pname} = tphp_rt_str_dup({$pname});");
+                }
+            }
+        }
+
         if ($ctor && !empty($ctor->body)) {
             foreach ($ctor->body as $s) $o[] = $this->ind($s->accept($this));
-        } else {
+        } else if ($isMain) {
             $o[] = $this->ind('(void)argc;');
             $o[] = $this->ind('(void)argv;');
         }
         $o[] = '}';
         $o[] = '';
 
-        // __destruct（固定签名）
+        // __destruct — 先跑用户代码，再释放字符串属性
         $o[] = "void {$cn}___destruct({$cn}* self) {";
         $o[] = $this->ind('if (self == NULL) return;');
         if ($dtor && !empty($dtor->body)) {
             foreach ($dtor->body as $s) $o[] = $this->ind($s->accept($this));
+        }
+        // 自动释放所有 t_string 属性的堆内存
+        foreach ($class->properties as $prop) {
+            if ($prop->type === 'string') {
+                $pname = ltrim($prop->name, '$');
+                $o[] = $this->ind("tphp_rt_str_free(&self->{$pname});");
+            }
         }
         $o[] = '}';
         $o[] = '';
@@ -204,13 +313,10 @@ class CodeGenerator implements ASTVisitor
             $o[] = '';
         }
 
-        // Allocator — Main 有参数，辅助类无参数
+        // Allocator — Main 固定参数，辅助类用户参数
         $o[] = "/* ── Allocator: new_{$cn} ──────────────── */";
-        if ($isMain) {
-            $o[] = "{$cn}* new_{$cn}(t_int argc, t_array* argv) {";
-        } else {
-            $o[] = "{$cn}* new_{$cn}(void) {";
-        }
+        $ctorParams = $isMain ? 't_int argc, t_array* argv' : ($this->ctorParamStr($ctor) ?: 'void');
+        $o[] = "{$cn}* new_{$cn}({$ctorParams}) {";
         $o[] = $this->ind("{$cn}* self = ({$cn}*)calloc(1, sizeof({$cn}));");
         $o[] = $this->ind('if (self == NULL) return NULL;');
         $o[] = $this->ind("self->_base.vtable   = &_vtable_{$cn};");
@@ -218,8 +324,8 @@ class CodeGenerator implements ASTVisitor
         if ($isMain) {
             $o[] = $this->ind("{$cn}___construct(self, argc, argv);");
         } else {
-            $o[] = $this->ind("t_int _dummy_argc = 0; t_array* _dummy_argv = NULL;");
-            $o[] = $this->ind("{$cn}___construct(self, _dummy_argc, _dummy_argv);");
+            $ctorArgs = $ctor ? implode(', ', array_map(fn($p) => self::varName($p->name), $ctor->params)) : '';
+            $o[] = $this->ind("{$cn}___construct(self" . ($ctorArgs ? ', ' . $ctorArgs : '') . ");");
         }
         $o[] = $this->ind('return self;');
         $o[] = '}';
@@ -234,19 +340,21 @@ class CodeGenerator implements ASTVisitor
     public function visitFunction(FunctionNode $node): string
     {
         $this->declaredVars = [];
+        $this->varTypes = [];
         $this->scopeObjects = [];
         $ret = self::mapType($node->returnType);
         $params = array_map(fn($p) => $this->visitParam($p), $node->params);
-        // 参数也标记为已声明
         foreach ($node->params as $p) {
-            $this->declaredVars[self::varName($p->name)] = true;
+            $vn = self::varName($p->name);
+            $this->declaredVars[$vn] = true;
+            $this->varTypes[$vn] = self::mapType($p->type);
         }
         $lines = [];
-        $lines[] = 'static ' . $ret . ' tphp_' . self::funcCName($node) . '(' . implode(', ', $params) . ') {';
+        $lines[] = 'static ' . $ret . ' ' . self::funcCName($node) . '(' . implode(', ', $params) . ') {';
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         // 自动析构本作用域内的对象变量
         foreach ($this->scopeObjects as $ov) {
-            $lines[] = $this->ind("tphp_object_free(&{$ov}->_base);");
+            $lines[] = $this->ind("tphp_rt_object_free(&{$ov}->_base);");
         }
         $lines[] = '}';
         return implode("\n", $lines);
@@ -254,12 +362,13 @@ class CodeGenerator implements ASTVisitor
 
     public function visitMethod(MethodNode $node): string
     {
-        $this->declaredVars = [];
+        $this->declaredVars = ['self' => true];
+        $this->varTypes = [];
         $this->scopeObjects = [];
-        // self + params are all declared
-        $this->declaredVars['self'] = true;
         foreach ($node->params as $p) {
-            $this->declaredVars[self::varName($p->name)] = true;
+            $vn = self::varName($p->name);
+            $this->declaredVars[$vn] = true;
+            $this->varTypes[$vn] = self::mapType($p->type);
         }
         $lines = [];
         $lines[] = $this->methodImpl($node) . ' {';
@@ -271,7 +380,7 @@ class CodeGenerator implements ASTVisitor
         }
         // 自动析构本作用域内的对象变量
         foreach ($this->scopeObjects as $ov) {
-            $lines[] = $this->ind("tphp_object_free(&{$ov}->_base);");
+            $lines[] = $this->ind("tphp_rt_object_free(&{$ov}->_base);");
         }
         $lines[] = '}';
         return implode("\n", $lines);
@@ -290,7 +399,7 @@ class CodeGenerator implements ASTVisitor
             $code = $e->accept($this);
             // 如果表达式不是字符串字面量/变量引用，可能需要转换
             if ($e instanceof StringLiteralExpr) {
-                $parts[] = "tphp_echo({$code});";
+                $parts[] = "tphp_fn_echo({$code});";
             } elseif ($e instanceof VariableExpr) {
                 // 变量：推导类型决定是否需要转换
                 $vn = self::varName($e->name);
@@ -298,17 +407,33 @@ class CodeGenerator implements ASTVisitor
                 if ($vt === 't_string' || $vt === 't_int' || $vt === 't_float' || $vt === 't_bool') {
                     $parts[] = $this->echoWrap($vt, $code);
                 } else {
-                    $parts[] = "tphp_echo({$code});";
+                    $parts[] = "tphp_fn_echo({$code});";
+                }
+            } elseif ($e instanceof EnumAccessExpr) {
+                // 枚举访问 → 输出 ->value
+                $bt = $this->enumBackingType($e->enumName);
+                if ($bt === 'string') {
+                    $parts[] = "tphp_fn_echo(({$code})->value);";
+                } else {
+                    $parts[] = "tphp_fn_echo(tphp_rt_str_from_int(({$code})->value));";
+                }
+            } elseif ($e instanceof PropertyAccessExpr) {
+                // 属性访问：查找属性类型（含 enum 属性 ->value/->name）
+                $pt = $this->getPropType($e);
+                if ($pt !== '') {
+                    $parts[] = $this->echoWrap($pt, $code);
+                } else {
+                    $parts[] = "tphp_fn_echo({$code});";
                 }
             } elseif ($e instanceof CastExpr) {
                 // 类型转换：根据目标类型包装
                 $ct = $e->castType;
-                $parts[] = $ct === 'string' ? "tphp_echo({$code});"
+                $parts[] = $ct === 'string' ? "tphp_fn_echo({$code});"
                          : $this->echoWrap(self::$typeMap[$ct] ?? 't_int', $code);
             } elseif ($e instanceof CallExpr) {
                 $parts[] = $this->echoWrap('t_int', $code);
             } else {
-                $parts[] = "tphp_echo({$code});";
+                $parts[] = "tphp_fn_echo({$code});";
             }
         }
         return implode("\n" . $this->indentStr(), $parts);
@@ -317,11 +442,11 @@ class CodeGenerator implements ASTVisitor
     private function echoWrap(string $type, string $code): string
     {
         return match ($type) {
-            't_string' => "tphp_echo({$code});",
-            't_int'    => "tphp_echo(tphp_str_from_int({$code}));",
-            't_float'  => "tphp_echo(tphp_str_from_float({$code}));",
-            't_bool'   => "tphp_echo(tphp_str_from_bool({$code}));",
-            default    => "tphp_echo({$code});",
+            't_string' => "tphp_fn_echo({$code});",
+            't_int'    => "tphp_fn_echo(tphp_rt_str_from_int({$code}));",
+            't_float'  => "tphp_fn_echo(tphp_rt_str_from_float({$code}));",
+            't_bool'   => "tphp_fn_echo(tphp_rt_str_from_bool({$code}));",
+            default    => "tphp_fn_echo({$code});",
         };
     }
 
@@ -348,10 +473,10 @@ class CodeGenerator implements ASTVisitor
         // (array)xxx → 标量转单元素数组
         if ($node->expr instanceof CastExpr && $node->expr->castType === 'array') {
             if (!$isDeclared) {
-                $elType = $this->inferType($node->expr->expr);
-                $this->varTypes[$var] = $elType; // 记录元素类型用于 ArrayAccess
+                $this->varTypes[$var] = 't_array*';
                 return "t_array* {$var} = {$expr};";
             }
+            $this->varTypes[$var] = 't_array*';
             return "{$var} = {$expr};";
         }
 
@@ -390,7 +515,14 @@ class CodeGenerator implements ASTVisitor
         }
         if ($expr instanceof BinaryExpr) {
             if ($expr->operator === '.') return 't_string';
+            // 比较/逻辑运算符返回 bool
+            if (in_array($expr->operator, ['<', '>', '<=', '>=', '==', '!=', '&&', '||'], true)) {
+                return 't_bool';
+            }
             return $this->inferType($expr->left);
+        }
+        if ($expr instanceof UnaryExpr && $expr->operator === '!') {
+            return 't_bool';
         }
         if ($expr instanceof ArrayLiteralExpr) {
             return 't_array*';
@@ -402,6 +534,34 @@ class CodeGenerator implements ASTVisitor
             $vn = self::varName($expr->name);
             return $this->varTypes[$vn] ?? 't_int';
         }
+        if ($expr instanceof EnumAccessExpr) {
+            return $this->enumCTypes[$expr->enumName] ?? 't_int';
+        }
+        if ($expr instanceof PropertyAccessExpr) {
+            $objKey = ($expr->object instanceof VariableExpr) ? self::varName($expr->object->name) : '';
+            $objType = $this->varTypes[$objKey] ?? '';
+            // EnumName::CASE->value → 直接取 backing 类型
+            if ($objType === '' && $expr->object instanceof EnumAccessExpr) {
+                $objType = $this->enumCTypes[$expr->object->enumName] ?? '';
+            }
+            // 枚举属性访问 → enum->value 返回 backing 类型, enum->name 返回 t_string
+            if ($objType !== '' && str_starts_with($objType, 'tphp_enum_')) {
+                if ($expr->property === 'name') return 't_string';
+                if ($expr->property === 'value') {
+                    $base = rtrim($objType, '*');
+                    foreach ($this->enumCTypes as $name => $ct) {
+                        if (rtrim($ct, '*') === $base) {
+                            return ($this->enumBackingTypes[$name] ?? 'int') === 'string' ? 't_string' : 't_int';
+                        }
+                    }
+                    return 't_int';
+                }
+            }
+            // 尝试从 classPropTypes 查找
+            if ($objType !== '' && isset($this->classPropTypes[$objType])) {
+                return $this->classPropTypes[$objType][$expr->property] ?? 't_int';
+            }
+        }
         if ($expr instanceof ArrayAccessExpr) {
             // 数组元素类型取决于数组变量类型
             return $this->inferType($expr->array);
@@ -410,9 +570,88 @@ class CodeGenerator implements ASTVisitor
             return self::$typeMap[$expr->castType] ?? 't_int';
         }
         if ($expr instanceof CallExpr) {
-            return 't_int'; // 默认函数返回 int，后续可优化
+            return $this->inferCallReturnType($expr);
+        }
+        if ($expr instanceof TernaryExpr) {
+            return $this->inferType($expr->thenExpr);
+        }
+        if ($expr instanceof NullCoalesceExpr) {
+            $lt = $this->inferType($expr->left);
+            return ($lt === 'null') ? $this->inferType($expr->right) : $lt;
         }
         return 't_int'; // fallback
+    }
+
+    /** 推导 CallExpr 的返回类型 */
+    private function inferCallReturnType(CallExpr $expr): string
+    {
+        // 方法调用 → 查 classMethodRetTypes
+        if ($expr->callee !== null) {
+            $objKey = '';
+            if ($expr->callee instanceof VariableExpr) {
+                $objKey = self::varName($expr->callee->name);
+                $objType = ($objKey === '$this' || $objKey === 'self')
+                    ? $this->className
+                    : ($this->varTypes[$objKey] ?? '');
+            } elseif ($expr->callee instanceof CallExpr) {
+                // 链式调用：递归推导
+                $objType = $this->inferCallChainClass($expr->callee);
+            } else {
+                return 't_int';
+            }
+            if ($objType !== '' && isset($this->classMethodRetTypes[$objType])) {
+                $retType = $this->classMethodRetTypes[$objType][$expr->name] ?? 't_int';
+                if ($retType === 'void') return 't_int';
+                // 如果是对象类型（包含 *），返回类名（用于对象变量追踪）
+                if (str_ends_with($retType, '*')) return rtrim($retType, '*');
+                return $retType;
+            }
+        }
+        // 独立函数 → 默认 t_int（未来可扩展函数返回类型追踪）
+        return 't_int';
+    }
+
+    public function visitAssignPropStmt(AssignPropStmtNode $node): string
+    {
+        $target = $node->target->accept($this);
+        $val = $node->value->accept($this);
+        // 字符串属性赋值：深拷贝到堆（防止栈/临时内存悬空）
+        $propType = $this->getPropType($node->target);
+        if ($propType === 't_string') {
+            // 如果之前已有堆数据，先释放再赋值
+            return "tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup({$val});";
+        }
+        return "{$target} = {$val};";
+    }
+
+    /** 获取属性类型（通过 classPropTypes 查找） */
+    private function getPropType(PropertyAccessExpr $pa): string
+    {
+        $objKey = ($pa->object instanceof VariableExpr) ? self::varName($pa->object->name) : '';
+        $objType = ($objKey === '$this' || $objKey === 'self')
+            ? $this->className
+            : ($this->varTypes[$objKey] ?? '');
+        // EnumName::CASE->value → 直接取 backing 类型
+        if ($objType === '' && $pa->object instanceof EnumAccessExpr) {
+            $objType = rtrim($this->enumCTypes[$pa->object->enumName] ?? '', '*');
+        }
+        // 枚举属性 → enum->value 返回 backing 类型, enum->name 返回 t_string
+        if ($objType !== '' && str_starts_with($objType, 'tphp_enum_')) {
+            if ($pa->property === 'name') return 't_string';
+            if ($pa->property === 'value') {
+                $base = rtrim($objType, '*');
+                foreach ($this->enumCTypes as $name => $ct) {
+                    if (rtrim($ct, '*') === $base) {
+                        return ($this->enumBackingTypes[$name] ?? 'int') === 'string' ? 't_string' : 't_int';
+                    }
+                }
+                return 't_int';
+            }
+        }
+        if ($objType !== '' && isset($this->classPropTypes[$objType])) {
+            return $this->classPropTypes[$objType][$pa->property] ?? '';
+        }
+        return '';
     }
 
     public function visitExprStmt(ExprStmtNode $node): string
@@ -428,7 +667,11 @@ class CodeGenerator implements ASTVisitor
     }
 
     public function visitIntLiteral(IntLiteralExpr $node): string    { return (string)$node->value; }
-    public function visitFloatLiteral(FloatLiteralExpr $node): string { return (string)$node->value; }
+    public function visitFloatLiteral(FloatLiteralExpr $node): string {
+        // 确保 C 侧保留浮点语义：整数部分后面加 .0
+        $val = $node->value;
+        return ($val == (float)(int)$val) ? sprintf('%.1f', $val) : rtrim(rtrim(sprintf('%.15g', $val), '0'), '.');
+    }
     public function visitBoolLiteral(BoolLiteralExpr $node): string   { return $node->value ? 'true' : 'false'; }
     public function visitNullLiteral(NullLiteralExpr $node): string   { return 'null'; }
 
@@ -443,51 +686,51 @@ class CodeGenerator implements ASTVisitor
     private function genArrayLiteralInline(ArrayLiteralExpr $node, string $varName): string
     {
         $parts = [];
-        $parts[] = "t_array* {$varName} = tphp_arr_create();";
+        $parts[] = "t_array* {$varName} = tphp_fn_arr_create();";
         $parts[] = "if ({$varName} != NULL) {";
-        foreach ($node->elements as $el) {
-            $code = $el->accept($this);
-            // 根据元素类型包装为 t_var
-            if ($el instanceof StringLiteralExpr) {
-                $parts[] = "tphp_arr_push({$varName}, VAR_STRING({$code}));";
-            } elseif ($el instanceof IntLiteralExpr) {
-                $parts[] = "tphp_arr_push({$varName}, VAR_INT({$code}));";
-            } elseif ($el instanceof FloatLiteralExpr) {
-                $parts[] = "tphp_arr_push({$varName}, VAR_FLOAT({$code}));";
-            } elseif ($el instanceof BoolLiteralExpr) {
-                $parts[] = "tphp_arr_push({$varName}, VAR_BOOL({$code}));";
-            } elseif ($el instanceof NullLiteralExpr) {
-                $parts[] = "tphp_arr_push({$varName}, VAR_NULL());";
-            } elseif ($el instanceof ArrayLiteralExpr) {
-                // 嵌套数组
-                $subCode = $el->accept($this);
-                $parts[] = "tphp_arr_push({$varName}, VAR_ARRAY({$subCode}));";
-            } elseif ($el instanceof ClosureExpr) {
-                // 闭包作为数组元素
-                $subCode = $el->accept($this);
-                $parts[] = "tphp_arr_push({$varName}, VAR_CALLBACK({$subCode}));";
-            } elseif ($el instanceof VariableExpr) {
-                $vn = self::varName($el->name);
-                $vt = $this->varTypes[$vn] ?? 't_int';
-                $wrap = match ($vt) {
-                    't_int'      => "VAR_INT({$vn})",
-                    't_float'    => "VAR_FLOAT({$vn})",
-                    't_string'   => "VAR_STRING({$vn})",
-                    't_bool'     => "VAR_BOOL({$vn})",
-                    't_array*'   => "VAR_ARRAY({$vn})",
-                    't_callback' => "VAR_CALLBACK({$vn})",
-                    default      => "VAR_NULL()",
-                };
-                $parts[] = "tphp_arr_push({$varName}, {$wrap});";
-            } elseif ($el instanceof UnaryExpr) {
-                $parts[] = "tphp_arr_push({$varName}, VAR_INT({$code}));";
+        foreach ($node->entries as $entry) {
+            $valCode = $entry->value->accept($this);
+            $wrap = $this->wrapArrayElement($entry->value, $valCode);
+
+            if ($entry->key !== null) {
+                $keyExpr = $entry->key;
+                if ($keyExpr instanceof StringLiteralExpr) {
+                    $kc = $keyExpr->accept($this);
+                    $parts[] = "tphp_fn_arr_set_str({$varName}, {$kc}, {$wrap});";
+                } else {
+                    $kc = $keyExpr->accept($this);
+                    $parts[] = "tphp_fn_arr_set_int({$varName}, {$kc}, {$wrap});";
+                }
             } else {
-                // BinaryExpr, CallExpr 等 —— 默认 int 类型
-                $parts[] = "tphp_arr_push({$varName}, VAR_INT({$code}));";
+                $parts[] = "tphp_fn_arr_push({$varName}, {$wrap});";
             }
         }
         $parts[] = '}';
         return implode(' ', $parts);
+    }
+
+    /** 将数组元素值包装为 t_var 宏 */
+    private function wrapArrayElement(ExprNode $el, string $code): string
+    {
+        if ($el instanceof StringLiteralExpr)  return "VAR_STRING({$code})";
+        if ($el instanceof IntLiteralExpr)     return "VAR_INT({$code})";
+        if ($el instanceof FloatLiteralExpr)   return "VAR_FLOAT({$code})";
+        if ($el instanceof BoolLiteralExpr)    return "VAR_BOOL({$code})";
+        if ($el instanceof NullLiteralExpr)    return "VAR_NULL()";
+        if ($el instanceof ArrayLiteralExpr)   return "VAR_ARRAY({$code})";
+        if ($el instanceof ClosureExpr)        return "VAR_CALLBACK({$code})";
+        if ($el instanceof VariableExpr) {
+            $vn = self::varName($el->name);
+            $vt = $this->varTypes[$vn] ?? 't_int';
+            return match ($vt) {
+                't_int' => "VAR_INT({$vn})", 't_float' => "VAR_FLOAT({$vn})",
+                't_string' => "VAR_STRING({$vn})", 't_bool' => "VAR_BOOL({$vn})",
+                't_array*' => "VAR_ARRAY({$vn})", 't_callback' => "VAR_CALLBACK({$vn})",
+                default => "VAR_NULL()",
+            };
+        }
+        if ($el instanceof UnaryExpr) return "VAR_INT({$code})";
+        return "VAR_INT({$code})";
     }
 
     public function visitClosure(ClosureExpr $node): string
@@ -509,7 +752,9 @@ class CodeGenerator implements ASTVisitor
         $this->varTypes     = [];
         $this->indent       = 0;
         foreach ($node->params as $p) {
-            $this->declaredVars[self::varName($p->name)] = true;
+            $vn = self::varName($p->name);
+            $this->declaredVars[$vn] = true;
+            $this->varTypes[$vn] = self::mapType($p->type);
         }
 
         $implLines = [];
@@ -524,7 +769,7 @@ class CodeGenerator implements ASTVisitor
             }
         }
         foreach ($this->scopeObjects as $ov) {
-            $implLines[] = '    ' . "tphp_object_free(&{$ov}->_base);";
+            $implLines[] = '    ' . "tphp_rt_object_free(&{$ov}->_base);";
         }
         $implLines[] = '}';
 
@@ -543,8 +788,13 @@ class CodeGenerator implements ASTVisitor
 
     public function visitVariable(VariableExpr $node): string
     {
+        // 原始名字判断是否常量
+        if (!str_starts_with($node->name, '$')) {
+            return 'TPHP_CONST_' . strtoupper($node->name);
+        }
         $n = self::varName($node->name);
-        return $n === '$this' ? 'self' : $n;
+        if ($n === '$this') return 'self';
+        return $n;
     }
 
     public function visitUnary(UnaryExpr $node): string
@@ -554,12 +804,76 @@ class CodeGenerator implements ASTVisitor
 
     public function visitBinary(BinaryExpr $node): string
     {
+        if ($node->operator === '=') {
+            // 用于 for-init 中的赋值
+            return $node->left->accept($this) . ' = ' . $node->right->accept($this);
+        }
         if ($node->operator === '.') {
             $left  = $this->castToStr($node->left);
             $right = $this->castToStr($node->right);
-            return 'tphp_str_concat(' . $left . ', ' . $right . ')';
+            return 'tphp_rt_str_concat(' . $left . ', ' . $right . ')';
         }
+
+        // null 比较: null == null → true, null == x → false
+        $cmpOps = ['==', '!='];
+        if (in_array($node->operator, $cmpOps, true)) {
+            $lNull = $node->left instanceof NullLiteralExpr;
+            $rNull = $node->right instanceof NullLiteralExpr;
+            if ($lNull || $rNull) {
+                if ($lNull && $rNull) {
+                    return $node->operator === '==' ? 'true' : 'false';
+                }
+                $otherNode = $lNull ? $node->right : $node->left;
+                $otype = $this->inferType($otherNode);
+                $other = $otherNode->accept($this);
+                // struct 类型用成员判空
+                if ($otype === 't_string') {
+                    return $node->operator === '=='
+                        ? "({$other}.data == NULL && {$other}.length == 0)"
+                        : "({$other}.data != NULL || {$other}.length > 0)";
+                }
+                return $node->operator === '==' ? "({$other} == null)" : "({$other} != null)";
+            }
+        }
+
+        // 字符串比较 → 运行时函数
+        $cmpAllOps = ['==', '!=', '<', '>', '<=', '>='];
+        if (in_array($node->operator, $cmpAllOps, true)) {
+            $lt = $this->inferType($node->left);
+            $rt = $this->inferType($node->right);
+            if ($lt === 't_string' || $rt === 't_string') {
+                $l = $this->castToStr($node->left);
+                $r = $this->castToStr($node->right);
+                return match ($node->operator) {
+                    '==' => 'tphp_rt_str_eq(' . $l . ', ' . $r . ')',
+                    '!=' => 'tphp_rt_str_ne(' . $l . ', ' . $r . ')',
+                    '<'  => 'tphp_rt_str_lt(' . $l . ', ' . $r . ')',
+                    '>'  => 'tphp_rt_str_gt(' . $l . ', ' . $r . ')',
+                    '<=' => 'tphp_rt_str_le(' . $l . ', ' . $r . ')',
+                    '>=' => 'tphp_rt_str_ge(' . $l . ', ' . $r . ')',
+                };
+            }
+        }
+
         return '(' . $node->left->accept($this) . ' ' . $node->operator . ' ' . $node->right->accept($this) . ')';
+    }
+
+    public function visitTernary(TernaryExpr $node): string
+    {
+        $cond = $node->condition->accept($this);
+        $then = $node->thenExpr->accept($this);
+        $else = $node->elseExpr->accept($this);
+        return '(' . $cond . ' ? ' . $then . ' : ' . $else . ')';
+    }
+
+    public function visitNullCoalesce(NullCoalesceExpr $node): string
+    {
+        $left  = $node->left->accept($this);
+        $right = $node->right->accept($this);
+        $lt = $this->inferType($node->left);
+        // 左为 null 时直接用右值
+        if ($lt === 'null') return $right;
+        return '(' . $left . ' != null ? ' . $left . ' : ' . $right . ')';
     }
 
     public function visitCall(CallExpr $node): string
@@ -572,12 +886,44 @@ class CodeGenerator implements ASTVisitor
         // count 内置函数 → tphp_arr_count
         if ($node->callee === null && $node->name === 'count') {
             $args = array_map(fn($a) => $a->accept($this), $node->args);
-            return 'tphp_arr_count(' . implode(', ', $args) . ')';
+            return 'tphp_fn_arr_count(' . implode(', ', $args) . ')';
         }
 
         // var_export 内置函数 —— 转换为可读字符串输出
         if ($node->callee === null && $node->name === 'var_export') {
             return $this->generateVarExport($node->args);
+        }
+
+        // exit / die 内置函数 → tphp_fn_exit(code)
+        if ($node->callee === null && ($node->name === 'exit' || $node->name === 'die')) {
+            $args = array_map(fn($a) => $a->accept($this), $node->args);
+            $code = !empty($args) ? $args[0] : '0';
+            return 'tphp_fn_exit(' . $code . ')';
+        }
+
+        // isset($var) → 非 null 检测（非指针类型始终 true）
+        if ($node->callee === null && $node->name === 'isset') {
+            $args = array_map(fn($a) => $a->accept($this), $node->args);
+            $code = !empty($args) ? $args[0] : 'null';
+            $type = !empty($node->args) ? $this->inferType($node->args[0]) : 'null';
+            // 非指针类型（int/float/bool/string栈值）不可能为 null，始终 true
+            if (in_array($type, ['t_int', 't_float', 't_bool', 't_string'], true)) return 'true';
+            return 'tphp_fn_isset((void*)' . $code . ')';
+        }
+
+        // empty($var) → PHP falsy 检测，按类型分发到 C 函数
+        if ($node->callee === null && $node->name === 'empty') {
+            $args = array_map(fn($a) => $a->accept($this), $node->args);
+            $code = !empty($args) ? $args[0] : 'true';
+            $type = !empty($node->args) ? $this->inferType($node->args[0]) : 't_int';
+            return match ($type) {
+                't_int'    => 'tphp_fn_empty_int(' . $code . ')',
+                't_float'  => 'tphp_fn_empty_float(' . $code . ')',
+                't_bool'   => 'tphp_fn_empty_bool(' . $code . ')',
+                't_string' => 'tphp_fn_empty_str(' . $code . ')',
+                'null'     => 'tphp_fn_empty_null(' . $code . ')',
+                default    => 'tphp_fn_empty_int(' . $code . ')',
+            };
         }
 
         // 闭包调用: $h() → ((t_int(*)(...))h.func)(args)
@@ -587,21 +933,41 @@ class CodeGenerator implements ASTVisitor
 
         $args = array_map(fn($a) => $a->accept($this), $node->args);
         if ($node->callee === null) {
-            // 独立函数加 tphp_ 前缀，命名空间名已 mangled
-            return 'tphp_' . self::mangleCName($node->name) . '(' . implode(', ', $args) . ')';
+            // 独立函数：tphp_fn_ 前缀，命名空间名已 mangled
+            $fnName = self::mangleCName($node->name);
+            return 'tphp_fn_' . $fnName . '(' . implode(', ', $args) . ')';
         }
         $callee = $node->callee->accept($this);
         // 方法调用：self 作为第一个参数
         $allArgs = array_merge([$callee], $args);
-        // 类名推导（self 用 className，其他从 varTypes 查）
+        // 类名推导
         if ($callee === 'self') {
             $cn = $this->className;
-        } else {
-            $raw = $this->varTypes[$callee] ?? $callee;
-            // 如果 varTypes 里存的是 PHP 命名空间名（含 \），转 C 名
+        } elseif ($node->callee instanceof VariableExpr) {
+            $key = self::varName($node->callee->name);
+            $raw = $this->varTypes[$key] ?? $key;
             $cn = str_contains($raw, '\\') ? self::classRefName($raw) : $raw;
+        } elseif ($node->callee instanceof CallExpr) {
+            // 链式调用：从上一个调用的返回类型推导
+            $cn = $this->inferCallChainClass($node->callee);
+        } else {
+            $cn = $callee;
         }
         return "{$cn}_{$node->name}(" . implode(', ', $allArgs) . ')';
+    }
+
+    /** 推断链式调用的返回类名 */
+    private function inferCallChainClass(CallExpr $expr): string
+    {
+        if ($expr->callee === null) return '';
+        if ($expr->callee instanceof VariableExpr) {
+            $key = self::varName($expr->callee->name);
+            return $this->varTypes[$key] ?? '';
+        }
+        if ($expr->callee instanceof CallExpr) {
+            return $this->inferCallChainClass($expr->callee);
+        }
+        return '';
     }
 
     /** 生成 var_dump 调用：将参数包装为 t_var */
@@ -611,7 +977,7 @@ class CodeGenerator implements ASTVisitor
         foreach ($args as $arg) {
             $wrapped[] = $this->wrapVar($arg);
         }
-        return 'tphp_var_dump(' . implode(', ', $wrapped) . ')';
+        return 'tphp_fn_var_dump(' . implode(', ', $wrapped) . ')';
     }
 
     /** 生成 var_export 调用：将表达式转为可读字符串并 echo */
@@ -620,13 +986,13 @@ class CodeGenerator implements ASTVisitor
         $parts = [];
         foreach ($args as $arg) {
             if ($arg instanceof BoolLiteralExpr) {
-                $parts[] = 'tphp_echo(' . ($arg->value ? 'STR_LIT("true")' : 'STR_LIT("false")') . ')';
+                $parts[] = 'tphp_fn_echo(' . ($arg->value ? 'STR_LIT("true")' : 'STR_LIT("false")') . ')';
             } elseif ($arg instanceof CastExpr && $arg->castType === 'bool') {
                 $code = $arg->accept($this);
-                $parts[] = 'tphp_echo(' . $code . ' ? STR_LIT("true") : STR_LIT("false"))';
+                $parts[] = 'tphp_fn_echo(' . $code . ' ? STR_LIT("true") : STR_LIT("false"))';
             } else {
                 // 默认 var_dump 行为
-                $parts[] = 'tphp_var_dump(' . $this->wrapVar($arg) . ')';
+                $parts[] = 'tphp_fn_var_dump(' . $this->wrapVar($arg) . ')';
             }
         }
         return implode('; ', $parts);
@@ -665,7 +1031,29 @@ class CodeGenerator implements ASTVisitor
         if ($expr instanceof NullLiteralExpr) {
             return 'VAR_NULL()';
         }
+        if ($expr instanceof PropertyAccessExpr) {
+            $code = $expr->accept($this);
+            // 用 getPropType 查类型（含 enum 属性）
+            $propType = $this->getPropType($expr);
+            if ($propType === '') $propType = 't_int';
+            return match ($propType) {
+                't_int'    => "VAR_INT({$code})",
+                't_float'  => "VAR_FLOAT({$code})",
+                't_string' => "VAR_STRING({$code})",
+                't_bool'   => "VAR_BOOL({$code})",
+                default    => "VAR_INT({$code})",
+            };
+        }
+        if ($expr instanceof EnumAccessExpr) {
+            $code = $expr->accept($this); // &_e_X_Y (指针)
+            $bt = $this->enumBackingType($expr->enumName);
+            return ($bt === 'string') ? "VAR_STRING(({$code})->value)" : "VAR_INT(({$code})->value)";
+        }
         if ($expr instanceof VariableExpr) {
+            // 常量引用（原始名字不以 $ 开头）
+            if (!str_starts_with($expr->name, '$')) {
+                return "VAR_STRING(TPHP_CONST_" . strtoupper($expr->name) . ")";
+            }
             $vn = self::varName($expr->name);
             $vt = $this->varTypes[$vn] ?? 't_int';
             return match ($vt) {
@@ -696,6 +1084,26 @@ class CodeGenerator implements ASTVisitor
                 'int'    => "VAR_INT({$code})",
                 'float'  => "VAR_FLOAT({$code})",
                 default  => "VAR_INT({$code})",
+            };
+        }
+        if ($expr instanceof CallExpr) {
+            $code = $expr->accept($this);
+            // 查找方法返回类型
+            $retType = 't_int';
+            if ($expr->callee !== null) {
+                $objKey = ($expr->callee instanceof VariableExpr) ? self::varName($expr->callee->name) : '';
+                $objType = ($objKey === '$this' || $objKey === 'self')
+                    ? $this->className
+                    : ($this->varTypes[$objKey] ?? '');
+                if ($objType !== '' && isset($this->classMethodRetTypes[$objType])) {
+                    $retType = $this->classMethodRetTypes[$objType][$expr->name] ?? 't_int';
+                }
+            }
+            return match ($retType) {
+                't_string' => "VAR_STRING({$code})",
+                't_float'  => "VAR_FLOAT({$code})",
+                't_bool'   => "VAR_BOOL({$code})",
+                default    => "VAR_INT({$code})",
             };
         }
         // 默认 int
@@ -733,19 +1141,302 @@ class CodeGenerator implements ASTVisitor
         return "new_{$cn}(" . implode(', ', $args) . ')';
     }
 
+    public function visitPropertyAccess(PropertyAccessExpr $node): string
+    {
+        $obj = $node->object->accept($this);
+        $prop = ltrim($node->property, '$');
+        // 加括号防止 &enum->field 被 C 误解析为 &(enum->field)
+        if (str_starts_with($obj, '&')) {
+            return "({$obj})->{$prop}";
+        }
+        return "{$obj}->{$prop}";
+    }
+
+    public function visitPropertyDecl(PropertyDeclNode $node): string
+    {
+        return '';
+    }
+
+    public function visitConst(ConstNode $node): string
+    {
+        $name = 'TPHP_CONST_' . strtoupper($node->name);
+        if ($node->value instanceof StringLiteralExpr) {
+            $val = str_replace('"', '\\"', $node->value->value);
+            return '#define ' . $name . ' STR_LIT("' . $val . '")';
+        }
+        if ($node->value instanceof IntLiteralExpr) {
+            return '#define ' . $name . ' ' . $node->value->value;
+        }
+        if ($node->value instanceof FloatLiteralExpr) {
+            $fv = $node->value->value;
+            return '#define ' . $name . ' ' .
+                (($fv == (float)(int)$fv) ? sprintf('%.1f', $fv) : rtrim(rtrim(sprintf('%.15g', $fv), '0'), '.'));
+        }
+        return '/* const ' . $node->name . ' */';
+    }
+
+    public function visitEnum(EnumNode $node): string
+    {
+        // 注册枚举类型（FQN + 短名均可查）
+        $fqName = ($node->namespace !== '')
+            ? $node->namespace . '\\' . $node->name
+            : $node->name;
+        $cName  = 'tphp_enum_' . self::mangleCName($fqName);
+        $cValueType = ($node->backingType === 'int') ? 't_int' : 't_string';
+
+        $this->enumBackingTypes[$fqName] = $node->backingType;
+        $this->enumBackingTypes[$node->name] = $node->backingType;
+        $this->enumCTypes[$fqName] = $cName . '*';
+        $this->enumCTypes[$node->name] = $cName . '*';
+
+        // 将命名空间分隔符转为 C 标识符前缀
+        $prefix = self::mangleCName($fqName);
+
+        $lines = [];
+        $lines[] = "/* ── Enum: {$fqName} ({$node->backingType}) ──────────────── */";
+
+        // Struct 定义
+        $lines[] = "typedef struct {";
+        $lines[] = "    t_string name;";
+        $lines[] = "    {$cValueType} value;";
+        $lines[] = "} {$cName};";
+
+        // Static 单例实例（const → .rodata，零内存泄漏）
+        foreach ($node->cases as $case) {
+            $valCode = $case->value->accept($this);
+            $lines[] = "static {$cName} _e_{$prefix}_{$case->name} = {";
+            $lines[] = "    .name = STR_LIT(\"{$case->name}\"),";
+            $lines[] = "    .value = {$valCode},";
+            $lines[] = "};";
+        }
+        $lines[] = '';
+
+        return implode("\n", $lines);
+    }
+
+    // EnumAccessExpr → 返回 static 实例指针
+    public function visitEnumAccess(EnumAccessExpr $node): string
+    {
+        $prefix = self::mangleCName($node->enumName);
+        return "&_e_{$prefix}_{$node->caseName}";
+    }
+
+    // ============================================================
+    // 控制流
+    // ============================================================
+
+    public function visitIfStmt(IfStmtNode $node): string
+    {
+        $cond = $node->condition->accept($this);
+        $lines = [];
+        $lines[] = "if ({$cond}) {";
+        foreach ($node->thenBody as $s) $lines[] = $this->ind($s->accept($this));
+        $lines[] = '}';
+        foreach ($node->elseifs as $eif) {
+            $econd = $eif->condition->accept($this);
+            $lines[] = "else if ({$econd}) {";
+            foreach ($eif->body as $s) $lines[] = $this->ind($s->accept($this));
+            $lines[] = '}';
+        }
+        if (!empty($node->elseBody)) {
+            $lines[] = 'else {';
+            foreach ($node->elseBody as $s) $lines[] = $this->ind($s->accept($this));
+            $lines[] = '}';
+        }
+        return implode("\n", $lines);
+    }
+
+    public function visitWhileStmt(WhileStmtNode $node): string
+    {
+        $cond = $node->condition->accept($this);
+        $lines = [];
+        $lines[] = "while ({$cond}) {";
+        foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $lines[] = '}';
+        return implode("\n", $lines);
+    }
+
+    public function visitDoWhileStmt(DoWhileStmtNode $node): string
+    {
+        $cond = $node->condition->accept($this);
+        $lines = [];
+        $lines[] = 'do {';
+        foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $lines[] = "} while ({$cond});";
+        return implode("\n", $lines);
+    }
+
+    public function visitListStmt(ListStmtNode $node): string
+    {
+        $lines = [];
+        $arrName = '_lst_' . (++$this->tmpVarCounter);
+        $idxName  = '_li_' . (++$this->tmpVarCounter);
+        $expr = $node->expr->accept($this);
+        $lines[] = "t_array* {$arrName} = {$expr};";
+        foreach ($node->vars as $i => $var) {
+            $isDeclared = isset($this->declaredVars[$var]);
+            $this->declaredVars[$var] = true;
+            $this->varTypes[$var] = 't_int';
+            $prefix = $isDeclared ? '' : 't_int ';
+            $lines[] = "{$prefix}{$var} = ({$arrName} && {$arrName}->length > {$i}) ? tphp_arr_item_int({$arrName}, {$i}) : 0;";
+        }
+        return implode("\n", $lines);
+    }
+
+    public function visitForStmt(ForStmtNode $node): string
+    {
+        $init = '';
+        if ($node->init) {
+            if ($node->init instanceof BinaryExpr && $node->init->operator === '=') {
+                $v = $node->init->left->accept($this);
+                $e = $node->init->right->accept($this);
+                $vn = ($node->init->left instanceof VariableExpr) ? self::varName($node->init->left->name) : '';
+                $isDeclared = isset($this->declaredVars[$vn]);
+                $this->declaredVars[$vn] = true;
+                $this->varTypes[$vn] = 't_int';
+                $init = $isDeclared ? "{$v} = {$e}" : "t_int {$v} = {$e}";
+            } else {
+                $init = $node->init->accept($this);
+            }
+        }
+        $cond = $node->condition ? $node->condition->accept($this) : '';
+        $step = $node->step ? $node->step->accept($this) : '';
+        $lines = [];
+        $lines[] = "for ({$init}; {$cond}; {$step}) {";
+        foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $lines[] = '}';
+        return implode("\n", $lines);
+    }
+
+    public function visitForeachStmt(ForeachStmtNode $node): string
+    {
+        $arr  = $node->array->accept($this);
+        $cnt  = '_fc_' . (++$this->tmpVarCounter);
+        $idx  = '_fi_' . (++$this->tmpVarCounter);
+        $valVar = ltrim($node->valueVar, '$');
+        $keyVar = $node->keyVar ? ltrim($node->keyVar, '$') : '';
+
+        // Mark vars as declared (after declaration check)
+        $needKeyDecl = ($keyVar && !isset($this->declaredVars[$keyVar]));
+        $needValDecl = !isset($this->declaredVars[$valVar]);
+
+        $this->declaredVars[$valVar] = true;
+        $this->varTypes[$valVar] = 't_int';
+        if ($keyVar) {
+            $this->declaredVars[$keyVar] = true;
+            $this->varTypes[$keyVar] = 't_int';
+        }
+
+        $lines = [];
+        if ($needKeyDecl) {
+            $lines[] = "t_int {$keyVar};";
+        }
+        if ($needValDecl) {
+            $lines[] = "t_int {$valVar};";
+        }
+        $lines[] = "for (int {$idx} = 0; {$idx} < tphp_fn_arr_count({$arr}); {$idx}++) {";
+        if ($keyVar) {
+            $lines[] = $this->ind("if ({$arr}->entries == NULL) break;");
+            $lines[] = $this->ind("const t_entry* _ent = &{$arr}->entries[{$idx}];");
+            $lines[] = $this->ind("const t_var* _ekey = _ent->key;");
+            $lines[] = $this->ind("if (_ekey != NULL) { {$keyVar} = (_ekey->type == TYPE_INT) ? (t_int)_ekey->value._int : 0; }");
+            $lines[] = $this->ind("const t_var* _eval = _ent->value;");
+        } else {
+            $lines[] = $this->ind("t_var* _eval = tphp_fn_arr_index({$arr}, {$idx});");
+        }
+        $lines[] = $this->ind("if (_eval == NULL) continue;");
+        $lines[] = $this->ind("{$valVar} = (_eval->type == TYPE_INT) ? (t_int)_eval->value._int : 0;");
+        foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $lines[] = '}';
+        return implode("\n", $lines);
+    }
+
+    public function visitSwitchStmt(SwitchStmtNode $node): string
+    {
+        $condCode = $node->condition->accept($this);
+        $condType = $this->inferType($node->condition);
+
+        // 字符串 switch → 生成 if-elseif 链（C switch 不支持字符串）
+        if ($condType === 't_string') {
+            return $this->generateStringSwitch($condCode, $node->cases);
+        }
+
+        // int/bool switch → 直接 C switch
+        $lines = [];
+        $lines[] = "switch ({$condCode}) {";
+        foreach ($node->cases as $case) {
+            if ($case->value !== null) {
+                $valCode = $case->value->accept($this);
+                $lines[] = "case {$valCode}:";
+            } else {
+                $lines[] = 'default:';
+            }
+            foreach ($case->body as $s) {
+                $lines[] = $this->ind($s->accept($this));
+            }
+        }
+        $lines[] = '}';
+        return implode("\n", $lines);
+    }
+
+    /** 将 switch 字符串转为 if-elseif 链（break 在 if-else 中无效，自动跳过） */
+    private function generateStringSwitch(string $condCode, array $cases): string
+    {
+        $lines = [];
+        $first = true;
+        foreach ($cases as $case) {
+            if ($case->value !== null) {
+                $valCode = $case->value->accept($this);
+                $prefix = $first ? 'if' : 'else if';
+                $lines[] = "{$prefix} (tphp_rt_str_eq({$condCode}, {$valCode})) {";
+                $first = false;
+            } else {
+                // default case
+                $lines[] = 'else {';
+            }
+            foreach ($case->body as $s) {
+                // if-elseif 天然不穿透，break 无意义且会导致 C 编译错误
+                if ($s instanceof BreakStmtNode) continue;
+                $lines[] = $this->ind($s->accept($this));
+            }
+            $lines[] = '}';
+        }
+        return implode("\n", $lines);
+    }
+
+    public function visitBreakStmt(BreakStmtNode $node): string { return 'break;'; }
+    public function visitContinueStmt(ContinueStmtNode $node): string { return 'continue;'; }
+
+    // ============================================================
+    // 运算符
+    // ============================================================
+
+    public function visitPostfix(PostfixExpr $node): string
+    {
+        $e = $node->expr->accept($this);
+        return "{$e}{$node->operator}";
+    }
+
+    public function visitCompoundAssign(CompoundAssignExpr $node): string
+    {
+        $t = $node->target->accept($this);
+        $v = $node->value->accept($this);
+        return "{$t} {$node->operator} {$v}";
+    }
+
     // ============================================================
     private function generateCEntry(): string
     {
         return implode("\n", [
             "/* ── C entry: main() ─────────────────────────── */",
             "int main(int argc, char* argv[]) {",
-            $this->ind("tphp_init();"),
-            $this->ind("t_array* _argv = tphp_build_argv(argc, argv);"),
+            $this->ind("tphp_rt_init();"),
+            $this->ind("t_array* _argv = tphp_rt_build_argv(argc, argv);"),
             $this->ind("{$this->className}* _main = new_{$this->className}((t_int)argc, _argv);"),
-            $this->ind("if (_main == NULL) { tphp_arr_free(_argv); return 1; }"),
+            $this->ind("if (_main == NULL) { tphp_fn_arr_free(_argv); return 1; }"),
             $this->ind("{$this->className}_main(_main);"),
-            $this->ind("tphp_object_free(&_main->_base);"),
-            $this->ind("tphp_arr_free(_argv);"),
+            $this->ind("tphp_rt_object_free(&_main->_base);"),
+            $this->ind("tphp_fn_arr_free(_argv);"),
             $this->ind("return 0;"),
             "}",
         ]);
@@ -777,10 +1468,10 @@ class CodeGenerator implements ASTVisitor
             return '0';
         }
         if ($expr instanceof StringLiteralExpr) {
-            return 'tphp_parse_int(' . $expr->accept($this) . ')';
+            return 'tphp_rt_parse_int(' . $expr->accept($this) . ')';
         }
         if ($expr instanceof ArrayLiteralExpr) {
-            return empty($expr->elements) ? '0' : '1';
+            return empty($expr->entries) ? '0' : '1';
         }
         if ($expr instanceof NewExpr) {
             throw new RuntimeException(
@@ -791,7 +1482,7 @@ class CodeGenerator implements ASTVisitor
             return $expr->accept($this); // -(inner) 已经是正确的 int
         }
         if ($expr instanceof BinaryExpr && $expr->operator === '.') {
-            return 'tphp_parse_int(' . $expr->accept($this) . ')';
+            return 'tphp_rt_parse_int(' . $expr->accept($this) . ')';
         }
 
         // 变量：根据类型推导
@@ -803,13 +1494,17 @@ class CodeGenerator implements ASTVisitor
                 't_int'    => $code,
                 't_float'  => "(t_int)({$code})",
                 't_bool'   => $code,
-                't_string' => "tphp_parse_int({$code})",
+                't_string' => "tphp_rt_parse_int({$code})",
                 'null'     => '0',
-                't_array*' => "(({$vn} && tphp_arr_count({$vn}) > 0) ? 1 : 0)",
+                't_array*' => "(({$vn} && tphp_fn_arr_count({$vn}) > 0) ? 1 : 0)",
                 default    => throw new RuntimeException(
                     sprintf("[%d:%d] 对象不能转换为整数", $expr->line, $expr->column)
                 ),
             };
+        }
+        if ($expr instanceof EnumAccessExpr) {
+            $bt = $this->enumBackingType($expr->enumName);
+            return ($bt === 'string') ? "tphp_rt_parse_int(({$code})->value)" : "({$code})->value";
         }
 
         return "(t_int)({$code})";
@@ -823,10 +1518,10 @@ class CodeGenerator implements ASTVisitor
         if ($expr instanceof BoolLiteralExpr) return $expr->value ? '1.0' : '0.0';
         if ($expr instanceof NullLiteralExpr) return '0.0';
         if ($expr instanceof StringLiteralExpr) {
-            return 'tphp_parse_float(' . $expr->accept($this) . ')';
+            return 'tphp_rt_parse_float(' . $expr->accept($this) . ')';
         }
         if ($expr instanceof ArrayLiteralExpr) {
-            return empty($expr->elements) ? '0.0' : '1.0';
+            return empty($expr->entries) ? '0.0' : '1.0';
         }
         if ($expr instanceof NewExpr) {
             throw new RuntimeException(
@@ -837,7 +1532,7 @@ class CodeGenerator implements ASTVisitor
             return $expr->accept($this);
         }
         if ($expr instanceof BinaryExpr && $expr->operator === '.') {
-            return 'tphp_parse_float(' . $expr->accept($this) . ')';
+            return 'tphp_rt_parse_float(' . $expr->accept($this) . ')';
         }
 
         $code = $expr->accept($this);
@@ -848,9 +1543,9 @@ class CodeGenerator implements ASTVisitor
                 't_float'  => $code,
                 't_int'    => "(t_float)({$code})",
                 't_bool'   => "(t_float)({$code})",
-                't_string' => "tphp_parse_float({$code})",
+                't_string' => "tphp_rt_parse_float({$code})",
                 'null'     => '0.0',
-                't_array*' => "(({$vn} && tphp_arr_count({$vn}) > 0) ? 1.0 : 0.0)",
+                't_array*' => "(({$vn} && tphp_fn_arr_count({$vn}) > 0) ? 1.0 : 0.0)",
                 default    => throw new RuntimeException(
                     sprintf("[%d:%d] 对象不能转换为浮点数", $expr->line, $expr->column)
                 ),
@@ -872,7 +1567,7 @@ class CodeGenerator implements ASTVisitor
             return ($v === '' || $v === '0') ? 'false' : 'true';
         }
         if ($expr instanceof ArrayLiteralExpr) {
-            return empty($expr->elements) ? 'false' : 'true';
+            return empty($expr->entries) ? 'false' : 'true';
         }
         if ($expr instanceof NewExpr) {
             return 'true'; // 任何对象转 bool 为 true
@@ -890,9 +1585,9 @@ class CodeGenerator implements ASTVisitor
                 't_bool'   => $code,
                 't_int'    => "({$code} != 0)",
                 't_float'  => "({$code} != 0.0)",
-                't_string' => "!tphp_str_is_falsy({$code})",
+                't_string' => "!tphp_rt_str_is_falsy({$code})",
                 'null'     => 'false',
-                't_array*' => "({$vn} != NULL && tphp_arr_count({$vn}) > 0)",
+                't_array*' => "({$vn} != NULL && tphp_fn_arr_count({$vn}) > 0)",
                 default    => 'true', // 对象
             };
         }
@@ -903,11 +1598,11 @@ class CodeGenerator implements ASTVisitor
     /** 将标量/对象转为单元素数组 */
     private function castToArray(ExprNode $expr): string
     {
-        if ($expr instanceof NullLiteralExpr) return 'tphp_arr_create()';
+        if ($expr instanceof NullLiteralExpr) return 'tphp_fn_arr_create()';
 
         $tmp = "_arr_cast_" . (++$this->tmpVarCounter);
         $val = $this->wrapVar($expr);
-        return "({ t_array* {$tmp} = tphp_arr_create(); if ({$tmp} != NULL) { tphp_arr_push({$tmp}, {$val}); } {$tmp}; })";
+        return "({ t_array* {$tmp} = tphp_fn_arr_create(); if ({$tmp} != NULL) { tphp_fn_arr_push({$tmp}, {$val}); } {$tmp}; })";
     }
 
     public function visitArrayAccess(ArrayAccessExpr $node): string
@@ -936,24 +1631,24 @@ class CodeGenerator implements ASTVisitor
             $type = $this->inferType($expr);
             return match ($type) {
                 't_string' => $code,
-                't_float'  => "tphp_str_from_float({$code})",
-                default    => "tphp_str_from_int({$code})",
+                't_float'  => "tphp_rt_str_from_float({$code})",
+                default    => "tphp_rt_str_from_int({$code})",
             };
         }
         if ($expr instanceof CastExpr) {
             $code = $expr->accept($this);
             return match ($expr->castType) {
                 'string' => $code,
-                'float'  => "tphp_str_from_float({$code})",
-                default  => "tphp_str_from_int({$code})",
+                'float'  => "tphp_rt_str_from_float({$code})",
+                default  => "tphp_rt_str_from_int({$code})",
             };
         }
 
         if ($expr instanceof IntLiteralExpr) {
-            return 'tphp_str_from_int(' . $expr->accept($this) . ')';
+            return 'tphp_rt_str_from_int(' . $expr->accept($this) . ')';
         }
         if ($expr instanceof FloatLiteralExpr) {
-            return 'tphp_str_from_float(' . $expr->accept($this) . ')';
+            return 'tphp_rt_str_from_float(' . $expr->accept($this) . ')';
         }
         if ($expr instanceof BoolLiteralExpr) {
             return $expr->value ? 'STR_LIT("1")' : 'STR_LIT("")';
@@ -985,8 +1680,8 @@ class CodeGenerator implements ASTVisitor
             $vt = $this->varTypes[$vn] ?? 't_int';
             return match ($vt) {
                 't_string'   => $code,
-                't_int'      => "tphp_str_from_int({$code})",
-                't_float'    => "tphp_str_from_float({$code})",
+                't_int'      => "tphp_rt_str_from_int({$code})",
+                't_float'    => "tphp_rt_str_from_float({$code})",
                 't_bool'     => "({$code} ? STR_LIT(\"1\") : STR_LIT(\"\"))",
                 'null'       => 'STR_LIT("")',
                 't_array*'   => $strict
@@ -1001,39 +1696,83 @@ class CodeGenerator implements ASTVisitor
         // BinaryExpr — 根据运算符推导类型
         if ($expr instanceof BinaryExpr) {
             if ($expr->operator === '.') return $code; // 已经是 t_string
-            return "tphp_str_from_int({$code})";
+            return "tphp_rt_str_from_int({$code})";
+        }
+
+        // PropertyAccessExpr：查找属性类型
+        if ($expr instanceof PropertyAccessExpr) {
+            $objKey = ($expr->object instanceof VariableExpr) ? self::varName($expr->object->name) : '';
+            $objType = ($objKey === '$this' || $objKey === 'self')
+                ? $this->className
+                : ($this->varTypes[$objKey] ?? '');
+            if ($objType !== '' && isset($this->classPropTypes[$objType])) {
+                $pt = $this->classPropTypes[$objType][$expr->property] ?? '';
+                if ($pt === 't_string') return $code;
+                if ($pt === 't_float') return "tphp_rt_str_from_float({$code})";
+            }
+        }
+
+        // CallExpr：查找方法返回类型
+        if ($expr instanceof CallExpr && $expr->callee !== null) {
+            $objKey = ($expr->callee instanceof VariableExpr) ? self::varName($expr->callee->name) : '';
+            $objType = ($objKey === '$this' || $objKey === 'self')
+                ? $this->className
+                : ($this->varTypes[$objKey] ?? '');
+            if ($objType !== '' && isset($this->classMethodRetTypes[$objType])) {
+                $retType = $this->classMethodRetTypes[$objType][$expr->name] ?? '';
+                if ($retType === 't_string') return $code;
+                if ($retType === 't_float') return "tphp_rt_str_from_float({$code})";
+            }
+        }
+
+        // EnumAccessExpr → 用 ->value 取值后转字符串
+        if ($expr instanceof EnumAccessExpr) {
+            $bt = $this->enumBackingType($expr->enumName);
+            return ($bt === 'string') ? "({$code})->value" : "tphp_rt_str_from_int(({$code})->value)";
         }
 
         // 其他表达式（CallExpr 等）默认假设返回 int
-        return "tphp_str_from_int({$code})";
+        return "tphp_rt_str_from_int({$code})";
     }
 
-    public static function mapType(string $t): string { return self::$typeMap[$t] ?? "{$t}*"; }
+    public function mapType(string $t): string {
+        if ($t === 'self') return $this->className . '*';
+        // 枚举类型 → 返回 C struct 指针类型
+        if (isset($this->enumCTypes[$t])) {
+            return $this->enumCTypes[$t];
+        }
+        return self::$typeMap[$t] ?? "{$t}*";
+    }
     public static function varName(string $v): string { return $v === '$this' ? 'self' : ltrim($v, '$'); }
+
+    /** 查询枚举名对应的 backing 类型 ('int'|'string') */
+    private function enumBackingType(string $name): string {
+        return $this->enumBackingTypes[$name] ?? 'int';
+    }
 
     /** 将 PHP 命名空间名转为 C 标识符: Demo\Foo → Demo_Foo */
     public static function mangleCName(string $name): string {
         return str_replace('\\', '_', $name);
     }
 
-    /** 从类节点获取 C 标识符: tphp_namespace_Name */
+    /** 从类节点获取 C 标识符: tphp_class_namespace_Name */
     private static function classCName(ClassNode $class): string {
         $base = ($class->namespace !== '')
             ? self::mangleCName($class->namespace) . '_' . $class->name
             : $class->name;
-        return 'tphp_' . $base;
+        return 'tphp_class_' . $base;
     }
 
     /** 从已解析类名生成 C 引用名（visitNew/Call 等非 ClassNode 上下文中使用） */
     private static function classRefName(string $resolvedName): string {
-        return 'tphp_' . self::mangleCName($resolvedName);
+        return 'tphp_class_' . self::mangleCName($resolvedName);
     }
 
-    /** 从函数节点获取 C 标识符: namespace_name */
+    /** 从函数节点获取 C 标识符: tphp_fn_namespace_name */
     private static function funcCName(FunctionNode $fn): string {
-        return ($fn->namespace !== '')
+        return 'tphp_fn_' . (($fn->namespace !== '')
             ? self::mangleCName($fn->namespace) . '_' . $fn->name
-            : $fn->name;
+            : $fn->name);
     }
 
     private function indentStr(): string { return str_repeat('    ', $this->indent); }

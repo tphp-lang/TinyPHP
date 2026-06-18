@@ -6,7 +6,11 @@
 class Main
 {
     // 构造函数
-    public function __construct(int $argc, array $argv) {} // 和php一样可以不写，但是默认存在
+    public function __construct(int $argc, array $argv)
+    {
+        var_dump($argc);
+        var_dump($argv);
+    } // 和php一样可以不写，但是默认存在
 
     // 入口函数必须是 main, 且返回值必须是 void, 必须是php 强类型声明。
     public function main(): void

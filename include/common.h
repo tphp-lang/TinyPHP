@@ -8,4 +8,5 @@
 #include "types.h"
 #include "val.h"
 #include "array.h"
-#include "function.h"
+#include "runtime.h"
+#include "builtin.h"

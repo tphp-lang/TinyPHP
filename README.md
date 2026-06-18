@@ -61,42 +61,106 @@ class Main {
         $d = 1.01;
         $e = null;
 
-        // 运算
-        $z = $a + 5;
+        // 运算符: + - * / % . && || ! == != < > <= >=
+        // 复合赋值: += -= *= /= .=
+        // 自增自减: ++$i $i++ --$i $i--
+        // 三元 & 合并: ?:  ??
+        // 位运算: & | ^ ~ << >>
+        $sum = $a + 5;
+        $a += 10;
+        $a++;
+        $r = 10 % 3;
+        $x = $a > 0 ? "yes" : "no";
+        $y = $maybeNull ?? "default";
 
-        // 字符串拼接
-        $s = $a . " " . $b;          // "10 hello"
-        $s2 = "hello $d\n";          // 双引号插值
-        $s3 = "hello {$d}\n";        // 花括号插值
+        // 控制流: if/elseif/else/while/do-while/for/foreach/switch/break/continue
+        do { $i++; } while ($i < 10);
 
-        // 数组字面量
+        // 字符串拼接 & 插值
+        $s = $a . " " . $b;
+        $s2 = "hello $d\n";
+        $s3 = "hello {$d}\n";
+
+        // 数组
         $arr = [1, 2, 3];
-        $nested = [10, "str", true, [4, 5]];
-
-        // 数组访问
+        $map = ["key" => "val", "nested" => [4, 5]];
         $x = $arr[0];
-        count($arr);                  // 3
+        count($arr);
 
-        // 输出
+        // 控制流
+        if ($a > 0) { } elseif ($a == 0) { } else { }
+        while ($i < 10) { $i++; }
+        for ($i = 0; $i < 10; $i++) { }
+        foreach ($arr as $v) { }
+        foreach ($map as $k => $v) { }
+        switch ($v) {
+            case 1: break;
+            default: break;
+        }
+        break; continue;
+
+        // 输出 & 调试
         echo "hello\n";
+        var_dump($a);
+        exit(0);
 
-        // 调试（完整类型输出）
-        var_dump($a);                 // int(10)
-        var_dump($arr);               // array(3) { [0]=> int(1) ... }
-        var_dump($nested);            // 递归嵌套输出
-
-        // 对象
+        // 对象 & 链式调用
         $d = new Demo();
         $d->hello();
+        $calc->add(5)->multiply(3);
 
-        // 匿名函数 / 闭包 + 调用
-        $fn = function (): int { return 10; };
-        var_dump($fn());              // int(10)
-        $fn2 = function (int $x, int $y): int { return $x + $y; };
-        var_dump($fn2(1, 2));         // int(3)
+        // 闭包
+        $fn = function (int $x): int { return $x * 2; };
+        var_dump($fn(21));
+
+        // 类型转换
+        $s = (string)123;
+        $i = (int)"456";
+        $f = (float)"1.2";
+        $b = (bool)0;
+        $a = (array)42;
     }
 }
 ```
+
+### 枚举
+
+```php
+enum Color: string {
+    case RED = "red";
+    case GREEN = "green";
+}
+
+enum Num: int {
+    case ONE = 1;
+    case TWO = 2;
+}
+
+// 使用
+$c = Color::RED;
+echo $c->value;   // "red"
+echo $c->name;    // "RED"
+$v = Num::ONE->value;  // 1
+// 指针同一性比较: $c == Color::RED
+// 值比较: $c->value == "red"
+// 跨命名空间枚举需要 use 导入
+```
+
+### 运算符完整列表
+
+| 类别 | 运算符 |
+|------|--------|
+| 算术 | `+` `-` `*` `/` `%` |
+| 字符串 | `.` |
+| 比较 | `==` `!=` `<` `>` `<=` `>=` |
+| 逻辑 | `&&` `\|\|` `!` |
+| 位运算 | `&` `\|` `^` `~` `<<` `>>` |
+| 赋值 | `=` |
+| 复合赋值 | `+=` `-=` `*=` `/=` `.=` |
+| 自增/自减 | `++` `--`（前缀+后缀） |
+| 三元/合并 | `?:` `??` |
+| 类型转换 | `(int)` `(float)` `(string)` `(bool)` `(array)` |
+| 其他 | `->` `=>` `::` `\` `list()` |
 
 ### 类型强制转换
 
@@ -115,6 +179,7 @@ class Main {
 ```php
 // main.php — 入口（必须有全局 class Main）
 use Demo\Demo;
+use Demo\Status;      // 枚举也可以 use 导入
 use function Demo\myFunc;
 
 class Main { ... }
@@ -123,6 +188,7 @@ class Main { ... }
 namespace Demo;
 class Demo { ... }
 function myFunc(): void { ... }
+enum Status: int { case ACTIVE = 1; }
 
 // other.php — 同名命名空间跨文件扩展
 namespace Demo;
@@ -130,23 +196,68 @@ function myFunc2(): void { ... }
 ```
 
 支持 `use Foo\Bar`、`use Foo\Bar as Alias`、`use Foo\{A, B, function F}` 组合导入。
+枚举跨命名空间引用需 `use` 导入，否则视为未定义常量报错。
 
-### 不支持的
+### 内置函数
 
-- `if` / `else` / `while` / `for` 等控制流
-- `$a['key']` 字符串键数组赋值、多维数组赋值
-- `use` 闭包变量捕获
-- 游离代码（不在 class/function 内）
-- 任何形式的 `include` / `require`
+| 函数 | 说明 |
+|------|------|
+| `echo` | 输出字符串，支持多参数逗号分隔 |
+| `var_dump` | PHP 风格递归调试输出 |
+| `var_export` | 可读字符串输出 |
+| `count` | 数组元素计数 |
+| `exit($code)` / `die($code)` | 终止程序，无参默认 `exit(0)` |
+| `isset($x)` | 变量是否已设置且不为 null |
+| `empty($x)` | 变量是否为 PHP 假值（null/0/0.0/false/空串/"0"） |
+| `list($a,$b)` | 数组解构赋值 `list($a,$b) = [1,2]` |
+
+### 控制流完整列表
+
+`if` / `elseif` / `else` · `while` · `do-while` · `for` · `foreach` · `switch` / `case` / `default` · `break` · `continue`
+
+### 不支持 / TODO
+
+| 优先级 | 特性 | 说明 |
+|--------|------|------|
+| 🔴 | `global` 关键字 | 全局变量 |
+| 🔴 | 默认参数值 | `function foo($x = 10)` |
+| 🔴 | 可变参数 `...$args` | `function foo(int ...$vals)` |
+| 🔴 | 魔术常量 | `__LINE__` `__FILE__` `__DIR__` |
+| 🟡 | `strlen` `strpos` `substr` `trim` `explode` `implode` | 字符串处理函数 |
+| 🟡 | `array_push` `array_pop` `array_shift` `array_keys` `array_values` `in_array` `array_key_exists` | 数组操作函数 |
+| 🟡 | `is_int` `is_string` `is_float` `is_bool` `is_array` `is_null` | 类型检测函数 |
+| 🟡 | `intval` `floatval` `strval` `boolval` `sprintf` `printf` | 格式化/转换函数 |
+| 🟡 | `rand` `mt_rand` `time` `date` `sleep` `usleep` | 系统函数 |
+| 🟡 | `file_get_contents` `file_put_contents` `json_encode` `json_decode` | I/O 和 JSON |
+| 🟡 | `try` / `catch` / `throw` | 异常处理 |
+| 🟡 | `static` 变量、`unset()` | 变量管理 |
+| 🟢 | `match` 表达式、`**` 幂运算符、`<=>` 太空船 | PHP 8.0+ 语法 |
+| 🟢 | 命名参数、联合类型 `int\|string`、`readonly` `never` `mixed` | 类型系统扩展 |
+| 🟢 | `yield` 生成器、`goto`、`declare()` | 语言构造 |
+| 🟢 | `heredoc`/`nowdoc`、`#[Attribute]` | 字符串/元编程 |
+| 🟢 | `__toString` `__get` `__set` `__call` 等魔术方法 | OOP 扩展 |
+| 🟢 | `include`/`require`、`eval()` | AOT 编译不支持 |
 
 ## C 运行时 (`include/`)
 
 | 文件 | 内容 |
 |------|------|
-| `types.h` | 类型系统：`t_int`, `t_float`, `t_string`, `t_bool`, `t_var`, `t_array`, `t_object`, `t_callback` |
+| `common.h` | 总入口，引入所有头文件 |
+| `types.h` | 类型系统：`t_int`, `t_float`, `t_string`, `t_bool`, `t_var`, `t_array`, `t_object`, `t_callback`, `ClassVTable` |
 | `val.h` | 便捷宏：`VAR_INT`, `VAR_FLOAT`, `VAR_BOOL`, `VAR_STRING`, `VAR_ARRAY`, `VAR_CALLBACK`, `VAR_NULL`, `STR_LIT` |
-| `array.h` | PHP 风格数组：`create`, `push`, `set_str/int`, `get_str/int`, `index`, `item_int/float/str/bool`, `count`, `free` |
-| `function.h` | 运行时：`tphp_init`, `tphp_echo`, `tphp_var_dump`, `tphp_str_concat`, `tphp_parse_int/float`, `tphp_str_from_*`, `tphp_object_free` |
+| `array.h` | PHP 风格数组：`tphp_fn_arr_create/push/set_str/set_int/get_str/get_int/index/count/free`，引用计数 + 嵌套安全释放 |
+| `runtime.h` | 内部辅助：`tphp_rt_init`（UTF-8 控制台）、`tphp_rt_str_concat/dup/free`（内存安全）、`tphp_rt_str_eq/lt/gt`（字符串比较）、`tphp_rt_parse_int/float`（字符串解析）、`tphp_rt_object_free`（引用计数对象析构） |
+| `builtin.h` | 公开内置：`tphp_fn_echo`、`tphp_fn_var_dump`、`tphp_fn_exit`、`tphp_fn_isset`、`tphp_fn_empty_*` |
+
+### 命名前缀约定
+
+| 前缀 | 用途 | 示例 |
+|------|------|------|
+| `tphp_class_` | 用户类 C 结构体 | `tphp_class_Main`, `tphp_class_Demo_Helper` |
+| `tphp_fn_` | 所有函数（内置+用户） | `tphp_fn_echo`, `tphp_fn_demo_myFunc` |
+| `tphp_rt_` | 运行时内部辅助 | `tphp_rt_str_concat`, `tphp_rt_object_free` |
+| `tphp_enum_` | 枚举 C 结构体 | `tphp_enum_Color`, `tphp_enum_Complex_Enums_Status` |
+| `TPHP_CONST_` | 常量宏 | `TPHP_CONST_VERSION` |
 
 ## 输出结构
 

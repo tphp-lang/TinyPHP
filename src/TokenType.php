@@ -10,6 +10,7 @@ enum TokenType: string
 
     // 关键字
     case CLASS_KW   = 'class';
+    case ENUM_KW    = 'enum';
     case PUBLIC_KW  = 'public';
     case PRIVATE_KW = 'private';
     case FUNCTION   = 'function';
@@ -38,18 +39,57 @@ enum TokenType: string
     case FLOAT_LIT  = 'FLOAT_LIT';
     case STRING_LIT = 'STRING_LIT';
 
+    // 控制流关键字
+    case IF_KW      = 'if';
+    case ELSE_KW    = 'else';
+    case ELSEIF_KW  = 'elseif';
+    case DO_KW      = 'do';
+    case SWITCH_KW  = 'switch';
+    case CASE_KW    = 'case';
+    case DEFAULT_KW = 'default';
+    case FOR_KW     = 'for';
+    case WHILE_KW   = 'while';
+    case FOREACH_KW = 'foreach';
+    case BREAK_KW   = 'break';
+    case CONTINUE_KW= 'continue';
+
     // 关键字 (继续)
     case VAR_DUMP   = 'var_dump';
     case COUNT      = 'count';
+    case EXIT       = 'exit';
+    case DIE        = 'die';
+    case ISSET      = 'isset';
+    case EMPTY_KW   = 'empty';
+    case LIST_KW    = 'list';
     case NAMESPACE  = 'namespace';
     case USE        = 'use';
     case AS_KW      = 'as';
+    case CONST_KW   = 'const';
+    case SELF_KW    = 'self';
 
     // 符号
     case PLUS         = '+';
     case MINUS        = '-';
     case STAR         = '*';
     case SLASH        = '/';
+    case MOD          = '%';
+    case BANG         = '!';
+    case LT           = '<';
+    case GT           = '>';
+    case LE           = '<=';
+    case GE           = '>=';
+    case EQ           = '==';
+    case NE           = '!=';
+    case AND_AND      = '&&';
+    case OR_OR        = '||';
+    case AMP          = '&';
+    case PIPE         = '|';
+    case CARET        = '^';
+    case TILDE        = '~';
+    case LT_LT        = '<<';
+    case GT_GT        = '>>';
+    case QUEST        = '?';
+    case QUEST_QUEST  = '??';
     case DOLLAR       = '$';
     case LPAREN       = '(';
     case RPAREN       = ')';
@@ -62,7 +102,15 @@ enum TokenType: string
     case COMMA        = ',';
     case EQUALS       = '=';
     case ARROW        = '->';
+    case DOUBLE_ARROW = '=>';
     case DOUBLE_COLON = '::';
     case NS_SEP       = '\\';
+    case INC          = '++';
+    case DEC          = '--';
+    case PLUS_EQ      = '+=';
+    case MINUS_EQ     = '-=';
+    case STAR_EQ      = '*=';
+    case SLASH_EQ     = '/=';
+    case DOT_EQ       = '.=';
     case DOT          = '.';
 }

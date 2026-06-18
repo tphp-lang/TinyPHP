@@ -14,6 +14,8 @@ class Main
         $this->bool();
         echo "=============array=============\n";
         $this->array();
+        echo "=============null=============\n";
+        $this->null();
     }
 
     public function str(): void
@@ -130,7 +132,7 @@ class Main
         $nullArr = (array)null;
         echo count($nullArr) . "\n"; // 0（空数组）
 
-        
+
     }
 }
 

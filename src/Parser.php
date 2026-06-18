@@ -38,11 +38,23 @@ class Parser
     private array $classImports = [];
     /** use 函数导入: 短名 → 完全限定名 (如 myDemoFn → Demo\myDemoFn) */
     private array $functionImports = [];
+    /** use 枚举导入: 短名 → 完全限定名 (如 Color → Enums\Color) */
+    private array $enumImports = [];
+    /** 当前文件声明的常量名集合（用于跨命名空间引用检测） */
+    private array $declaredConsts = [];
+    /** 当前文件声明的枚举名集合（完全限定名 → true，用于 Color::RED 识别） */
+    private array $enumNames = [];
 
     /** @param Token[] $tokens */
     public function __construct(array $tokens)
     {
         $this->tokens = $tokens;
+    }
+
+    /** 注入其他文件已声明的枚举名（完全限定名 → true），用于跨文件枚举引用 */
+    public function setKnownEnums(array $known): void
+    {
+        $this->enumNames = $known;
     }
 
     public function parse(): ProgramNode
@@ -66,6 +78,9 @@ class Parser
         $this->currentNamespace = '';
         $this->classImports = [];
         $this->functionImports = [];
+        $this->enumImports = [];
+        $this->declaredConsts = [];
+        // enumNames 已由 setKnownEnums 注入，不清空（追加模式）
 
         $this->consume(TokenType::PHP_OPEN, '期望 <?php 开头');
 
@@ -78,6 +93,18 @@ class Parser
         // 连续 use 声明
         while ($this->match(TokenType::USE)) {
             $this->parseUseDecl();
+        }
+
+        // const 声明
+        $constants = [];
+        while ($this->match(TokenType::CONST_KW)) {
+            $constants[] = $this->parseConstDecl();
+        }
+
+        // enum 声明
+        $enums = [];
+        while ($this->match(TokenType::ENUM_KW)) {
+            $enums[] = $this->parseEnumDecl();
         }
 
         // 第一个类 = Main（入口）
@@ -96,16 +123,63 @@ class Parser
             } elseif ($this->check(TokenType::FUNCTION)) {
                 $functions[] = $this->parseFunction();
             } elseif ($this->check(TokenType::ECHO_KW) || $this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP)) {
-                // 文件中有游离代码——拒绝（多文件场景仍保持严格）
                 $tok = $this->peek();
-                $this->error("不支持的全局游离代码 '{$tok->lexeme}'（多文件编译只接受 namespace/use/class/function 声明）");
+                $this->error("不支持的全局游离代码 '{$tok->lexeme}'（多文件编译只接受 namespace/use/class/function/const/enum 声明）");
             } else {
-                $this->error('期望 namespace/use/class/function，得到 ' . $this->peek()->lexeme);
+                $this->error('期望 namespace/use/class/function/const/enum，得到 ' . $this->peek()->lexeme);
             }
         }
 
-        // 允许只有函数没有类的情况（多文件编译时类可能在别的文件）
-        return new ProgramNode($mainClass, $extraClasses, $functions);
+        return new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums);
+    }
+
+    // ============================================================
+    // const → CONST_KW IDENTIFIER '=' literal SEMICOLON
+    // ============================================================
+    private function parseConstDecl(): ConstNode
+    {
+        $name = $this->consume(TokenType::IDENTIFIER, '期望常量名')->lexeme;
+        $this->declaredConsts[$name] = $this->currentNamespace;
+        $this->consume(TokenType::EQUALS, '期望 =');
+        $value = $this->parsePrimary(); // 只接受字面量
+        $this->consume(TokenType::SEMICOLON, '期望 ;');
+        return new ConstNode($name, $value, $this->currentNamespace);
+    }
+
+    // ============================================================
+    // enum Name: int { case A = 1; case B = 2; }
+    // ============================================================
+    private function parseEnumDecl(): EnumNode
+    {
+        $name = $this->consume(TokenType::IDENTIFIER, '期望枚举名')->lexeme;
+        $fqName = ($this->currentNamespace !== '')
+            ? $this->currentNamespace . '\\' . $name
+            : $name;
+        $this->enumNames[$fqName] = true;
+        $this->consume(TokenType::COLON, '期望 :');
+
+        // backing type: int or string
+        if ($this->match(TokenType::TYPE_INT)) {
+            $bt = 'int';
+        } elseif ($this->match(TokenType::TYPE_STRING)) {
+            $bt = 'string';
+        } else {
+            $this->error("枚举只支持 int 或 string 类型，得到 '{$this->peek()->lexeme}'");
+        }
+
+        $this->consume(TokenType::LBRACE, '期望 {');
+        $cases = [];
+        while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+            $this->consume(TokenType::CASE_KW, '期望 case');
+            $caseName = $this->consume(TokenType::IDENTIFIER, '期望 case 名')->lexeme;
+            $this->consume(TokenType::EQUALS, '期望 =');
+            $caseValue = $this->parsePrimary(); // 字面量
+            $this->consume(TokenType::SEMICOLON, '期望 ;');
+            $cases[] = new EnumCaseNode($caseName, $caseValue);
+        }
+        $this->consume(TokenType::RBRACE, '期望 }');
+
+        return new EnumNode($name, $bt, $cases, $this->currentNamespace);
     }
 
     // ============================================================
@@ -173,6 +247,10 @@ class Parser
 
         // use X\Y; (alias = 最后一段)
         $short = substr(strrchr($baseName, '\\') ?: ('\\' . $baseName), 1);
+        // 全大写/下划线名称 → 常量导入，TinyPHP 不支持跨命名空间常量
+        if (self::isConstantName($short)) {
+            $this->error("不支持跨命名空间常量导入 'use {$baseName}'（常量只能在定义命名空间内使用）");
+        }
         $this->classImports[$short] = $baseName;
         $this->consume(TokenType::SEMICOLON, '期望 ;');
     }
@@ -184,6 +262,10 @@ class Parser
             $alias = $this->consume(TokenType::IDENTIFIER, '期望别名')->lexeme;
         }
         $key = ($alias !== '') ? $alias : substr(strrchr($fqName, '\\') ?: ('\\' . $fqName), 1);
+        // 全大写/下划线名称 → 常量导入检测
+        if (!$function && self::isConstantName($key)) {
+            $this->error("不支持跨命名空间常量导入 'use {$fqName}'（常量只能在定义命名空间内使用）");
+        }
         if ($function) {
             $this->functionImports[$key] = $fqName;
         } else {
@@ -200,6 +282,36 @@ class Parser
         return ($this->currentNamespace !== '')
             ? $this->currentNamespace . '\\' . $name
             : $name;
+    }
+
+    /** 解析枚举名引用：先查 use 导入表，再查 classImports（use 语句可能把枚举当类导入），
+     *  找不到则假定在当前命名空间 */
+    private function resolveEnumName(string $name): ?string
+    {
+        // 1. enumImports 优先
+        if (isset($this->enumImports[$name])) {
+            return $this->enumImports[$name];
+        }
+        // 2. classImports（use 枚举时跟 class 走同一路径）
+        if (isset($this->classImports[$name])) {
+            $fq = $this->classImports[$name];
+            if (isset($this->enumNames[$fq])) return $fq;
+        }
+        // 3. 当前命名空间
+        $fq = ($this->currentNamespace !== '')
+            ? $this->currentNamespace . '\\' . $name
+            : $name;
+        if (isset($this->enumNames[$fq])) return $fq;
+        // 4. 全局回退（name 本身是 FQN）
+        if (isset($this->enumNames[$name])) return $name;
+
+        return null; // 不是枚举
+    }
+
+    /** 判断名称是否像 PHP 常量（全大写+下划线+数字，至少一个大写字母） */
+    private static function isConstantName(string $name): bool
+    {
+        return preg_match('/^[A-Z_][A-Z0-9_]*$/', $name) === 1 && preg_match('/[A-Z]/', $name) === 1;
     }
 
     /** 解析函数名引用 */
@@ -245,7 +357,7 @@ class Parser
     }
 
     // ============================================================
-    // class_decl → CLASS_KW IDENTIFIER LBRACE method* RBRACE
+    // class_decl → CLASS_KW IDENTIFIER LBRACE (property|method)* RBRACE
     // ============================================================
     private function parseClassDecl(): ClassNode
     {
@@ -254,12 +366,50 @@ class Parser
         $this->consume(TokenType::LBRACE, '期望 {');
 
         $methods = [];
+        $properties = [];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
-            $methods[] = $this->parseMethod();
+            // 属性声明: visibility type $name (= default)? ;
+            if ($this->isPropertyStart()) {
+                $properties[] = $this->parsePropertyDecl();
+            } else {
+                $methods[] = $this->parseMethod();
+            }
         }
 
         $this->consume(TokenType::RBRACE, '期望 }');
-        return new ClassNode($name, $methods, $this->currentNamespace);
+        return new ClassNode($name, $methods, $this->currentNamespace, $properties);
+    }
+
+    /** 判断当前 token 序列是否为属性声明开头 */
+    private function isPropertyStart(): bool
+    {
+        // visibility type $name ...
+        if (!$this->check(TokenType::PUBLIC_KW) && !$this->check(TokenType::PRIVATE_KW)) return false;
+        $t2 = $this->peek(1);
+        $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::IDENTIFIER];
+        if (!in_array($t2->type, $typeTokens, true)) return false;
+        // peek(2) should be $variable (= IDENTIFIER with $)
+        $t3 = $this->peek(2);
+        if ($t3->type !== TokenType::IDENTIFIER) return false;
+        if (!str_starts_with($t3->lexeme, '$')) return false;
+        // peek(3) should be ; or =
+        $t4 = $this->peek(3);
+        return in_array($t4->type, [TokenType::SEMICOLON, TokenType::EQUALS], true);
+    }
+
+    /** 属性声明: visibility type $name (= expr)? ; */
+    private function parsePropertyDecl(): PropertyDeclNode
+    {
+        $vis = $this->parseVisibility();
+        $type = $this->parseType();
+        $name = $this->consume(TokenType::IDENTIFIER, '期望属性名')->lexeme;
+        $default = null;
+        if ($this->match(TokenType::EQUALS)) {
+            $default = $this->parsePrimary();
+        }
+        $this->consume(TokenType::SEMICOLON, '期望 ;');
+        return new PropertyDeclNode($name, $type, $vis, $default);
     }
 
     // ============================================================
@@ -325,18 +475,234 @@ class Parser
 
     private function parseStmt(): StmtNode
     {
-        if ($this->match(TokenType::ECHO_KW)) {
-            return $this->parseEchoStmt();
-        }
-        if ($this->match(TokenType::RETURN_KW)) {
-            return $this->parseReturnStmt();
-        }
+        if ($this->match(TokenType::ECHO_KW))       return $this->parseEchoStmt();
+        if ($this->match(TokenType::RETURN_KW))     return $this->parseReturnStmt();
+        if ($this->match(TokenType::IF_KW))         return $this->parseIfStmt();
+        if ($this->match(TokenType::WHILE_KW))      return $this->parseWhileStmt();
+        if ($this->match(TokenType::FOR_KW))        return $this->parseForStmt();
+        if ($this->match(TokenType::FOREACH_KW))    return $this->parseForeachStmt();
+        if ($this->match(TokenType::DO_KW))         return $this->parseDoWhileStmt();
+        if ($this->match(TokenType::LIST_KW))       return $this->parseListStmt();
+        if ($this->match(TokenType::SWITCH_KW))     return $this->parseSwitchStmt();
+        if ($this->match(TokenType::BREAK_KW))      { $this->consume(TokenType::SEMICOLON, '期望 ;'); return new BreakStmtNode(); }
+        if ($this->match(TokenType::CONTINUE_KW))   { $this->consume(TokenType::SEMICOLON, '期望 ;'); return new ContinueStmtNode(); }
         // 赋值: $var = expr;
         if ($this->check(TokenType::IDENTIFIER) && $this->checkNext(TokenType::EQUALS)) {
             return $this->parseAssignStmt();
         }
         // 表达式语句
         return $this->parseExprStmt();
+    }
+
+    // if (cond) { body } (elseif (cond) { body })* (else { body })?
+    private function parseIfStmt(): IfStmtNode
+    {
+        $this->consume(TokenType::LPAREN, '期望 (' );
+        $cond = $this->parseExpr();
+        $this->consume(TokenType::RPAREN, '期望 )');
+        $this->consume(TokenType::LBRACE, '期望 {');
+        $thenBody = $this->parseBlock();
+        $this->consume(TokenType::RBRACE, '期望 }');
+
+        $elseifs = [];
+        while ($this->match(TokenType::ELSEIF_KW)) {
+            $this->consume(TokenType::LPAREN, '期望 (' );
+            $eCond = $this->parseExpr();
+            $this->consume(TokenType::RPAREN, '期望 )');
+            $this->consume(TokenType::LBRACE, '期望 {');
+            $eBody = $this->parseBlock();
+            $this->consume(TokenType::RBRACE, '期望 }');
+            $elseifs[] = new ElseIfBranch($eCond, $eBody);
+        }
+
+        $elseBody = [];
+        if ($this->match(TokenType::ELSE_KW)) {
+            // else if (...) → 转为 elseif
+            if ($this->match(TokenType::IF_KW)) {
+                $this->consume(TokenType::LPAREN, '期望 (' );
+                $eCond = $this->parseExpr();
+                $this->consume(TokenType::RPAREN, '期望 )');
+                $this->consume(TokenType::LBRACE, '期望 {');
+                $eBody = $this->parseBlock();
+                $this->consume(TokenType::RBRACE, '期望 }');
+                $elseifs[] = new ElseIfBranch($eCond, $eBody);
+            } else {
+                $this->consume(TokenType::LBRACE, '期望 {');
+                $elseBody = $this->parseBlock();
+                $this->consume(TokenType::RBRACE, '期望 }');
+            }
+        }
+
+        // 继续检测 else if 链
+        while ($this->match(TokenType::ELSE_KW)) {
+            if ($this->match(TokenType::IF_KW)) {
+                $this->consume(TokenType::LPAREN, '期望 (' );
+                $eCond = $this->parseExpr();
+                $this->consume(TokenType::RPAREN, '期望 )');
+                $this->consume(TokenType::LBRACE, '期望 {');
+                $eBody = $this->parseBlock();
+                $this->consume(TokenType::RBRACE, '期望 }');
+                $elseifs[] = new ElseIfBranch($eCond, $eBody);
+            } elseif (!empty($elseBody)) {
+                $this->error('多个 else 块');
+            } else {
+                $this->consume(TokenType::LBRACE, '期望 {');
+                $elseBody = $this->parseBlock();
+                $this->consume(TokenType::RBRACE, '期望 }');
+            }
+        }
+
+        return new IfStmtNode($cond, $thenBody, $elseifs, $elseBody);
+    }
+
+    // while (cond) { body }
+    private function parseWhileStmt(): WhileStmtNode
+    {
+        $this->consume(TokenType::LPAREN, '期望 (' );
+        $cond = $this->parseExpr();
+        $this->consume(TokenType::RPAREN, '期望 )');
+        $this->consume(TokenType::LBRACE, '期望 {');
+        $body = $this->parseBlock();
+        $this->consume(TokenType::RBRACE, '期望 }');
+        return new WhileStmtNode($cond, $body);
+    }
+
+    // do { body } while (cond);
+    private function parseDoWhileStmt(): DoWhileStmtNode
+    {
+        $this->consume(TokenType::LBRACE, '期望 {');
+        $body = $this->parseBlock();
+        $this->consume(TokenType::RBRACE, '期望 }');
+        $this->consume(TokenType::WHILE_KW, '期望 while');
+        $this->consume(TokenType::LPAREN, '期望 (');
+        $cond = $this->parseExpr();
+        $this->consume(TokenType::RPAREN, '期望 )');
+        $this->consume(TokenType::SEMICOLON, '期望 ;');
+        return new DoWhileStmtNode($cond, $body);
+    }
+
+    // list($a, $b) = expr;
+    private function parseListStmt(): ListStmtNode
+    {
+        $this->consume(TokenType::LPAREN, '期望 (');
+        $vars = [];
+        do {
+            $varName = $this->consume(TokenType::IDENTIFIER, '期望变量名')->lexeme;
+            $vars[] = ltrim($varName, '$');
+        } while ($this->match(TokenType::COMMA));
+        $this->consume(TokenType::RPAREN, '期望 )');
+        $this->consume(TokenType::EQUALS, '期望 =');
+        $expr = $this->parseExpr();
+        $this->consume(TokenType::SEMICOLON, '期望 ;');
+        return new ListStmtNode($vars, $expr);
+    }
+
+    // for (init; cond; step) { body }
+    private function parseForStmt(): ForStmtNode
+    {
+        $this->consume(TokenType::LPAREN, '期望 (' );
+        $init = !$this->check(TokenType::SEMICOLON) ? $this->parseForInitExpr() : null;
+        $this->consume(TokenType::SEMICOLON, '期望 ;');
+        $cond = !$this->check(TokenType::SEMICOLON) ? $this->parseExpr() : null;
+        $this->consume(TokenType::SEMICOLON, '期望 ;');
+        $step = !$this->check(TokenType::RPAREN) ? $this->parseForInitExpr() : null;
+        $this->consume(TokenType::RPAREN, '期望 )');
+        $this->consume(TokenType::LBRACE, '期望 {');
+        $body = $this->parseBlock();
+        $this->consume(TokenType::RBRACE, '期望 }');
+        return new ForStmtNode($init, $cond, $step, $body);
+    }
+
+    // for init: $var = expr 或 expr_stmt
+    private function parseForInitExpr(): ExprNode
+    {
+        if ($this->check(TokenType::IDENTIFIER) && $this->checkNext(TokenType::EQUALS)) {
+            $varName = $this->advance()->lexeme;
+            $this->advance(); // skip =
+            $val = $this->parseExpr();
+            // Return hidden assignment via BinaryExpr with special marker
+            $v = new VariableExpr($varName);
+            $v->line = $this->previous()->line;
+            $v->column = $this->previous()->column;
+            return $this->setPos(new BinaryExpr($v, '=', $val), $v->line, $v->column);
+        }
+        return $this->parseExpr();
+    }
+
+    // foreach ($arr as $val) / foreach ($arr as $key => $val)
+    private function parseForeachStmt(): ForeachStmtNode
+    {
+        $this->consume(TokenType::LPAREN, '期望 (' );
+        $arr = $this->parseExpr();
+        $this->consume(TokenType::AS_KW, '期望 as');
+        $keyVar = null;
+        $firstVar = $this->advance()->lexeme; // could be $val or $key
+        if ($this->match(TokenType::DOUBLE_ARROW)) {
+            $keyVar = $firstVar;
+            $valVar = $this->advance()->lexeme;
+        } else {
+            $valVar = $firstVar;
+        }
+        $this->consume(TokenType::RPAREN, '期望 )');
+        $this->consume(TokenType::LBRACE, '期望 {');
+        $body = $this->parseBlock();
+        $this->consume(TokenType::RBRACE, '期望 }');
+        return new ForeachStmtNode($arr, $valVar, $keyVar, $body);
+    }
+
+    // switch (expr) { case val: stmt* break; case val: stmt* break; default: stmt* }
+    private function parseSwitchStmt(): SwitchStmtNode
+    {
+        $this->consume(TokenType::LPAREN, '期望 (');
+        $cond = $this->parseExpr();
+        $this->consume(TokenType::RPAREN, '期望 )');
+        $this->consume(TokenType::LBRACE, '期望 {');
+
+        $cases = [];
+        $hasDefault = false;
+        while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+            if ($this->match(TokenType::CASE_KW)) {
+                $val = $this->parseExpr();
+                $this->consume(TokenType::COLON, '期望 :');
+                $body = $this->parseCaseBody();
+                $cases[] = new CaseBranch($val, $body);
+            } elseif ($this->match(TokenType::DEFAULT_KW)) {
+                if ($hasDefault) {
+                    $this->error('switch 中只能有一个 default');
+                }
+                $hasDefault = true;
+                $this->consume(TokenType::COLON, '期望 :');
+                $body = $this->parseCaseBody();
+                $cases[] = new CaseBranch(null, $body);
+            } else {
+                $this->error('期望 case 或 default，得到 ' . $this->peek()->lexeme);
+            }
+        }
+        $this->consume(TokenType::RBRACE, '期望 }');
+
+        return new SwitchStmtNode($cond, $cases);
+    }
+
+    /** 解析 case/default 体：stmt* 直到遇到下一个 case/default 或 } */
+    /** @return StmtNode[] */
+    private function parseCaseBody(): array
+    {
+        $stmts = [];
+        while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF) &&
+               !$this->check(TokenType::CASE_KW) && !$this->check(TokenType::DEFAULT_KW)) {
+            $stmts[] = $this->parseStmt();
+        }
+        return $stmts;
+    }
+
+    /** @return StmtNode[] */
+    private function parseBlock(): array
+    {
+        $stmts = [];
+        while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+            $stmts[] = $this->parseStmt();
+        }
+        return $stmts;
     }
 
     private function parseEchoStmt(): EchoStmtNode
@@ -368,19 +734,152 @@ class Parser
         return new AssignStmtNode($varName, $expr);
     }
 
-    private function parseExprStmt(): ExprStmtNode
+    private function parseExprStmt(): StmtNode
     {
         $expr = $this->parseExpr();
+        // 属性赋值: $this->prop = value
+        if ($expr instanceof PropertyAccessExpr && $this->check(TokenType::EQUALS)) {
+            $this->advance();
+            $val = $this->parseExpr();
+            $this->consume(TokenType::SEMICOLON, '期望 ;');
+            return new AssignPropStmtNode($expr, $val);
+        }
+        // 复合赋值: $var += expr 或 $this->prop += expr
+        $compOps = [TokenType::PLUS_EQ, TokenType::MINUS_EQ, TokenType::STAR_EQ, TokenType::SLASH_EQ, TokenType::DOT_EQ];
+        foreach ($compOps as $op) {
+            if ($this->check($op)) {
+                $this->advance(); // manually advance (bypass possible match() issue)
+                $val = $this->parseExpr();
+                $this->consume(TokenType::SEMICOLON, '期望 ;');
+                return new ExprStmtNode($this->setPos(new CompoundAssignExpr($expr, $op->value, $val), $expr->line, $expr->column));
+            }
+        }
         $this->consume(TokenType::SEMICOLON, '期望 ;');
         return new ExprStmtNode($expr);
     }
 
     private function parseExpr(): ExprNode
     {
-        return $this->parseAdditive();
+        return $this->parseNullCoalesce();
     }
 
-    // additive → multiplicative ((PLUS|MINUS|DOT) multiplicative)*
+    // ??  （优先级最低）
+    private function parseNullCoalesce(): ExprNode
+    {
+        $left = $this->parseTernary();
+        while ($this->match(TokenType::QUEST_QUEST)) {
+            $right = $this->parseTernary();
+            $left = $this->setPos(new NullCoalesceExpr($left, $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // ?: ternary
+    private function parseTernary(): ExprNode
+    {
+        $cond = $this->parseLogicalOr();
+        if ($this->match(TokenType::QUEST)) {
+            $then = $this->parseExpr();
+            $this->consume(TokenType::COLON, '期望 :');
+            $else = $this->parseExpr();
+            return $this->setPos(new TernaryExpr($cond, $then, $else), $cond->line, $cond->column);
+        }
+        return $cond;
+    }
+
+    // ||
+    private function parseLogicalOr(): ExprNode
+    {
+        $left = $this->parseLogicalAnd();
+        while ($this->match(TokenType::OR_OR)) {
+            $right = $this->parseLogicalAnd();
+            $left = $this->setPos(new BinaryExpr($left, '||', $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // &&
+    private function parseLogicalAnd(): ExprNode
+    {
+        $left = $this->parseBitwiseOr();
+        while ($this->match(TokenType::AND_AND)) {
+            $right = $this->parseBitwiseOr();
+            $left = $this->setPos(new BinaryExpr($left, '&&', $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // |
+    private function parseBitwiseOr(): ExprNode
+    {
+        $left = $this->parseBitwiseXor();
+        while ($this->match(TokenType::PIPE)) {
+            $right = $this->parseBitwiseXor();
+            $left = $this->setPos(new BinaryExpr($left, '|', $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // ^
+    private function parseBitwiseXor(): ExprNode
+    {
+        $left = $this->parseBitwiseAnd();
+        while ($this->match(TokenType::CARET)) {
+            $right = $this->parseBitwiseAnd();
+            $left = $this->setPos(new BinaryExpr($left, '^', $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // &
+    private function parseBitwiseAnd(): ExprNode
+    {
+        $left = $this->parseEquality();
+        while ($this->match(TokenType::AMP)) {
+            $right = $this->parseEquality();
+            $left = $this->setPos(new BinaryExpr($left, '&', $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // == !=
+    private function parseEquality(): ExprNode
+    {
+        $left = $this->parseComparison();
+        while ($this->match(TokenType::EQ) || $this->match(TokenType::NE)) {
+            $op = $this->previous()->lexeme;
+            $right = $this->parseComparison();
+            $left = $this->setPos(new BinaryExpr($left, $op, $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // < > <= >=   << >>
+    private function parseComparison(): ExprNode
+    {
+        $left = $this->parseShift();
+        while ($this->match(TokenType::LT) || $this->match(TokenType::GT) ||
+               $this->match(TokenType::LE) || $this->match(TokenType::GE)) {
+            $op = $this->previous()->lexeme;
+            $right = $this->parseShift();
+            $left = $this->setPos(new BinaryExpr($left, $op, $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // << >>
+    private function parseShift(): ExprNode
+    {
+        $left = $this->parseAdditive();
+        while ($this->match(TokenType::LT_LT) || $this->match(TokenType::GT_GT)) {
+            $op = $this->previous()->lexeme;
+            $right = $this->parseAdditive();
+            $left = $this->setPos(new BinaryExpr($left, $op, $right), $left->line, $left->column);
+        }
+        return $left;
+    }
+
+    // + - .
     private function parseAdditive(): ExprNode
     {
         $left = $this->parseMultiplicative();
@@ -392,28 +891,73 @@ class Parser
         return $left;
     }
 
-    // multiplicative → primary ((STAR|SLASH) primary)*
+    // * / %
     private function parseMultiplicative(): ExprNode
     {
-        $left = $this->parsePrimary();
-        while ($this->match(TokenType::STAR) || $this->match(TokenType::SLASH)) {
+        $left = $this->parseUnary();
+        while ($this->match(TokenType::STAR) || $this->match(TokenType::SLASH) || $this->match(TokenType::MOD)) {
             $op = $this->previous()->lexeme;
-            $right = $this->parsePrimary();
+            $right = $this->parseUnary();
             $left = $this->setPos(new BinaryExpr($left, $op, $right), $left->line, $left->column);
         }
         return $left;
+    }
+
+    // ! - ++ -- ~ (一元)
+    private function parseUnary(): ExprNode
+    {
+        $line = $this->peek()->line;
+        $col  = $this->peek()->column;
+
+        if ($this->match(TokenType::BANG)) {
+            return $this->setPos(new UnaryExpr('!', $this->parseUnary()), $line, $col);
+        }
+        if ($this->match(TokenType::MINUS)) {
+            return $this->setPos(new UnaryExpr('-', $this->parseUnary()), $line, $col);
+        }
+        if ($this->match(TokenType::INC)) {
+            return $this->setPos(new UnaryExpr('++', $this->parseUnary()), $line, $col);
+        }
+        if ($this->match(TokenType::DEC)) {
+            return $this->setPos(new UnaryExpr('--', $this->parseUnary()), $line, $col);
+        }
+        if ($this->match(TokenType::TILDE)) {
+            return $this->setPos(new UnaryExpr('~', $this->parseUnary()), $line, $col);
+        }
+        return $this->parsePostfix();
+    }
+
+    // 后缀链: primary (->method(args) | ->prop | [index] | ++ | --)*
+    private function parsePostfix(): ExprNode
+    {
+        $expr = $this->parsePrimary();
+        while (true) {
+            if ($this->match(TokenType::ARROW)) {
+                $member = $this->parseMethodName()->lexeme;
+                if ($this->match(TokenType::LPAREN)) {
+                    $args = $this->parseArgs();
+                    $this->consume(TokenType::RPAREN, '期望 )');
+                    $expr = $this->setPos(new CallExpr($expr, $member, $args), $expr->line, $expr->column);
+                } else {
+                    $expr = $this->setPos(new PropertyAccessExpr($expr, $member), $expr->line, $expr->column);
+                }
+            } elseif ($this->match(TokenType::LBRACKET)) {
+                $index = $this->parseExpr();
+                $this->consume(TokenType::RBRACKET, '期望 ]');
+                $expr = $this->setPos(new ArrayAccessExpr($expr, $index), $expr->line, $expr->column);
+            } elseif ($this->match(TokenType::INC) || $this->match(TokenType::DEC)) {
+                $expr = $this->setPos(new PostfixExpr($expr, $this->previous()->lexeme), $expr->line, $expr->column);
+            } else {
+                break;
+            }
+        }
+        return $expr;
     }
 
     private function parsePrimary(): ExprNode
     {
         $line = $this->peek()->line;
         $col  = $this->peek()->column;
-
-        // 一元负号
-        if ($this->match(TokenType::MINUS)) {
-            $expr = $this->parsePrimary();
-            return $this->setPos(new UnaryExpr('-', $expr), $line, $col);
-        }
 
         // 字符串
         if ($this->match(TokenType::STRING_LIT)) {
@@ -448,7 +992,7 @@ class Parser
         if ($this->match(TokenType::NEW_KW)) {
             return $this->setPos($this->parseNewExpr(), $line, $col);
         }
-        // 类型转换: (type) expr
+        // 类型转换: (type) expr  |  括号分组: ( expr )
         if ($this->check(TokenType::LPAREN)) {
             $nextType = $this->peek(1);
             $typeTokens = [
@@ -458,18 +1002,39 @@ class Parser
             if (in_array($nextType->type, $typeTokens, true)) {
                 return $this->setPos($this->parseCastExpr(), $line, $col);
             }
+            // 括号分组: ( expr )
+            if ($this->match(TokenType::LPAREN)) {
+                $inner = $this->parseExpr();
+                $this->consume(TokenType::RPAREN, '期望 )');
+                return $inner; // 括号不产生额外 AST 节点，直接返回内部表达式
+            }
         }
         // 变量
-        if ($this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP) || $this->check(TokenType::COUNT)) {
+        if ($this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP) || $this->check(TokenType::COUNT) || $this->check(TokenType::EXIT) || $this->check(TokenType::DIE) || $this->check(TokenType::ISSET) || $this->check(TokenType::EMPTY_KW)) {
             $name = $this->advance()->lexeme;
 
-            // 方法调用: $obj->method(args) 或 Class::method(args)
+            // $obj->xxx 或 Class::xxx
             if ($this->match(TokenType::ARROW) || $this->match(TokenType::DOUBLE_COLON)) {
-                $methodName = $this->parseMethodName()->lexeme;
-                $this->consume(TokenType::LPAREN, '期望 (');
-                $args = $this->parseArgs();
-                $this->consume(TokenType::RPAREN, '期望 )');
-                return $this->setPos(new CallExpr(new VariableExpr($name), $methodName, $args), $line, $col);
+                $opType = $this->previous()->type; // ARROW or DOUBLE_COLON
+                $memberName = $this->parseMethodName()->lexeme;
+
+                // EnumName::CASE → 枚举访问（需解析命名空间 + use 导入）
+                if ($opType === TokenType::DOUBLE_COLON) {
+                    $enumFq = $this->resolveEnumName($name);
+                    if ($enumFq !== null && isset($this->enumNames[$enumFq])) {
+                        return $this->setPos(new EnumAccessExpr($enumFq, $memberName), $line, $col);
+                    }
+                }
+
+                // 方法调用: $obj->method(args)
+                if ($this->match(TokenType::LPAREN)) {
+                    $args = $this->parseArgs();
+                    $this->consume(TokenType::RPAREN, '期望 )');
+                    return $this->setPos(new CallExpr(new VariableExpr($name), $memberName, $args), $line, $col);
+                }
+
+                // 属性访问: $obj->prop
+                return $this->setPos(new PropertyAccessExpr(new VariableExpr($name), $memberName), $line, $col);
             }
 
             // 函数调用（含 var_dump、闭包调用 $var()）
@@ -481,7 +1046,7 @@ class Parser
                     return $this->setPos(new CallExpr(new VariableExpr($name), '__invoke', $args), $line, $col);
                 }
                 // 内置函数不解析命名空间
-                if ($name !== 'var_dump' && $name !== 'count') {
+                if ($name !== 'var_dump' && $name !== 'count' && $name !== 'exit' && $name !== 'die' && $name !== 'isset' && $name !== 'empty') {
                     $name = $this->resolveFunctionName($name);
                 }
                 return $this->setPos(new CallExpr(null, $name, $args), $line, $col);
@@ -492,6 +1057,20 @@ class Parser
                 $index = $this->parseExpr();
                 $this->consume(TokenType::RBRACKET, '期望 ]');
                 return $this->setPos(new ArrayAccessExpr(new VariableExpr($name), $index), $line, $col);
+            }
+
+            // 常量引用检测：全大写名称 → 检查是否跨命名空间
+            // 但跳过枚举名（枚举通过 :: 访问，单独的全大写名可能是枚举的 use 导入）
+            if (!str_starts_with($name, '$') && self::isConstantName($name)
+                && $this->resolveEnumName($name) === null) {
+                if (isset($this->declaredConsts[$name])) {
+                    $ns = $this->declaredConsts[$name];
+                    if ($ns !== $this->currentNamespace) {
+                        $this->error("常量 '{$name}' 定义在命名空间 '{$ns}'，不能在当前命名空间直接引用");
+                    }
+                } else {
+                    $this->error("未定义的常量 '{$name}'（可能定义在其他命名空间，不支持跨命名空间常量引用）");
+                }
             }
 
             return $this->setPos(new VariableExpr($name), $line, $col);
@@ -507,17 +1086,25 @@ class Parser
         return $node;
     }
 
-    /** 数组字面量: [ expr (, expr)* ] */
+    /** 数组字面量: [ entry (, entry)* ]
+     *  entry → expr (=> expr)?  */
     private function parseArrayLiteral(): ArrayLiteralExpr
     {
-        $elements = [];
+        $entries = [];
         if (!$this->check(TokenType::RBRACKET)) {
             do {
-                $elements[] = $this->parseExpr();
+                $first = $this->parseExpr();
+                // 检查是否 key => value
+                if ($this->match(TokenType::DOUBLE_ARROW)) {
+                    $val = $this->parseExpr();
+                    $entries[] = new ArrayEntryNode($first, $val);
+                } else {
+                    $entries[] = new ArrayEntryNode(null, $first);
+                }
             } while ($this->match(TokenType::COMMA));
         }
         $this->consume(TokenType::RBRACKET, '期望 ]');
-        return new ArrayLiteralExpr($elements);
+        return new ArrayLiteralExpr($entries);
     }
 
     /** 匿名函数: function ( params? ) : type? { body } */
@@ -582,7 +1169,7 @@ class Parser
     // 辅助方法
     // ============================================================
 
-    /** 解析方法名（IDENTIFIER | 类型关键字 | CONSTRUCT | DESTRUCT） */
+    /** 解析方法名（IDENTIFIER | 类型关键字 | CONSTRUCT | DESTRUCT | 内置函数名） */
     private function parseMethodName(): Token
     {
         $tok = $this->advance();
@@ -590,6 +1177,8 @@ class Parser
             TokenType::IDENTIFIER, TokenType::CONSTRUCT, TokenType::DESTRUCT,
             TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
             TokenType::TYPE_BOOL, TokenType::TYPE_VOID, TokenType::TYPE_ARRAY,
+            TokenType::COUNT, TokenType::VAR_DUMP, TokenType::ECHO_KW,
+            TokenType::DIE, TokenType::ISSET, TokenType::EMPTY_KW, TokenType::LIST_KW, TokenType::EXIT,
         ];
         if (!in_array($tok->type, $valid, true)) {
             $this->error("期望方法名，得到 '{$tok->lexeme}'");
@@ -606,6 +1195,10 @@ class Parser
 
     private function parseType(): string
     {
+        // self 关键字
+        if ($this->match(TokenType::SELF_KW)) {
+            return 'self';
+        }
         $typeToken = $this->advance();
         $validTypes = [
             TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
