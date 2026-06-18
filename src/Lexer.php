@@ -30,6 +30,7 @@ class Lexer
         'bool'        => TokenType::TYPE_BOOL,
         'void'        => TokenType::TYPE_VOID,
         'array'       => TokenType::TYPE_ARRAY,
+        'mixed'       => TokenType::TYPE_MIXED,
         '__construct' => TokenType::CONSTRUCT,
         '__destruct'  => TokenType::DESTRUCT,
         'var_dump'    => TokenType::VAR_DUMP,
@@ -38,6 +39,7 @@ class Lexer
         'die'         => TokenType::DIE,
         'isset'       => TokenType::ISSET,
         'empty'       => TokenType::EMPTY_KW,
+        'unset'       => TokenType::UNSET,
         'list'        => TokenType::LIST_KW,
         'namespace'   => TokenType::NAMESPACE,
         'use'         => TokenType::USE,
@@ -56,6 +58,8 @@ class Lexer
         'foreach'     => TokenType::FOREACH_KW,
         'break'       => TokenType::BREAK_KW,
         'continue'    => TokenType::CONTINUE_KW,
+        'goto'        => TokenType::GOTO,
+        'match'       => TokenType::MATCH,
     ];
 
     public function __construct(string $source)
@@ -128,6 +132,12 @@ class Lexer
             }
             $this->addToken(TokenType::SLASH, '/');
             $this->advance();
+            return;
+        }
+
+        // heredoc / nowdoc: <<<ID ... ID
+        if ($ch === '<' && $this->peek(1) === '<' && $this->peek(2) === '<') {
+            $this->scanHeredoc();
             return;
         }
 
@@ -441,5 +451,169 @@ class Lexer
         throw new RuntimeException(
             sprintf("Lexer 错误 [%d:%d]: %s", $this->line, $this->column, $msg)
         );
+    }
+
+    /** heredoc / nowdoc: <<<ID\n...\nID */
+    private function scanHeredoc(): void
+    {
+        $this->advance(3); // skip <<<
+
+        // nowdoc: <<<'ID' → 单引号标识符，无插值
+        $quote = '';
+        if ($this->peek() === "'") {
+            $quote = "'";
+            $this->advance();
+        }
+
+        // 读取标识符
+        $id = '';
+        while ($this->pos < strlen($this->source) && (ctype_alnum($this->peek()) || $this->peek() === '_')) {
+            $id .= $this->peek();
+            $this->advance();
+        }
+
+        if ($quote !== '') {
+            if ($this->peek() === "'") $this->advance();
+        }
+
+        if ($id === '') {
+            $this->error('heredoc 缺少标识符');
+        }
+
+        // 跳过标识符后的空白到换行（包括空格/tab）
+        while ($this->pos < strlen($this->source) && $this->peek() !== "\n" && $this->peek() !== "\r") {
+            $ch = $this->peek();
+            if ($ch !== ' ' && $ch !== "\t") {
+                $this->error("heredoc 标识符 '{$id}' 后不允许有 '{$ch}'");
+            }
+            $this->advance();
+        }
+        // 跳过换行
+        if ($this->peek() === "\r") { $this->advance(); $this->line++; $this->column = 1; }
+        if ($this->peek() === "\n") { $this->advance(); $this->line++; $this->column = 1; }
+
+        // 读取内容直到单独一行的结束标识符
+        $body = '';
+        while ($this->pos < strlen($this->source)) {
+            // 检测行首的结束标识符（column==1 说明刚换行）
+            if ($this->column === 1 && $this->peek() === $id[0]) {
+                $match = true;
+                $idLen = strlen($id);
+                for ($j = 0; $j < $idLen; $j++) {
+                    if ($this->peek($j) !== $id[$j]) { $match = false; break; }
+                }
+                if ($match) {
+                    $after = $this->peek($idLen);
+                    // 标识符后必须是 ; 或换行 或 EOF
+                    if ($after === ';' || $after === "\n" || $after === "\r" || $after === '') {
+                        $this->advance($idLen);
+                        // ; 是语句终止符，必须保留给 Parser
+                        if ($this->peek() === ';') {
+                            // 不 advance，留给下一次 scanToken 生成 SEMICOLON
+                        }
+                        while ($this->pos < strlen($this->source) && ($this->peek() === ' ' || $this->peek() === "\t")) $this->advance();
+                        break;
+                    }
+                }
+            }
+
+            $c = $this->peek();
+            if ($c === "\r") {
+                $body .= "\n";
+                $this->advance();
+                if ($this->peek() === "\n") $this->advance();
+                $this->line++; $this->column = 1;
+            } elseif ($c === "\n") {
+                $body .= "\n";
+                $this->advance();
+                $this->line++; $this->column = 1;
+            } else {
+                $body .= $c;
+                $this->advance();
+            }
+        }
+
+        if ($quote === "'") {
+            // nowdoc: 无插值，直接输出
+            $this->addToken(TokenType::STRING_LIT, $body, $body);
+        } else {
+            // heredoc: 处理转义序列 + 插值
+            $this->emitHeredocString($body);
+        }
+    }
+
+    /** 将 heredoc 字符串按插值分割为 TOKEN 序列（字符串+变量+DOT）
+     *  输出为 C 字符串字面量形式（STR_LIT 宏会再次 C-escape） */
+    private function emitHeredocString(string $str): void
+    {
+        // key=PHP转义字符, value=C字面量输出
+        static $escapes = ['n' => "\n", 't' => "\t", 'r' => "\r", '\\' => "\\\\", '$' => '$'];
+
+        $len = strlen($str);
+        $buf = '';
+        $needDot = false;
+        $i = 0;
+
+        while ($i < $len) {
+            $c = $str[$i];
+            // 转义序列：\n \t \\ \$ \r
+            if ($c === '\\' && $i + 1 < $len) {
+                $next = $str[$i + 1];
+                if (isset($escapes[$next])) {
+                    $buf .= $escapes[$next];
+                    $i += 2;
+                    continue;
+                }
+                // 其他 \x → 保持原样（如 \0, \" 等）
+                $buf .= '\\' . $next;
+                $i += 2;
+                continue;
+            }
+            if ($c === '$') {
+                // 检测变量名
+                $j = $i + 1;
+                if ($j < $len && $str[$j] === '{') {
+                    // {$var} 语法
+                    $varEnd = strpos($str, '}', $j + 1);
+                    if ($varEnd !== false) {
+                        if ($buf !== '') {
+                            if ($needDot) $this->addToken(TokenType::DOT, '.');
+                            $this->addToken(TokenType::STRING_LIT, $buf, $buf);
+                            $buf = '';
+                            $needDot = true;
+                        }
+                        if ($needDot) $this->addToken(TokenType::DOT, '.');
+                        $varName = substr($str, $j + 1, $varEnd - $j - 1);
+                        $this->addToken(TokenType::IDENTIFIER, '$' . $varName);
+                        $needDot = true;
+                        $i = $varEnd + 1;
+                        continue;
+                    }
+                } elseif ($j < $len && (ctype_alpha($str[$j]) || $str[$j] === '_')) {
+                    // $var 语法
+                    $k = $j;
+                    while ($k < $len && (ctype_alnum($str[$k]) || $str[$k] === '_')) $k++;
+                    if ($buf !== '') {
+                        if ($needDot) $this->addToken(TokenType::DOT, '.');
+                        $this->addToken(TokenType::STRING_LIT, $buf, $buf);
+                        $buf = '';
+                        $needDot = true;
+                    }
+                    if ($needDot) $this->addToken(TokenType::DOT, '.');
+                    $varName = substr($str, $j, $k - $j);
+                    $this->addToken(TokenType::IDENTIFIER, '$' . $varName);
+                    $needDot = true;
+                    $i = $k;
+                    continue;
+                }
+            }
+            $buf .= $c;
+            $i++;
+        }
+
+        if ($buf !== '') {
+            if ($needDot) $this->addToken(TokenType::DOT, '.');
+            $this->addToken(TokenType::STRING_LIT, $buf, $buf);
+        }
     }
 }

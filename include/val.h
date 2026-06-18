@@ -32,3 +32,12 @@
 #define VAR_ARRAY(a)  ((t_var){.type = TYPE_ARRAY,  .value._array  = (a)})
 #define VAR_CALLBACK(c) ((t_var){.type = TYPE_CALLBACK, .value._callback = (c)})
 #define VAR_NULL()    ((t_var){.type = TYPE_NULL})
+
+// ============================================================
+// t_var → 具体类型取值宏（含默认值，内存安全）
+//   mixed / union 类型变量的读取用
+// ============================================================
+#define VAR_AS_INT(v)    ((v).type == TYPE_INT    ? (v).value._int    : (t_int)0)
+#define VAR_AS_FLOAT(v)  ((v).type == TYPE_FLOAT  ? (v).value._float  : (t_float)0.0)
+#define VAR_AS_STRING(v) ((v).type == TYPE_STRING ? (v).value._string : ((t_string){NULL, 0}))
+#define VAR_AS_BOOL(v)   ((v).type == TYPE_BOOL   ? (v).value._bool   : false)

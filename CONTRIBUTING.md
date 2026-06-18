@@ -58,7 +58,8 @@ $tokens = $lexer->tokenize();   // → Token[]
 **如何扩展**：
 - 新增关键字 → `$keywords` 数组 + `TokenType` 枚举
 - 新增多字符运算符 → `$multiOps` 数组
-- 新增字符 → 注意扫描顺序（例如 `::` 必须在 `:` 之前）
+- 新增字符 → 注意扫描顺序（例如 `::` 必须在 `:` 之前，`<<<` heredoc 在 `<` 之前）
+- 新增字符串语法 → `scanString()` / `scanHeredoc()` 方法
 
 ### 2.2 Parser（语法分析）
 
@@ -207,7 +208,7 @@ int main(int argc, char* argv[]) { tphp_rt_init(); ... }
 | `$c->value` / `$c->name` | 结构体字段直接访问 | — |
 | `var_dump($x)` | `tphp_fn_var_dump(VAR_INT(x))` | `tphp_fn_` |
 | `exit(0)` | `tphp_fn_exit(0)` | `tphp_fn_` |
-| `$f = function() {…}` | `({ t_int _closure_1(); (t_callback){…} })` | `_closure_` |
+| `$f = function() use($x) {…}` | `({ t_int _closure_1(t_int, void*); _cap_1 _env={.x=x}; (t_callback){…, .env=&_env} })` | `_closure_`, `_cap_` |
 | `$arr[0]` | `tphp_arr_item_int(arr, 0)` | `tphp_` |
 | `$a . $b` | `tphp_rt_str_concat(a, b)` | `tphp_rt_` |
 | `"hello $name"` | Lexer 自动拆为 `tphp_rt_str_concat("hello ", name)` | `tphp_rt_` |
@@ -371,6 +372,7 @@ CodeGenerator 按 `inferType()` 分发到对应函数，isset 对 int/float/bool
 | `tphp_rt_` | 运行时内部 |
 | `tphp_enum_` | 枚举结构体 |
 | `_e_` | 枚举 static 实例 |
+| `_cap_` | 闭包捕获 struct |
 | `TPHP_CONST_` | 常量宏 |
 | `_closure_` | 闭包函数 |
 | `_arr_` / `_fi_` / `_fc_` | CodeGenerator 临时变量 |
@@ -390,16 +392,16 @@ CodeGenerator 按 `inferType()` 分发到对应函数，isset 对 int/float/bool
 
 | 文件 | 行数 | 核心职责 |
 |------|------|---------|
-| `tphp.php` | ~270 | CLI 入口、两阶段解析、多文件收集、AST 合并、编译器调用 |
-| `src/TokenType.php` | ~100 | Token 枚举（PHP 8.1 enum） |
+| `tphp.php` | ~300 | CLI 入口、两阶段解析、多文件收集、AST 合并、编译器调用 |
+| `src/TokenType.php` | ~125 | Token 枚举（PHP 8.1 enum, 55+ token） |
 | `src/Token.php` | ~20 | Token 值对象 |
-| `src/AST/Node.php` | ~680 | 全部 AST 节点（30+） + Visitor 接口 |
-| `src/Lexer.php` | ~430 | 词法分析（换行/注释/插值/运算符优先级） |
-| `src/Parser.php` | ~1150 | 递归下降解析（namespace/use/表达式/语句/控制流/enum） |
-| `src/CodeGenerator.php` | ~1680 | C 代码生成（类型推导/闭包/枚举/switch/命名空间/类型转换） |
+| `src/AST/Node.php` | ~750 | 全部 AST 节点（35+） + Visitor 接口 |
+| `src/Lexer.php` | ~650 | 词法分析（heredoc/nowdoc/插值/转义/运算符优先级） |
+| `src/Parser.php` | ~1450 | 递归下降解析（namespace/use/mixed/union/表达式/控制流/match/enum/closure use/goto） |
+| `src/CodeGenerator.php` | ~2100 | C 代码生成（类型推导/闭包捕获/t_var/mixed/match/枚举/switch/位运算） |
 | `include/types.h` | ~105 | C 类型系统 |
-| `include/val.h` | ~36 | 便捷宏（VAR_INT, STR_LIT 等） |
+| `include/val.h` | ~45 | 便捷宏（VAR_INT, STR_LIT, VAR_AS_* unwrap 等） |
 | `include/array.h` | ~265 | PHP 数组（引用计数 + 嵌套安全释放） |
-| `include/runtime.h` | ~195 | 内部辅助（字符串拼/拆/比较、对象析构、初始化、falsy 检测） |
-| `include/builtin.h` | ~140 | 公开内置（echo, var_dump, exit, isset, empty） |
+| `include/runtime.h` | ~195 | 内部辅助（字符串拼/拆/比较、对象析构、falsy 检测） |
+| `include/builtin.h` | ~150 | 公开内置（echo, var_dump, exit, isset, empty, unset） |
 | `include/common.h` | ~10 | 总入口，`#include` 所有头文件 |

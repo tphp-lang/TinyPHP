@@ -28,6 +28,7 @@ enum TokenType: string
     case TYPE_BOOL   = 'bool';
     case TYPE_VOID   = 'void';
     case TYPE_ARRAY  = 'array';
+    case TYPE_MIXED  = 'mixed';
 
     // 魔术方法
     case CONSTRUCT = '__construct';
@@ -52,6 +53,8 @@ enum TokenType: string
     case FOREACH_KW = 'foreach';
     case BREAK_KW   = 'break';
     case CONTINUE_KW= 'continue';
+    case GOTO       = 'goto';
+    case MATCH      = 'match';
 
     // 关键字 (继续)
     case VAR_DUMP   = 'var_dump';
@@ -60,6 +63,7 @@ enum TokenType: string
     case DIE        = 'die';
     case ISSET      = 'isset';
     case EMPTY_KW   = 'empty';
+    case UNSET      = 'unset';
     case LIST_KW    = 'list';
     case NAMESPACE  = 'namespace';
     case USE        = 'use';

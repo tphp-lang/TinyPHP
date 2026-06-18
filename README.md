@@ -109,9 +109,11 @@ class Main {
         $d->hello();
         $calc->add(5)->multiply(3);
 
-        // 闭包
+        // 闭包 & 变量捕获
         $fn = function (int $x): int { return $x * 2; };
         var_dump($fn(21));
+        $m = 10;
+        $capture = function (int $x) use ($m): int { return $x * $m; };
 
         // 类型转换
         $s = (string)123;
@@ -144,6 +146,23 @@ $v = Num::ONE->value;  // 1
 // 指针同一性比较: $c == Color::RED
 // 值比较: $c->value == "red"
 // 跨命名空间枚举需要 use 导入
+```
+
+### heredoc / nowdoc
+
+```php
+// heredoc：支持插值和转义
+$str = <<<EOD
+Hello $name!
+Line with \n newline
+Dollar sign: \$var  // 不插值
+EOD;
+
+// nowdoc：无插值，纯文本
+$str = <<<'NOW'
+Hello $name!
+No interpolation.
+NOW;
 ```
 
 ### 运算符完整列表
@@ -210,19 +229,25 @@ function myFunc2(): void { ... }
 | `isset($x)` | 变量是否已设置且不为 null |
 | `empty($x)` | 变量是否为 PHP 假值（null/0/0.0/false/空串/"0"） |
 | `list($a,$b)` | 数组解构赋值 `list($a,$b) = [1,2]` |
+| `unset($x)` | 释放变量（int→0，string→清空，array→free，object→析构） |
 
 ### 控制流完整列表
 
-`if` / `elseif` / `else` · `while` · `do-while` · `for` · `foreach` · `switch` / `case` / `default` · `break` · `continue`
+`if` / `elseif` / `else` · `while` · `do-while` · `for` · `foreach` · `switch` / `case` / `default` · `break` · `continue` · `goto` · `match`
+
+### 新增类型
+
+| 特性 | 示例 | C 映射 |
+|------|------|--------|
+| `mixed` | `mixed $x = 42; $x = "hi";` | `t_var`（类型标签 union） |
+| 联合类型 | `int\|string $v = 10;` | `t_var`（同上） |
+
+> 声明为 `mixed` 或联合类型的变量才能变更类型；普通变量类型一旦确定不可变。
 
 ### 不支持 / TODO
 
 | 优先级 | 特性 | 说明 |
 |--------|------|------|
-| 🔴 | `global` 关键字 | 全局变量 |
-| 🔴 | 默认参数值 | `function foo($x = 10)` |
-| 🔴 | 可变参数 `...$args` | `function foo(int ...$vals)` |
-| 🔴 | 魔术常量 | `__LINE__` `__FILE__` `__DIR__` |
 | 🟡 | `strlen` `strpos` `substr` `trim` `explode` `implode` | 字符串处理函数 |
 | 🟡 | `array_push` `array_pop` `array_shift` `array_keys` `array_values` `in_array` `array_key_exists` | 数组操作函数 |
 | 🟡 | `is_int` `is_string` `is_float` `is_bool` `is_array` `is_null` | 类型检测函数 |
@@ -230,13 +255,13 @@ function myFunc2(): void { ... }
 | 🟡 | `rand` `mt_rand` `time` `date` `sleep` `usleep` | 系统函数 |
 | 🟡 | `file_get_contents` `file_put_contents` `json_encode` `json_decode` | I/O 和 JSON |
 | 🟡 | `try` / `catch` / `throw` | 异常处理 |
-| 🟡 | `static` 变量、`unset()` | 变量管理 |
-| 🟢 | `match` 表达式、`**` 幂运算符、`<=>` 太空船 | PHP 8.0+ 语法 |
-| 🟢 | 命名参数、联合类型 `int\|string`、`readonly` `never` `mixed` | 类型系统扩展 |
-| 🟢 | `yield` 生成器、`goto`、`declare()` | 语言构造 |
-| 🟢 | `heredoc`/`nowdoc`、`#[Attribute]` | 字符串/元编程 |
-| 🟢 | `__toString` `__get` `__set` `__call` 等魔术方法 | OOP 扩展 |
+| 🟢 | `**` 幂运算符、`<=>` 太空船、命名参数 | PHP 8.0+ 语法 |
+| 🟢 | `readonly` `never` | 新类型关键字 |
+| 🟢 | `declare()` | 编译器指令 |
+| 🟢 | `#[Attribute]` | 元编程/注解 |
 | 🟢 | `include`/`require`、`eval()` | AOT 编译不支持 |
+
+> **明确不支持**（设计限制，非 TODO）：`global`、默认参数值、可变参数 `…$args`、`static` 变量、`__LINE__` `__FILE__` `__DIR__`、`yield` 生成器 — 依赖运行时动态行为或 C 无对应机制。
 
 ## C 运行时 (`include/`)
 

@@ -335,6 +335,28 @@ class BreakStmtNode extends StmtNode
     }
 }
 
+// goto LABEL;
+class GotoStmtNode extends StmtNode
+{
+    public function __construct(public readonly string $label) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitGotoStmt($this);
+    }
+}
+
+// LABEL:
+class LabelStmtNode extends StmtNode
+{
+    public function __construct(public readonly string $name) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitLabelStmt($this);
+    }
+}
+
 // continue;
 class ContinueStmtNode extends StmtNode
 {
@@ -539,12 +561,15 @@ class EnumCaseNode
 class ClosureExpr extends ExprNode
 {
     /** @param ParamNode[] $params */
+    /** @param array{string,string}[] $useVars  [[varName, type], ...] */
     public function __construct(
         /** @var ParamNode[] */
         public readonly array $params,
         public readonly string $returnType,
         /** @var StmtNode[] */
         public readonly array $body,
+        /** @var array{string,string}[] */
+        public readonly array $useVars = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -653,6 +678,33 @@ class NullCoalesceExpr extends ExprNode
     }
 }
 
+// match arm: values => result_expr  (values 为 [expr,...])
+class MatchArm
+{
+    /** @param ExprNode[] $values  */
+    public function __construct(
+        /** @var ExprNode[] */
+        public readonly array $values,
+        public readonly ExprNode $body,
+    ) {}
+}
+
+// match(expr) { arm, arm, ... }
+class MatchExpr extends ExprNode
+{
+    /** @param MatchArm[] $arms */
+    public function __construct(
+        public readonly ExprNode $condition,
+        /** @var MatchArm[] */
+        public readonly array $arms,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitMatchExpr($this);
+    }
+}
+
 // 函数调用 / 方法调用
 class CallExpr extends ExprNode
 {
@@ -722,6 +774,7 @@ interface ASTVisitor
     public function visitBinary(BinaryExpr $node): string;
     public function visitTernary(TernaryExpr $node): string;
     public function visitNullCoalesce(NullCoalesceExpr $node): string;
+    public function visitMatchExpr(MatchExpr $node): string;
     public function visitCall(CallExpr $node): string;
     public function visitCast(CastExpr $node): string;
     public function visitNew(NewExpr $node): string;
@@ -744,5 +797,7 @@ interface ASTVisitor
     public function visitForeachStmt(ForeachStmtNode $node): string;
     public function visitSwitchStmt(SwitchStmtNode $node): string;
     public function visitBreakStmt(BreakStmtNode $node): string;
+    public function visitGotoStmt(GotoStmtNode $node): string;
+    public function visitLabelStmt(LabelStmtNode $node): string;
     public function visitContinueStmt(ContinueStmtNode $node): string;
 }

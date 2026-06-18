@@ -58,6 +58,10 @@ class Main
         echo "===== Switch =====\n";
         $this->testSwitch();
 
+        // 7.4. 闭包 use 捕获变量
+        echo "===== Closure Use =====\n";
+        $this->testClosureUse();
+
         // 7.5. 新运算符 & 控制流 (%, ?:, ??, do-while, &|^~<<>>, die, isset, empty, list)
         echo "===== New Ops =====\n";
         $this->testHighPriority();
@@ -307,19 +311,19 @@ class Main
     private function testClosures(): void
     {
         // 简单闭包
-        $doubler = function(int $x): int {
+        $doubler = function (int $x): int {
             return $x * 2;
         };
         var_dump($doubler(21));
 
         // 多参数闭包
-        $add = function(int $a, int $b): int {
+        $add = function (int $a, int $b): int {
             return $a + $b;
         };
         var_dump($add(10, 20));
 
         // 无参闭包
-        $getConst = function(): int {
+        $getConst = function (): int {
             return 42;
         };
         var_dump($getConst());
@@ -760,6 +764,63 @@ class Main
         var_dump($ds1->getInt());
         var_dump($ds2->getInt());
         // ds1, ds2, c1, c2 在方法结束时自动释放
+    }
+
+    private function testClosureUse(): void
+    {
+        // ── 1. 基本 use 捕获 int ──
+        $multiplier = 10;
+        $doubler = function (int $x) use ($multiplier): int {
+            return $x * $multiplier;
+        };
+        $r1 = $doubler(5);
+        var_dump($r1);
+
+        // ── 2. 捕获多个变量 ──
+        $a = 3;
+        $b = 7;
+        $sumFn = function () use ($a, $b): int {
+            return $a + $b;
+        };
+        var_dump($sumFn());
+
+        // ── 3. 捕获 string ──
+        $prefix = "[LOG]";
+        $log = function (string $msg) use ($prefix): void {
+            echo $prefix;
+            echo " ";
+            echo $msg;
+            echo "\n";
+        };
+        $log("hello world");
+
+        // ── 4. 捕获变量不影响外部 ──
+        $counter = 5;
+        $inc = function () use ($counter): int {
+            return $counter + 1;
+        };
+        var_dump($inc());
+        var_dump($counter);
+
+        // ── 5. 链式捕获 + 组合 ──
+        $base = 100;
+        $adder = function (int $v) use ($base): int {
+            return $base + $v;
+        };
+        $mul = function (int $v) use ($adder): int {
+            return $adder($v) * 2;
+        };
+        var_dump($mul(10));
+
+        // ── 6. 嵌套闭包 + use ──
+        $outer = 1;
+        $innerFn = function (int $x) use ($outer): int {
+            $inner = function (int $y) use ($outer, $x): int {
+                return $outer + $x + $y;
+            };
+            return $inner(3);
+        };
+        var_dump($innerFn(2));
     }
 
     private function testHighPriority(): void

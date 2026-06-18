@@ -139,3 +139,15 @@ static inline bool tphp_fn_empty_float(t_float v)   { return v == 0.0; }
 static inline bool tphp_fn_empty_bool(t_bool v)     { return !v; }
 static inline bool tphp_fn_empty_str(t_string s)    { return tphp_rt_str_is_falsy(s); }
 static inline bool tphp_fn_empty_null(void* p)      { (void)p; return true; }
+
+// ============================================================
+// tphp_fn_unset — PHP unset() 按类型释放
+//   int/float/bool: 置零
+//   string:         释放堆内存
+//   array:          引用计数释放
+//   object:         引用计数析构
+//   null:           无操作
+// ============================================================
+static inline void tphp_fn_unset_str(t_string* s)    { tphp_rt_str_free(s); }
+static inline void tphp_fn_unset_arr(t_array** a)    { if (*a) { tphp_fn_arr_free(*a); *a = NULL; } }
+static inline void tphp_fn_unset_obj(t_object** o)   { tphp_rt_object_free(*o); *o = NULL; }
