@@ -61,7 +61,7 @@ jobs:
           Copy-Item tphp.php tphp/
           Copy-Item src -Recurse -Destination tphp/src
           Copy-Item include -Recurse -Destination tphp/include
-          Copy-Item tphp.sh tphp/
+          Copy-Item tphp.cmd tphp/
 
       - uses: actions/upload-artifact@v4
         with:
