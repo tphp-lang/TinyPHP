@@ -196,9 +196,23 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
 // --- Phase 2: C 编译 → 产物 ---
 echo "[2/2] 编译 → {$outExe}...\n";
 
+// 独立 TCC：-B 指向 standalone/lib/include 所在目录，让 TCC 可重定位
+$bFlag = '';
+$tccBase = dirname($ccExe);
+$standaloneDirs = [
+    $tccBase . '/tcc-standalone',   // Linux 构建产物
+    $tccBase,                        // Windows/macOS 直接安装到 tcc 目录
+];
+foreach ($standaloneDirs as $dir) {
+    if (is_dir($dir . '/lib') || is_dir($dir . '/include')) {
+        $bFlag = ' -B"' . realpath($dir) . '"';
+        break;
+    }
+}
+
 $cmd = sprintf(
-    '"%s" -I"%s" -o "%s" "%s" 2>&1',
-    $ccExe, $includeDir, $outExe, $cFile
+    '"%s"%s -I"%s" -o "%s" "%s" 2>&1',
+    $ccExe, $bFlag, $includeDir, $outExe, $cFile
 );
 
 $tccOutput = [];
