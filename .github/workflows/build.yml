@@ -9,7 +9,7 @@ on:
 
 jobs:
   # ============================================================
-  # Windows x86_64 — MSYS2 MinGW64 编译 TCC
+  # Windows x86_64 — MSYS2 MinGW64 编译 TCC (mob 分支)
   # ============================================================
   windows-x86_64:
     runs-on: windows-latest
@@ -26,14 +26,20 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-make
+            git
 
-      - name: Build TCC (MSYS2 MinGW64)
+      - name: Build TCC
         shell: msys2 {0}
         run: |
           export PATH="/mingw64/bin:$PATH"
-          cd tcc/win32
-          cmd //c build-tcc.bat
-          ls -la tcc.exe
+          mkdir -p tcc/win32
+          git clone --depth 1 --branch mob https://repo.or.cz/tinycc.git tinycc-src
+          cd tinycc-src
+          ./configure --prefix=../tcc/win32 --bindir=../tcc/win32 --cc=gcc --extra-cflags=-O3
+          make
+          make install
+          cp tcc.exe ../tcc/win32/
+          ls -la ../tcc/win32/tcc.exe
 
       - name: Download PHP
         shell: pwsh
@@ -55,7 +61,7 @@ jobs:
           Copy-Item tphp.php dist/
           Copy-Item src -Recurse -Destination dist/src
           Copy-Item include -Recurse -Destination dist/include
-          Copy-Item tphp.cmd dist/
+          Copy-Item tphp.sh dist/
           Rename-Item dist tphp
           7z a tinyphp-win-x86_64.zip ./tphp
 
@@ -65,7 +71,7 @@ jobs:
           path: tinyphp-win-x86_64.zip
 
   # ============================================================
-  # Linux x86_64 — GCC 编译 TCC
+  # Linux x86_64 — GCC 编译 TCC (mob 分支)
   # ============================================================
   linux-x86_64:
     runs-on: ubuntu-latest
@@ -77,7 +83,7 @@ jobs:
       - name: Install GCC & deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev
+          sudo apt install -y gcc make libc6-dev git
 
       - name: Build TCC
         run: |
@@ -98,8 +104,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/tcc
-          cp -r tcc/* dist/tcc/ 2>/dev/null || true
-          rm -rf dist/tcc/win32 dist/tcc/tcc-dist
+          cp tcc/tcc dist/tcc/ 2>/dev/null || true
           cp php dist/
           cp tphp.php dist/
           cp -r src dist/
@@ -113,7 +118,7 @@ jobs:
           path: tinyphp-linux-x86_64.tar.gz
 
   # ============================================================
-  # Linux aarch64 — GCC 编译 TCC
+  # Linux aarch64 — GCC 编译 TCC (mob 分支)
   # ============================================================
   linux-aarch64:
     runs-on: ubuntu-24.04-arm
@@ -125,7 +130,7 @@ jobs:
       - name: Install GCC & deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev
+          sudo apt install -y gcc make libc6-dev git
 
       - name: Build TCC
         run: |
@@ -146,8 +151,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/tcc
-          cp -r tcc/* dist/tcc/ 2>/dev/null || true
-          rm -rf dist/tcc/win32 dist/tcc/tcc-dist
+          cp tcc/tcc dist/tcc/ 2>/dev/null || true
           cp php dist/
           cp tphp.php dist/
           cp -r src dist/
@@ -161,7 +165,7 @@ jobs:
           path: tinyphp-linux-aarch64.tar.gz
 
   # ============================================================
-  # macOS aarch64 (Apple Silicon) — GCC 编译 TCC
+  # macOS aarch64 — clang 编译 TCC (mob 分支)
   # ============================================================
   macos-aarch64:
     runs-on: macos-latest
@@ -170,27 +174,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GCC
+      - name: Build TCC
         run: |
-          brew install gcc make
-
-      - name: Build TCC (macOS)
-        run: |
-          cd tcc
-          SDK=$(xcrun --show-sdk-path 2>/dev/null || echo "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
-          rm -rf sys bits gnu 2>/dev/null
-          rm -f config.mak config.h
-          sh configure \
-            --prefix=./tcc-dist \
-            --bindir=./tcc-dist \
-            --tccdir=./tcc-dist/lib/tcc \
-            --crtprefix="$SDK/usr/lib:./tcc-dist/lib" \
-            --libpaths="$SDK/usr/lib:./tcc-dist/lib:/usr/lib:/usr/local/lib" \
-            --extra-cflags="-I$SDK/usr/include" \
-            --cc=cc
+          SDK=$(xcrun --show-sdk-path)
+          git clone --depth 1 --branch mob https://repo.or.cz/tinycc.git tinycc-src
+          cd tinycc-src
+          ./configure \
+            --prefix=../tcc \
+            --bindir=../tcc \
+            --crtprefix="../tcc/lib:$SDK/usr/lib" \
+            --libpaths="../tcc/lib:$SDK/usr/lib:/usr/lib:/usr/local/lib" \
+            --extra-cflags="-I$SDK/usr/include -O3" \
+            --cc=cc \
+            --config-bcheck=yes \
+            --config-backtrace=yes
           make
           make install
-          cp tcc-dist/tcc ./tcc
+          cd ..
+          cp tcc/tcc tcc/tcc 2>/dev/null || true
+          ls -la tcc/tcc
 
       - name: Download PHP
         run: |
@@ -205,8 +207,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/tcc
-          cp -r tcc/* dist/tcc/ 2>/dev/null || true
-          rm -rf dist/tcc/win32 dist/tcc/tcc-dist
+          cp tcc/tcc dist/tcc/ 2>/dev/null || true
           cp php dist/
           cp tphp.php dist/
           cp -r src dist/
@@ -218,5 +219,3 @@ jobs:
         with:
           name: tinyphp-macos-aarch64
           path: tinyphp-macos-aarch64.tar.gz
-
-
