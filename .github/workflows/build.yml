@@ -32,12 +32,12 @@ jobs:
         shell: msys2 {0}
         run: |
           export PATH="/mingw64/bin:$PATH"
-          mkdir -p tcc/win32
+          mkdir -p ../tcc/win32
           git clone --depth 1 --branch mob https://repo.or.cz/tinycc.git tinycc-src
           cd tinycc-src
           ./configure --prefix=../tcc/win32 --bindir=../tcc/win32 --cc=gcc --extra-cflags=-O3
-          make
-          make install
+          mingw32-make
+          mingw32-make install
           cp tcc.exe ../tcc/win32/
           ls -la ../tcc/win32/tcc.exe
 
