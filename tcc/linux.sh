@@ -8,10 +8,10 @@ set -e
 ARCH=$(gcc -dumpmachine)
 TCC_HOME="$(pwd)/tcc-dist"   # 独立 TCC 安装目录
 
-echo "=== 1. 创建 glibc 多架构头文件符号链接 ==="
-ln -sf /usr/include/$ARCH/bits /usr/include/bits 2>/dev/null || true
-ln -sf /usr/include/$ARCH/sys  /usr/include/sys  2>/dev/null || true
-ln -sf /usr/include/$ARCH/gnu  /usr/include/gnu  2>/dev/null || true
+echo "=== 1. 复制 glibc 多架构头文件到 TCC include/（自举编译用） ==="
+cp -r /usr/include/$ARCH/bits include/ 2>/dev/null || true
+cp -r /usr/include/$ARCH/sys  include/ 2>/dev/null || true
+cp -r /usr/include/$ARCH/gnu  include/ 2>/dev/null || true
 
 echo "=== 2. 兼容 glibc 2.34+（__malloc_hook 等已移除） ==="
 (echo '#include <stddef.h>'; \
@@ -37,14 +37,10 @@ echo "=== 4. 编译 & 安装到独立目录 ==="
 make
 make install
 
-echo "=== 5. 补充 CRT 文件和 glibc 头文件到 TCC 安装目录 ==="
+echo "=== 5. 补充 CRT 文件 ==="
 cp /usr/lib/$ARCH/crt1.o  "$TCC_HOME/lib/" 2>/dev/null || true
 cp /usr/lib/$ARCH/crti.o  "$TCC_HOME/lib/" 2>/dev/null || true
 cp /usr/lib/$ARCH/crtn.o  "$TCC_HOME/lib/" 2>/dev/null || true
-
-cp -r /usr/include/$ARCH/bits "$TCC_HOME/lib/tcc/include/" 2>/dev/null || true
-cp -r /usr/include/$ARCH/sys  "$TCC_HOME/lib/tcc/include/" 2>/dev/null || true
-cp -r /usr/include/$ARCH/gnu  "$TCC_HOME/lib/tcc/include/" 2>/dev/null || true
 
 echo "=== 6. 复制 tcc（tphp.php Linux 路径: tcc/tcc） ==="
 cp "$TCC_HOME/tcc" ./tcc
@@ -52,5 +48,4 @@ cp "$TCC_HOME/tcc" ./tcc
 echo ""
 echo "✓ 独立 TCC 构建完成！"
 echo "  路径: $TCC_HOME/tcc"
-echo "  lib:  $(ls $TCC_HOME/lib/ 2>/dev/null | tr '\n' ' ')"
 echo "  现在可直接使用: php tphp.php test.php"
