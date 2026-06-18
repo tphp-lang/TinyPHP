@@ -30,8 +30,9 @@ jobs:
       - name: Build TCC (MSYS2 MinGW64)
         shell: msys2 {0}
         run: |
+          export PATH="/mingw64/bin:$PATH"
           cd tcc/win32
-          cmd /c build-tcc.bat
+          cmd //c build-tcc.bat
           ls -la tcc.exe
 
       - name: Download PHP
@@ -173,11 +174,8 @@ jobs:
       - name: Build TCC (macOS)
         run: |
           cd tcc
-          ARCH=$(gcc -dumpmachine)
-          # 创建 macOS 兼容的 glibc → macOS 符号链接
-          # macOS 使用 clang + SDK，头文件路径不同
           SDK=$(xcrun --show-sdk-path 2>/dev/null || echo "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
-          make clean
+          rm -f config.mak config.h
           ./configure \
             --prefix=./tcc-dist \
             --bindir=./tcc-dist \
@@ -234,7 +232,7 @@ jobs:
         run: |
           cd tcc
           SDK=$(xcrun --show-sdk-path 2>/dev/null || echo "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
-          make clean
+          rm -f config.mak config.h
           ./configure \
             --prefix=./tcc-dist \
             --bindir=./tcc-dist \

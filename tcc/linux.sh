@@ -23,8 +23,7 @@ echo "=== 2. 兼容 glibc 2.34+（__malloc_hook 等已移除） ==="
  cat lib/bcheck.c) > lib/bcheck.c.tmp && mv lib/bcheck.c.tmp lib/bcheck.c
 
 echo "=== 3. 配置 TCC（关键：--crtprefix 和 --libpaths 烧入二进制） ==="
-make clean
-
+rm -f config.mak config.h
 ./configure \
     --prefix="$TCC_HOME" \
     --bindir="$TCC_HOME" \
