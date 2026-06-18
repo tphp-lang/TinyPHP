@@ -373,6 +373,7 @@ class CodeGenerator implements ASTVisitor
         $this->varTypes = [];
         $this->scopeObjects = [];
         $ret = self::mapType($node->returnType);
+        $this->currentRetType = $ret;
         $params = array_map(fn($p) => $this->visitParam($p), $node->params);
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);

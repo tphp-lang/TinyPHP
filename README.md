@@ -310,6 +310,8 @@ function myFunc2(): void { ... }
 cd tcc/win32 && cmd /c build-tcc.bat
 
 # Linux / macOS
+# 如果报 "/bin/sh^M: bad interpreter"，先用 sed 去除 Windows 换行符
+sed -i 's/\r$//' configure
 cd tcc && ./configure && make
 ```
 

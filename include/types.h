@@ -1,8 +1,16 @@
 #pragma once
 
 #include <stdint.h>
-#include <stdbool.h>
 #include <stddef.h>
+
+/* stdbool.h — TCC on modern distros may not find it, define inline */
+#ifndef __cplusplus
+#ifndef bool
+#define bool _Bool
+#define true  1
+#define false 0
+#endif
+#endif
 
 // ============================================================
 // 类型标记枚举

@@ -166,7 +166,8 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
 
     // 最终输出路径（以入口文件名为准）
     if ($outExe === '') {
-        $outExe = $cwd . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '.exe';
+        $ext = (PHP_OS_FAMILY === 'Windows') ? '.exe' : '';
+        $outExe = $cwd . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . $ext;
     }
     $outDir = $cwd . DIRECTORY_SEPARATOR . 'build';
 

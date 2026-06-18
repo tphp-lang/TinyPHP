@@ -1,0 +1,274 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ============================================================
+  # Windows x86_64 — MSYS2 MinGW64 编译 TCC
+  # ============================================================
+  windows-x86_64:
+    runs-on: windows-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+
+      - name: Build TCC (MSYS2 MinGW64)
+        shell: msys2 {0}
+        run: |
+          cd tcc/win32
+          cmd /c build-tcc.bat
+          ls -la tcc.exe
+
+      - name: Download PHP
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:PHP_URL -OutFile php.zip
+          Expand-Archive -Path php.zip -DestinationPath .
+          ls php.exe
+
+      - name: Test
+        shell: pwsh
+        run: ./php tphp.php test/main/min.php
+
+      - name: Package
+        shell: pwsh
+        run: |
+          mkdir dist
+          Copy-Item tcc/win32/tcc.exe dist/
+          Copy-Item php.exe dist/
+          Copy-Item tphp.php dist/
+          Copy-Item src -Recurse -Destination dist/src
+          Copy-Item include -Recurse -Destination dist/include
+          Copy-Item tphp.sh dist/
+          7z a tinyphp-win-x86_64.zip ./dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-win-x86_64
+          path: tinyphp-win-x86_64.zip
+
+  # ============================================================
+  # Linux x86_64 — GCC 编译 TCC
+  # ============================================================
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC & deps
+        run: |
+          sudo apt update
+          sudo apt install -y gcc make libc6-dev
+
+      - name: Build TCC
+        run: |
+          cd tcc
+          bash linux.sh
+          ./tcc --version
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+          ./php -v
+
+      - name: Test
+        run: ./php tphp.php test/main/min.php
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp tcc/tcc dist/
+          cp php dist/
+          cp tphp.php dist/
+          cp -r src dist/
+          cp -r include dist/
+          cp tphp.sh dist/
+          tar czf tinyphp-linux-x86_64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-linux-x86_64
+          path: tinyphp-linux-x86_64.tar.gz
+
+  # ============================================================
+  # Linux aarch64 — GCC 编译 TCC
+  # ============================================================
+  linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-aarch64-glibc.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC & deps
+        run: |
+          sudo apt update
+          sudo apt install -y gcc make libc6-dev
+
+      - name: Build TCC
+        run: |
+          cd tcc
+          bash linux.sh
+          ./tcc --version
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+          ./php -v
+
+      - name: Test
+        run: ./php tphp.php test/main/min.php
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp tcc/tcc dist/
+          cp php dist/
+          cp tphp.php dist/
+          cp -r src dist/
+          cp -r include dist/
+          cp tphp.sh dist/
+          tar czf tinyphp-linux-aarch64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-linux-aarch64
+          path: tinyphp-linux-aarch64.tar.gz
+
+  # ============================================================
+  # macOS aarch64 (Apple Silicon) — GCC 编译 TCC
+  # ============================================================
+  macos-aarch64:
+    runs-on: macos-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC
+        run: |
+          brew install gcc make
+
+      - name: Build TCC (macOS)
+        run: |
+          cd tcc
+          ARCH=$(gcc -dumpmachine)
+          # 创建 macOS 兼容的 glibc → macOS 符号链接
+          # macOS 使用 clang + SDK，头文件路径不同
+          SDK=$(xcrun --show-sdk-path 2>/dev/null || echo "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+          make clean
+          ./configure \
+            --prefix=./tcc-dist \
+            --bindir=./tcc-dist \
+            --tccdir=./tcc-dist/lib/tcc \
+            --crtprefix="$SDK/usr/lib:./tcc-dist/lib" \
+            --libpaths="$SDK/usr/lib:./tcc-dist/lib:/usr/lib:/usr/local/lib" \
+            --extra-cflags="-I$SDK/usr/include" \
+            --cc=cc
+          make
+          make install
+          cp tcc-dist/tcc ./tcc
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+          ./php -v
+
+      - name: Test
+        run: ./php tphp.php test/main/min.php
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp tcc/tcc dist/
+          cp php dist/
+          cp tphp.php dist/
+          cp -r src dist/
+          cp -r include dist/
+          cp tphp.sh dist/
+          tar czf tinyphp-macos-aarch64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-macos-aarch64
+          path: tinyphp-macos-aarch64.tar.gz
+
+  # ============================================================
+  # macOS x86_64 (Intel) — GCC 编译 TCC
+  # ============================================================
+  macos-x86_64:
+    runs-on: macos-13
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-x86_64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC
+        run: |
+          brew install gcc make
+
+      - name: Build TCC (macOS)
+        run: |
+          cd tcc
+          SDK=$(xcrun --show-sdk-path 2>/dev/null || echo "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+          make clean
+          ./configure \
+            --prefix=./tcc-dist \
+            --bindir=./tcc-dist \
+            --tccdir=./tcc-dist/lib/tcc \
+            --crtprefix="$SDK/usr/lib:./tcc-dist/lib" \
+            --libpaths="$SDK/usr/lib:./tcc-dist/lib:/usr/lib:/usr/local/lib" \
+            --extra-cflags="-I$SDK/usr/include" \
+            --cc=cc
+          make
+          make install
+          cp tcc-dist/tcc ./tcc
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+          ./php -v
+
+      - name: Test
+        run: ./php tphp.php test/main/min.php
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp tcc/tcc dist/
+          cp php dist/
+          cp tphp.php dist/
+          cp -r src dist/
+          cp -r include dist/
+          cp tphp.sh dist/
+          tar czf tinyphp-macos-x86_64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-macos-x86_64
+          path: tinyphp-macos-x86_64.tar.gz

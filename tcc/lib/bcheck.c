@@ -1,3 +1,26 @@
+#include <stddef.h>
+void *(*volatile __malloc_hook)(size_t, const void *);
+void *(*volatile __realloc_hook)(void *, size_t, const void *);
+void (*volatile __free_hook)(void *, const void *);
+void *(*volatile __memalign_hook)(size_t, size_t, const void *);
+
+#include <stddef.h>
+void *(*volatile __malloc_hook)(size_t, const void *);
+void *(*volatile __realloc_hook)(void *, size_t, const void *);
+void (*volatile __free_hook)(void *, const void *);
+void *(*volatile __memalign_hook)(size_t, size_t, const void *);
+
+#include <stddef.h>
+void *(*volatile __malloc_hook)(size_t, const void *);
+void *(*volatile __realloc_hook)(void *, size_t, const void *);
+void (*volatile __free_hook)(void *, const void *);
+void *(*volatile __memalign_hook)(size_t, size_t, const void *);
+
+#include <stddef.h>
+void *(*volatile __malloc_hook)(size_t, const void *);
+void *(*volatile __realloc_hook)(void *, size_t, const void *);
+void (*volatile __free_hook)(void *, const void *);
+
 /*
  *  Tiny C Memory and bounds checker
  * 
