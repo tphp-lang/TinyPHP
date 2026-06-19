@@ -49,18 +49,18 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          mkdir tphp
-          Copy-Item tcc/win32 -Recurse -Destination tphp/tcc/win32
-          Copy-Item php.exe tphp/
-          Copy-Item tphp.php tphp/
-          Copy-Item src -Recurse -Destination tphp/src
-          Copy-Item include -Recurse -Destination tphp/include
-          Copy-Item tphp.cmd tphp/
+          mkdir release
+          Copy-Item tcc/win32 -Recurse -Destination release/tphp/tcc/win32
+          Copy-Item php.exe release/tphp/
+          Copy-Item tphp.php release/tphp/
+          Copy-Item src -Recurse -Destination release/tphp/src
+          Copy-Item include -Recurse -Destination release/tphp/include
+          Copy-Item tphp.cmd release/tphp/
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-win-x86_64
-          path: tphp
+          path: release
 
   # ============================================================
   # Linux x86_64 — GCC 编译 TCC (mob 分支)
@@ -89,23 +89,28 @@ jobs:
           chmod +x php
           ./php -v
 
+      - name: UPX compress PHP
+        run: |
+          sudo apt install -y upx-ucl
+          upx --best php
+
       - name: Test
         run: ./php tphp.php test/main/min.php
 
       - name: Package
         run: |
-          mkdir -p tphp
-          cp -r tcc tphp/
-          cp php tphp/
-          cp tphp.php tphp/
-          cp -r src tphp/
-          cp -r include tphp/
-          cp tphp.sh tphp/
+          mkdir -p release
+          cp -r tcc release/tphp/
+          cp php release/tphp/
+          cp tphp.php release/tphp/
+          cp -r src release/tphp/
+          cp -r include release/tphp/
+          cp tphp.sh release/tphp/
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-linux-x86_64
-          path: tphp
+          path: release
 
   # ============================================================
   # Linux aarch64 — GCC 编译 TCC (mob 分支)
@@ -134,23 +139,28 @@ jobs:
           chmod +x php
           ./php -v
 
+      - name: UPX compress PHP
+        run: |
+          sudo apt install -y upx-ucl
+          upx --best php
+
       - name: Test
         run: ./php tphp.php test/main/min.php
 
       - name: Package
         run: |
-          mkdir -p tphp
-          cp -r tcc tphp/
-          cp php tphp/
-          cp tphp.php tphp/
-          cp -r src tphp/
-          cp -r include tphp/
-          cp tphp.sh tphp/
+          mkdir -p release
+          cp -r tcc release/tphp/
+          cp php release/tphp/
+          cp tphp.php release/tphp/
+          cp -r src release/tphp/
+          cp -r include release/tphp/
+          cp tphp.sh release/tphp/
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-linux-aarch64
-          path: tphp
+          path: release
 
   # ============================================================
   # macOS aarch64 — clang 编译 TCC (mob 分支)
@@ -189,20 +199,25 @@ jobs:
           chmod +x php
           ./php -v
 
+      - name: UPX compress PHP
+        run: |
+          brew install upx
+          upx --best php
+
       - name: Test
         run: ./php tphp.php test/main/min.php
 
       - name: Package
         run: |
-          mkdir -p tphp
-          cp -r tcc tphp/
-          cp php tphp/
-          cp tphp.php tphp/
-          cp -r src tphp/
-          cp -r include tphp/
-          cp tphp.sh tphp/
+          mkdir -p release
+          cp -r tcc release/tphp/
+          cp php release/tphp/
+          cp tphp.php release/tphp/
+          cp -r src release/tphp/
+          cp -r include release/tphp/
+          cp tphp.sh release/tphp/
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-macos-aarch64
-          path: tphp
+          path: release

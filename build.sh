@@ -27,9 +27,12 @@ echo "=== 3. 编译 & 安装 ==="
 make
 make install
 
-echo "=== 4. 整理 TCC 头文件 ==="
-# TCC 内部头文件 (stddef.h, stdarg.h 等) 在 lib/tcc/include/
-# 复制到 include/ 使 -B 参数和默认搜索能找到
+echo "=== 4. 整理 TCC 目录结构 ==="
+# make install 把运行时文件放在 lib/tcc/ 下
+# -B 参数直接在目录下找 libtcc1.a，复制一份到 tcc/
+cp ../tcc/lib/tcc/libtcc1.a ../tcc/
+cp ../tcc/lib/tcc/*.o       ../tcc/ 2>/dev/null || true
+# 头文件复制到 include/ 使 -B 能找到
 mkdir -p ../tcc/include
 cp -r ../tcc/lib/tcc/include/* ../tcc/include/ 2>/dev/null || true
 

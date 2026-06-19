@@ -210,6 +210,10 @@ foreach ($standaloneDirs as $dir) {
     }
 }
 
+// TCC 编译时相对路径基于 CWD，先切到项目根目录
+$savedCwd = getcwd();
+chdir(__DIR__);
+
 $cmd = sprintf(
     '"%s"%s -I"%s" -o "%s" "%s" 2>&1',
     $ccExe, $bFlag, $includeDir, $outExe, $cFile
@@ -218,6 +222,7 @@ $cmd = sprintf(
 $tccOutput = [];
 $retval = 0;
 exec($cmd, $tccOutput, $retval);
+chdir($savedCwd);
 
 if ($retval !== 0) {
     echo "✗ TCC 编译失败:\n";
