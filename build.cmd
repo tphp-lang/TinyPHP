@@ -11,7 +11,7 @@ git clone --depth 1 --branch mob https://repo.or.cz/tinycc.git tcc
 
 echo "=== 2. 编译 TCC ==="
 cd tcc/win32
-cmd /c build-tcc.bat
+cmd //c build-tcc.bat
 
 echo "=== 3. 清理无关文件（仅保留 win32/） ==="
 cd ..
