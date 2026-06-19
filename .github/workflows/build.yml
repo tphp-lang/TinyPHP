@@ -62,12 +62,11 @@ jobs:
           Copy-Item src -Recurse -Destination tphp/src
           Copy-Item include -Recurse -Destination tphp/include
           Copy-Item tphp.sh tphp/
-          7z a tinyphp-win-x86_64.zip ./tphp
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-win-x86_64
-          path: tinyphp-win-x86_64.zip
+          path: tphp
 
   # ============================================================
   # Linux x86_64 — GCC 编译 TCC (mob 分支)
@@ -111,12 +110,11 @@ jobs:
           cp -r src tphp/
           cp -r include tphp/
           cp tphp.sh tphp/
-          tar czf tinyphp-linux-x86_64.tar.gz tphp
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-linux-x86_64
-          path: tinyphp-linux-x86_64.tar.gz
+          path: tphp
 
   # ============================================================
   # Linux aarch64 — GCC 编译 TCC (mob 分支)
@@ -160,12 +158,11 @@ jobs:
           cp -r src tphp/
           cp -r include tphp/
           cp tphp.sh tphp/
-          tar czf tinyphp-linux-aarch64.tar.gz tphp
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-linux-aarch64
-          path: tinyphp-linux-aarch64.tar.gz
+          path: tphp
 
   # ============================================================
   # macOS aarch64 — clang 编译 TCC (mob 分支)
@@ -218,9 +215,8 @@ jobs:
           cp -r src tphp/
           cp -r include tphp/
           cp tphp.sh tphp/
-          tar czf tinyphp-macos-aarch64.tar.gz tphp
 
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-macos-aarch64
-          path: tinyphp-macos-aarch64.tar.gz
+          path: tphp

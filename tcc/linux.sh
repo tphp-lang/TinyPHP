@@ -22,9 +22,8 @@ echo "=== 2. 配置 TCC（相对路径，可重定位） ==="
     --config-backtrace=yes \
     --debug
 
-echo "=== 3. 编译 & 安装 ==="
+echo "=== 3. 编译 ==="
 make
-make install
 
 echo "=== 4. 组装独立 TCC 目录 ==="
 cd ..
