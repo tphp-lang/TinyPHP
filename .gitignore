@@ -9,4 +9,5 @@
 *.log
 *.tmp
 build/
-tcc/tcc
+tcc
+tcc-src/

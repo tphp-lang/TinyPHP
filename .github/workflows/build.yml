@@ -32,14 +32,8 @@ jobs:
         shell: msys2 {0}
         run: |
           export PATH="/mingw64/bin:$PATH"
-          mkdir -p ../tcc/win32
-          git clone --depth 1 --branch mob https://repo.or.cz/tinycc.git tinycc-src
-          cd tinycc-src
-          ./configure --prefix=../tcc/win32 --bindir=../tcc/win32 --cc=gcc --extra-cflags=-O3
-          mingw32-make
-          mingw32-make install
-          cp tcc.exe ../tcc/win32/
-          ls -la ../tcc/win32/tcc.exe
+          bash build.cmd
+          ls -la tcc/win32/tcc.exe
 
       - name: Download PHP
         shell: pwsh
@@ -85,9 +79,8 @@ jobs:
 
       - name: Build TCC
         run: |
-          cd tcc
-          bash linux.sh
-          ./tcc -v
+          bash build.sh
+          ./tcc/tcc -v
 
       - name: Download PHP
         run: |
@@ -101,10 +94,8 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p tphp/tcc
-          cp tcc/tcc tphp/tcc/
-          cp -r tcc/tcc-standalone/* tphp/tcc/ 2>/dev/null || true
-          rm -rf tphp/tcc/win32 tphp/tcc/tinycc-src 2>/dev/null || true
+          mkdir -p tphp
+          cp -r tcc tphp/
           cp php tphp/
           cp tphp.php tphp/
           cp -r src tphp/
@@ -133,9 +124,8 @@ jobs:
 
       - name: Build TCC
         run: |
-          cd tcc
-          bash linux.sh
-          ./tcc -v
+          bash build.sh
+          ./tcc/tcc -v
 
       - name: Download PHP
         run: |
@@ -149,10 +139,8 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p tphp/tcc
-          cp tcc/tcc tphp/tcc/
-          cp -r tcc/tcc-standalone/* tphp/tcc/ 2>/dev/null || true
-          rm -rf tphp/tcc/win32 tphp/tcc/tinycc-src 2>/dev/null || true
+          mkdir -p tphp
+          cp -r tcc tphp/
           cp php tphp/
           cp tphp.php tphp/
           cp -r src tphp/
@@ -206,10 +194,8 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p tphp/tcc
-          cp tcc/tcc tphp/tcc/ 2>/dev/null || true
-          cp -r tcc/lib tcc/include tcc/bin  tphp/tcc/ 2>/dev/null || true
-          rm -rf tphp/tcc/win32 tphp/tcc/tinycc-src 2>/dev/null || true
+          mkdir -p tphp
+          cp -r tcc tphp/
           cp php tphp/
           cp tphp.php tphp/
           cp -r src tphp/
