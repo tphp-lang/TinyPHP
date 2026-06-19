@@ -41,6 +41,7 @@ cp /usr/lib/$ARCH/crtn.o tcc-standalone/lib/ 2>/dev/null || true
 # TCC 自带的头文件和库
 cp -r tinycc-src/include/*   tcc-standalone/include/ 2>/dev/null || true
 cp -r tinycc-src/lib/*.a     tcc-standalone/lib/     2>/dev/null || true
+cp    tinycc-src/libtcc1.a   tcc-standalone/lib/     2>/dev/null || true
 
 # glibc 多架构头文件
 cp -r /usr/include/$ARCH/bits tcc-standalone/include/ 2>/dev/null || true
