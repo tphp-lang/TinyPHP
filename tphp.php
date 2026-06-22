@@ -4,11 +4,11 @@
 declare(strict_types=1);
 
 // ============================================================
-// TinyPHP — PHP → C 转译编译器（支持多文件）
+// TinyPHP — PHP → C transpiler (multi-file support)
 //
-// 用法:
+// Usage:
 //   tphp <file.php> [<file2.php> ...] [-o <output.exe>]
-//   tphp .                      编译当前目录所有 .php
+//   tphp .                      compile all .php in current dir
 //   tphp -f <file.php> [-o <output.exe>]
 // ============================================================
 
@@ -27,11 +27,11 @@ require_once __DIR__ . '/src/Parser.php';
 require_once __DIR__ . '/src/CodeGenerator.php';
 require_once __DIR__ . '/src/Compiler.php';
 
-// --- 参数解析 ---
+// --- Parse arguments ---
 $options = getopt('f:o:h', ['help']);
 $cc      = null;
 
-// 手动解析 -cc xxx 和 -o xxx（PHP getopt 不完全兼容）
+// Manual parse -cc xxx and -o xxx (PHP getopt not fully compatible)
 $posArgs = [];
 for ($i = 1, $n = count($argv); $i < $n; $i++) {
     if ($argv[$i] === '-cc' && isset($argv[$i + 1])) {
@@ -54,34 +54,34 @@ if ((empty($args) && !isset($options['f'])) || isset($options['h']) || isset($op
 
 $outExe = $outExe ?? $options['o'] ?? '';
 
-// --- 收集所有 .php 文件 ---
+// --- Collect all .php files ---
 $files = collectFiles($args);
 
 if (empty($files)) {
-    die("错误: 没有找到 .php 文件\n");
+    die("Error: no .php files found\n");
 }
 
-// 入口文件 = 第一个文件，用于命名
+// First file used for naming
 $entryFile = $files[0];
 
-// 路径
+// Paths
 $cwd        = getcwd();
 $includeDir = __DIR__ . DIRECTORY_SEPARATOR . 'include';
 
-// PHAR 模式：将 include/ 和 tcc/ 解压到 PHAR 同级目录（TCC 不识别 phar:// 路径）
+// PHAR mode: extract include/ and tcc/ alongside the PHAR (TCC can't read phar://)
 $inPhar = str_starts_with(__DIR__, 'phar://');
 $pharDir = '';
 if ($inPhar) {
     $pharDir = dirname(Phar::running(false));
 
-    // 解压 TinyPHP 头文件（仅首次）
+    // Extract TinyPHP headers (first run only)
     $pharIncludeDir = $includeDir;
     $destIncludeDir = $pharDir . DIRECTORY_SEPARATOR . 'include';
     if (!is_dir($destIncludeDir)) {
         extractPharDir($pharIncludeDir, $destIncludeDir);
     }
 
-    // 解压 TCC 编译器（仅首次）
+    // Extract TCC compiler (first run only)
     $pharRoot = dirname($includeDir);
     $pharTccDir = $pharRoot . '/tcc';
     $destTccDir = $pharDir . DIRECTORY_SEPARATOR . 'tcc';
@@ -92,17 +92,17 @@ if ($inPhar) {
     $includeDir = $destIncludeDir;
 }
 
-// 编译器选择：-cc 指定外部编译器，否则用内置 TCC
+// Compiler selection: -cc for external compiler, otherwise built-in TCC
 if ($cc !== null) {
     $ccExe = $cc;
-    // 简单检测：如果是纯名称（无路径分隔符），依赖系统 PATH
+    // If it's a bare name (no path separator), rely on system PATH
     if (!str_contains($ccExe, '/') && !str_contains($ccExe, '\\')) {
-        // 不做文件检查，交给 exec 处理
+        // Don't check file existence, let exec handle it
     } elseif (!file_exists($ccExe)) {
-        die("错误: 指定编译器未找到: {$ccExe}\n");
+        die("Error: specified compiler not found: {$ccExe}\n");
     }
 } elseif ($inPhar) {
-    // PHAR 模式：使用解压到 PHAR 同级目录的内置 TCC
+    // PHAR mode: use built-in TCC extracted alongside the PHAR
     $tccBase = $pharDir . DIRECTORY_SEPARATOR . 'tcc';
     if (PHP_OS_FAMILY === 'Windows') {
         $ccExe = $tccBase . DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe';
@@ -110,21 +110,21 @@ if ($cc !== null) {
         $ccExe = $tccBase . DIRECTORY_SEPARATOR . 'tcc';
         if (file_exists($ccExe)) chmod($ccExe, 0755);
     }
-    if (!file_exists($ccExe)) die("错误: 内置 TCC 未在 PHAR 中找到: {$ccExe}\n请确保构建 PHAR 时 tcc/ 目录存在\n");
+    if (!file_exists($ccExe)) die("Error: built-in TCC not found in PHAR: {$ccExe}\nMake sure tcc/ exists when building the PHAR\n");
 } else {
-    // 开发模式：TCC 在项目目录下
+    // Dev mode: TCC is alongside the project
     $ccExe = __DIR__ . DIRECTORY_SEPARATOR . 'tcc'
         . (PHP_OS_FAMILY === 'Windows'
             ? DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe'
             : DIRECTORY_SEPARATOR . 'tcc');
-    if (!file_exists($ccExe)) die("错误: 内置 TCC 未找到: {$ccExe}\n请先编译 TCC 或使用 -cc 指定其他编译器\n");
+    if (!file_exists($ccExe)) die("Error: built-in TCC not found: {$ccExe}\nBuild TCC first or use -cc to specify another compiler\n");
 }
 
-if (!is_dir($includeDir))    die("错误: include 目录不存在: {$includeDir}\n");
+if (!is_dir($includeDir))    die("Error: include directory not found: {$includeDir}\n");
 
-// --- Phase 1: 转译所有 PHP → C ---
+// --- Phase 1: Transpile all PHP → C ---
 $allFilesStr = implode(', ', array_map(fn($f) => basename($f), $files));
-echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
+echo "[1/2] Transpiling {$allFilesStr} → C...\n";
 
     try {
     $mainClass = null;
@@ -133,12 +133,13 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
     $constants = [];
     $enums = [];
 
-    // 两阶段解析：先解析辅助文件（非 Main），收集枚举/类，最后解析 Main 入口
-    // 确保 Main 文件解析时已知所有跨文件枚举
+    // Two-phase parsing: parse auxiliary files (non-Main) first,
+    // collect enums/classes, then parse Main entry last.
+    // Ensures cross-file enums are known when parsing Main.
     $mainFile  = null;
     $otherFiles = [];
     foreach ($files as $file) {
-        // 快速检测文件是否包含 class Main（全局命名空间）
+        // Quick check: does file contain class Main (global namespace)?
         $src = file_get_contents($file);
         if (preg_match('/^\s*class\s+Main\b/m', (string)$src)) {
             $mainFile = $file;
@@ -148,11 +149,11 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
     }
 
     if ($mainFile === null) {
-        die("错误: 未找到全局 class Main（入口类必须在全局命名空间且名为 Main）\n");
+        die("Error: no global class Main found (entry class must be named Main in the global namespace)\n");
     }
     $entryFile = $mainFile;
 
-    // 收集所有已知枚举名（用于跨文件引用）
+    // Collect known enum names (for cross-file references)
     $knownEnumNames = [];
 
     $orderedFiles = array_merge($otherFiles, [$mainFile]);
@@ -160,17 +161,17 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
         echo "       + {$file}\n";
         $source = file_get_contents($file);
         if ($source === false || trim($source) === '') {
-            die("错误: PHP 文件为空: {$file}\n");
+            die("Error: PHP file is empty: {$file}\n");
         }
 
         $lexer  = new Lexer($source);
         $tokens = $lexer->tokenize();
         $parser = new Parser($tokens);
-        // 注入其他文件已声明的枚举名（支持跨文件枚举引用）
+        // Inject enum names declared in other files (for cross-file enum references)
         $parser->setKnownEnums($knownEnumNames);
         $ast    = $parser->parse();
 
-        // 合并 AST —— 从主类和辅助类中找出全局 class Main 作为入口
+        // Merge AST — find global class Main from main + auxiliary classes
         $candidates = array_merge(
             $ast->mainClass ? [$ast->mainClass] : [],
             $ast->extraClasses
@@ -178,7 +179,7 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
         foreach ($candidates as $cls) {
             if ($cls->name === 'Main' && $cls->namespace === '') {
                 if ($mainClass !== null) {
-                    die("错误: 发现多个全局 class Main 声明\n");
+                    die("Error: multiple global class Main declarations found\n");
                 }
                 $mainClass = $cls;
             } else {
@@ -189,7 +190,7 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
         $constants    = array_merge($constants, $ast->constants);
         $enums        = array_merge($enums, $ast->enums);
 
-        // 收集本文件声明的枚举名（完全限定名），供后续文件引用
+        // Collect enum names (FQN) declared in this file for later files
         foreach ($ast->enums as $e) {
             $fq = ($e->namespace !== '')
                 ? $e->namespace . '\\' . $e->name
@@ -199,17 +200,17 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
     }
 
     if ($mainClass === null) {
-        die("错误: 未找到全局 class Main（入口类必须在全局命名空间且名为 Main）\n");
+        die("Error: no global class Main found (entry class must be named Main in the global namespace)\n");
     }
 
-    // 最终输出路径（以入口文件名为准）
+    // Output path (derived from entry filename)
     if ($outExe === '') {
         $ext = (PHP_OS_FAMILY === 'Windows') ? '.exe' : '';
         $outExe = $cwd . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . $ext;
     }
     $outDir = $cwd . DIRECTORY_SEPARATOR . 'build';
 
-    // 编译前清理 build 目录
+    // Clean build directory before compiling
     if (is_dir($outDir)) {
         $contents = glob($outDir . DIRECTORY_SEPARATOR . '*');
         if ($contents !== false) {
@@ -228,16 +229,16 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
     echo "       ✓ {$cFile}\n";
 
 } catch (\Throwable $e) {
-    die("✗ 转译失败: " . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
+    die("✗ Transpile failed: " . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
 }
 
-// --- Phase 2: C 编译 → 产物 ---
-echo "[2/2] 编译 → {$outExe}...\n";
+// --- Phase 2: C compile → binary ---
+echo "[2/2] Compiling → {$outExe}...\n";
 
-// TCC -B 标志：告诉 TCC 到哪里找它的 lib/ 和 include/
+// TCC -B flag: tells TCC where to find its lib/ and include/
 $bFlag = '';
 if ($inPhar) {
-    // PHAR 模式：TCC 已解压到 PHAR 同级目录
+    // PHAR mode: TCC extracted alongside PHAR
     if (PHP_OS_FAMILY === 'Windows') {
         $tccSysDir = $pharDir . DIRECTORY_SEPARATOR . 'tcc' . DIRECTORY_SEPARATOR . 'win32';
     } else {
@@ -247,7 +248,7 @@ if ($inPhar) {
         $bFlag = ' -B"' . $tccSysDir . '"';
     }
 } else {
-    // 开发模式：自动检测 TCC standalone 目录
+    // Dev mode: auto-detect TCC standalone directory
     $tccBase = dirname($ccExe);
     $standaloneDirs = [
         $tccBase . '/tcc-standalone',
@@ -271,7 +272,7 @@ $retval = 0;
 exec($cmd, $tccOutput, $retval);
 
 if ($retval !== 0) {
-    echo "✗ TCC 编译失败:\n";
+    echo "✗ TCC compile failed:\n";
     echo implode("\n", $tccOutput) . "\n";
     exit(1);
 }
@@ -293,11 +294,11 @@ function collectFiles(array $args): array
             $real = realpath($arg) ?: $arg;
             // 拒绝 build/ 目录内的文件
             if (isInBuildDir($real)) {
-                die("错误: 不允许编译 build/ 目录下的文件: {$arg}\n");
+                die("Error: files inside build/ are not allowed: {$arg}\n");
             }
             $files[] = $real;
         } else {
-            die("错误: {$arg} 不是有效的 .php 文件\n");
+            die("Error: {$arg} is not a valid .php file\n");
         }
     }
     return array_unique($files);
@@ -348,19 +349,19 @@ function extractPharDir(string $pharDir, string $destDir): void
 function showHelp(): never
 {
     echo <<<HELP
-TinyPHP — PHP → C 转译编译器（支持多文件）
+TinyPHP — PHP → C transpiler (multi-file support)
 
-用法:
+Usage:
   tphp <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>]
   tphp -f <file.php> [-o <output>]
-  tphp .                     编译当前目录所有 .php
+  tphp .                     compile all .php in current dir
 
-选项:
-  -o <output>       输出文件路径（默认执行目录下以入口文件名命名）
-  -cc <compiler>    指定 C 编译器（默认使用内置 TCC）
-  -h, --help        显示帮助
+Options:
+  -o <output>       output file path (default: named after entry file)
+  -cc <compiler>    specify C compiler (default: built-in TCC)
+  -h, --help        show help
 
-示例:
+Examples:
   tphp main.php demo.php
   tphp .
   tphp main.php -o app.exe

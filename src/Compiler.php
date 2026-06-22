@@ -22,7 +22,7 @@ class Compiler
     public function compile(string $phpFile, string $outputDir): string
     {
         if (!file_exists($phpFile)) {
-            throw new RuntimeException("文件不存在: {$phpFile}");
+            throw new RuntimeException("File not found: {$phpFile}");
         }
 
         // 确保输出目录存在
@@ -80,7 +80,7 @@ class Compiler
 
         if ($retval !== 0) {
             throw new RuntimeException(
-                "TCC 编译失败:\n" . implode("\n", $output)
+                "TCC compilation failed:\n" . implode("\n", $output)
             );
         }
 

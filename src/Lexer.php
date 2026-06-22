@@ -489,7 +489,7 @@ class Lexer
     private function error(string $msg): never
     {
         throw new RuntimeException(
-            sprintf("Lexer 错误 [%d:%d]: %s", $this->line, $this->column, $msg)
+            sprintf("Lexer error [%d:%d]: %s", $this->line, $this->column, $msg)
         );
     }
 
@@ -517,14 +517,14 @@ class Lexer
         }
 
         if ($id === '') {
-            $this->error('heredoc 缺少标识符');
+            $this->error('heredoc missing identifier');
         }
 
         // 跳过标识符后的空白到换行（包括空格/tab）
         while ($this->pos < strlen($this->source) && $this->peek() !== "\n" && $this->peek() !== "\r") {
             $ch = $this->peek();
             if ($ch !== ' ' && $ch !== "\t") {
-                $this->error("heredoc 标识符 '{$id}' 后不允许有 '{$ch}'");
+                $this->error("heredoc identifier '{$id}' cannot be followed by '{$ch}'");
             }
             $this->advance();
         }
