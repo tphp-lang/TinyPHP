@@ -68,6 +68,30 @@ $entryFile = $files[0];
 $cwd        = getcwd();
 $includeDir = __DIR__ . DIRECTORY_SEPARATOR . 'include';
 
+// PHAR 模式：将 include/ 和 tcc/ 解压到 PHAR 同级目录（TCC 不识别 phar:// 路径）
+$inPhar = str_starts_with(__DIR__, 'phar://');
+$pharDir = '';
+if ($inPhar) {
+    $pharDir = dirname(Phar::running(false));
+
+    // 解压 TinyPHP 头文件（仅首次）
+    $pharIncludeDir = $includeDir;
+    $destIncludeDir = $pharDir . DIRECTORY_SEPARATOR . 'include';
+    if (!is_dir($destIncludeDir)) {
+        extractPharDir($pharIncludeDir, $destIncludeDir);
+    }
+
+    // 解压 TCC 编译器（仅首次）
+    $pharRoot = dirname($includeDir);
+    $pharTccDir = $pharRoot . '/tcc';
+    $destTccDir = $pharDir . DIRECTORY_SEPARATOR . 'tcc';
+    if (!is_dir($destTccDir) && is_dir($pharTccDir)) {
+        extractPharDir($pharTccDir, $destTccDir);
+    }
+
+    $includeDir = $destIncludeDir;
+}
+
 // 编译器选择：-cc 指定外部编译器，否则用内置 TCC
 if ($cc !== null) {
     $ccExe = $cc;
@@ -77,7 +101,18 @@ if ($cc !== null) {
     } elseif (!file_exists($ccExe)) {
         die("错误: 指定编译器未找到: {$ccExe}\n");
     }
+} elseif ($inPhar) {
+    // PHAR 模式：使用解压到 PHAR 同级目录的内置 TCC
+    $tccBase = $pharDir . DIRECTORY_SEPARATOR . 'tcc';
+    if (PHP_OS_FAMILY === 'Windows') {
+        $ccExe = $tccBase . DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe';
+    } else {
+        $ccExe = $tccBase . DIRECTORY_SEPARATOR . 'tcc';
+        if (file_exists($ccExe)) chmod($ccExe, 0755);
+    }
+    if (!file_exists($ccExe)) die("错误: 内置 TCC 未在 PHAR 中找到: {$ccExe}\n请确保构建 PHAR 时 tcc/ 目录存在\n");
 } else {
+    // 开发模式：TCC 在项目目录下
     $ccExe = __DIR__ . DIRECTORY_SEPARATOR . 'tcc'
         . (PHP_OS_FAMILY === 'Windows'
             ? DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe'
@@ -199,23 +234,32 @@ echo "[1/2] 转译 {$allFilesStr} → C 代码...\n";
 // --- Phase 2: C 编译 → 产物 ---
 echo "[2/2] 编译 → {$outExe}...\n";
 
-// 独立 TCC：-B 指向 standalone/lib/include 所在目录，让 TCC 可重定位
+// TCC -B 标志：告诉 TCC 到哪里找它的 lib/ 和 include/
 $bFlag = '';
-$tccBase = dirname($ccExe);
-$standaloneDirs = [
-    $tccBase . '/tcc-standalone',   // Linux 构建产物
-    $tccBase,                        // Windows/macOS 直接安装到 tcc 目录
-];
-foreach ($standaloneDirs as $dir) {
-    if (is_dir($dir . '/lib') || is_dir($dir . '/include')) {
-        $bFlag = ' -B"' . realpath($dir) . '"';
-        break;
+if ($inPhar) {
+    // PHAR 模式：TCC 已解压到 PHAR 同级目录
+    if (PHP_OS_FAMILY === 'Windows') {
+        $tccSysDir = $pharDir . DIRECTORY_SEPARATOR . 'tcc' . DIRECTORY_SEPARATOR . 'win32';
+    } else {
+        $tccSysDir = $pharDir . DIRECTORY_SEPARATOR . 'tcc';
+    }
+    if (is_dir($tccSysDir)) {
+        $bFlag = ' -B"' . $tccSysDir . '"';
+    }
+} else {
+    // 开发模式：自动检测 TCC standalone 目录
+    $tccBase = dirname($ccExe);
+    $standaloneDirs = [
+        $tccBase . '/tcc-standalone',
+        $tccBase,
+    ];
+    foreach ($standaloneDirs as $dir) {
+        if (is_dir($dir . '/lib') || is_dir($dir . '/include')) {
+            $bFlag = ' -B"' . realpath($dir) . '"';
+            break;
+        }
     }
 }
-
-// TCC 编译时相对路径基于 CWD，先切到项目根目录
-$savedCwd = getcwd();
-chdir(__DIR__);
 
 $cmd = sprintf(
     '"%s"%s -I"%s" -o "%s" "%s" 2>&1',
@@ -225,7 +269,6 @@ $cmd = sprintf(
 $tccOutput = [];
 $retval = 0;
 exec($cmd, $tccOutput, $retval);
-chdir($savedCwd);
 
 if ($retval !== 0) {
     echo "✗ TCC 编译失败:\n";
@@ -284,6 +327,22 @@ function isInBuildDir(string $path): bool
     $sep = DIRECTORY_SEPARATOR;
     $norm = str_replace(['/', '\\'], $sep, $path);
     return str_contains($norm, $sep . 'build' . $sep);
+}
+
+/** 从 phar:// 路径递归提取目录到硬盘 */
+function extractPharDir(string $pharDir, string $destDir): void
+{
+    if (!is_dir($pharDir)) return;
+    $iter = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($pharDir, FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($iter as $file) {
+        $relPath = str_replace($pharDir . DIRECTORY_SEPARATOR, '', $file->getPathname());
+        $dest = $destDir . DIRECTORY_SEPARATOR . $relPath;
+        $parent = dirname($dest);
+        if (!is_dir($parent)) mkdir($parent, 0777, true);
+        copy($file->getPathname(), $dest);
+    }
 }
 
 function showHelp(): never

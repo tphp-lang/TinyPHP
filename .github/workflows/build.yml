@@ -15,6 +15,7 @@ jobs:
     runs-on: windows-latest
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-micro-win.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -38,21 +39,31 @@ jobs:
           Invoke-WebRequest -Uri $env:PHP_URL -OutFile php.zip
           Expand-Archive -Path php.zip -DestinationPath .
           ls php.exe
+      
+      - name: Download MICRO
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:MICRO_URL -OutFile micro.zip
+          Expand-Archive -Path micro.zip -DestinationPath .
+          ls micro.sfx
+      
+      - name: BUILD PHAR
+        shell: pwsh
+        run: |
+          php.exe build.php
+          cmd /c "COPY /b micro.sfx + tphp.phar tphp.exe"
 
       - name: Test
         shell: pwsh
-        run: ./php tphp.php test/main/min.php
+        run: |
+          ./tphp.exe test/main/min.php
+          ./min.exe
 
       - name: Package
         shell: pwsh
         run: |
           mkdir release
-          Copy-Item tcc/win32 -Recurse -Destination release/tphp/tcc/win32
-          Copy-Item php.exe release/tphp/
-          Copy-Item tphp.php release/tphp/
-          Copy-Item src -Recurse -Destination release/tphp/src
-          Copy-Item include -Recurse -Destination release/tphp/include
-          Copy-Item tphp.cmd release/tphp/
+          Copy-Item tphp.exe release/tphp/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -66,6 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-linux-x86_64-glibc.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -86,23 +98,30 @@ jobs:
           chmod +x php
           ./php -v
 
-      - name: UPX compress PHP
+      - name: Download MICRO
         run: |
-          sudo apt install -y upx-ucl
-          upx --best php
+          curl -fsSL -o micro.zip "$MICRO_URL"
+          unzip -q micro.zip
+          chmod +x micro.sfx
+          ls -la micro.sfx
+
+      - name: BUILD PHAR
+        run: |
+          ./php build.php
+          cat micro.sfx tphp.phar > tphp
+          chmod +x tphp
+          ls -la tphp
 
       - name: Test
-        run: ./php tphp.php test/main/min.php
+        run: |
+          ./tphp test/main/min.php
+          ./min
 
       - name: Package
         run: |
           mkdir -p release
-          cp -r tcc release/tphp/
-          cp php release/tphp/
-          cp tphp.php release/tphp/
-          cp -r src release/tphp/
-          cp -r include release/tphp/
           cp tphp release/tphp/
+          chmod +x release/tphp/tphp
 
       - uses: actions/upload-artifact@v4
         with:
@@ -116,6 +135,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-aarch64-glibc.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-linux-aarch64-glibc.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -136,23 +156,30 @@ jobs:
           chmod +x php
           ./php -v
 
-      - name: UPX compress PHP
+      - name: Download MICRO
         run: |
-          sudo apt install -y upx-ucl
-          upx --best php
+          curl -fsSL -o micro.zip "$MICRO_URL"
+          unzip -q micro.zip
+          chmod +x micro.sfx
+          ls -la micro.sfx
+
+      - name: BUILD PHAR
+        run: |
+          ./php build.php
+          cat micro.sfx tphp.phar > tphp
+          chmod +x tphp
+          ls -la tphp
 
       - name: Test
-        run: ./php tphp.php test/main/min.php
+        run: |
+          ./tphp test/main/min.php
+          ./min
 
       - name: Package
         run: |
           mkdir -p release
-          cp -r tcc release/tphp/
-          cp php release/tphp/
-          cp tphp.php release/tphp/
-          cp -r src release/tphp/
-          cp -r include release/tphp/
           cp tphp release/tphp/
+          chmod +x release/tphp/tphp
 
       - uses: actions/upload-artifact@v4
         with:
@@ -166,6 +193,7 @@ jobs:
     runs-on: macos-latest
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-macos-aarch64.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -196,18 +224,30 @@ jobs:
           chmod +x php
           ./php -v
 
+      - name: Download MICRO
+        run: |
+          curl -fsSL -o micro.zip "$MICRO_URL"
+          unzip -q micro.zip
+          chmod +x micro.sfx
+          ls -la micro.sfx
+
+      - name: BUILD PHAR
+        run: |
+          ./php build.php
+          cat micro.sfx tphp.phar > tphp
+          chmod +x tphp
+          ls -la tphp
+
       - name: Test
-        run: ./php tphp.php test/main/min.php
+        run: |
+          ./tphp test/main/min.php
+          ./min
 
       - name: Package
         run: |
           mkdir -p release
-          cp -r tcc release/tphp/
-          cp php release/tphp/
-          cp tphp.php release/tphp/
-          cp -r src release/tphp/
-          cp -r include release/tphp/
           cp tphp release/tphp/
+          chmod +x release/tphp/tphp
 
       - uses: actions/upload-artifact@v4
         with:
