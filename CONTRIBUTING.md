@@ -22,11 +22,11 @@ build.sh / build.cmd             TCC 构建脚本
 
 include/                         C 运行时头文件（静态 inline 库）
   ├── common.h                   总入口
-  ├── types.h                    类型定义
+  ├── types.h                    类型定义 + likely/unlikely 分支预测
   ├── val.h                      便捷宏 (VAR_INT, STR_LIT, …)
-  ├── array.h                    PHP 数组（引用计数 + 对象池）
-  ├── runtime.h                  内部辅助（字符串、资源追踪、error）
-  ├── builtin.h                  公开内置（echo, var_dump, exit, …）
+  ├── array.h                    PHP 数组（引用计数 + 128 槽复用池 + 1.5× 增长因子）
+  ├── runtime.h                  内部辅助（字符串池、资源追踪、error）
+  ├── builtin.h                  公开内置（echo, is_*, 数组函数, implode/explode）
   └── os/
       └── times.h                系统函数（time, date, sleep, usleep, hrtime）
 ```
@@ -39,7 +39,7 @@ include/                         C 运行时头文件（静态 inline 库）
 
 ### 2.1 Lexer（词法分析）
 
-**文件**: `src/Lexer.php`
+**文件**: `src/Lexer.php`（~680 行）
 
 **令牌扫描顺序**（优先级从高到低）：
 1. 空白 / 换行（CRLF → 一次 line++）
@@ -55,9 +55,11 @@ include/                         C 运行时头文件（静态 inline 库）
 11. 数字 → int / float
 12. 标识符 / 关键字
 
-**字符串插值**：双引号和 heredoc 内 `{$var->prop}` 支持链式属性访问（`->` 重复解析）。
+**字符串插值**：双引号和 heredoc 内 `{$var->prop}` 支持链式属性访问。
 
 ### 2.2 Parser（语法分析）
+
+**文件**: `src/Parser.php`（~1380 行）
 
 **运算符优先级**（从低到高）：
 
@@ -65,7 +67,7 @@ include/                         C 运行时头文件（静态 inline 库）
 
 ### 2.3 AST（抽象语法树）
 
-**文件**: `src/AST/Node.php`
+**文件**: `src/AST/Node.php`（~820 行）
 
 节点层次（重点）：
 
@@ -96,9 +98,11 @@ ExprNode（抽象，含 line/column）
 └── MatchArm / MatchExpr
 ```
 
-**访问者模式**：每个 `ASTNode::accept(ASTVisitor)` → visitor 对应方法。`CodeGenerator` 是唯一的 `ASTVisitor` 实现。
+**访问者模式**：每个 `ASTNode::accept(ASTVisitor)` → visitor 对应方法。
 
 ### 2.4 CodeGenerator（代码生成）
+
+**文件**: `src/CodeGenerator.php`（~2650 行）
 
 **关键内部状态**：
 
@@ -108,6 +112,9 @@ ExprNode（抽象，含 line/column）
 | `$this->varTypes` | `varName → C 类型` 映射 |
 | `$this->declaredVars` | 已声明变量集合 |
 | `$this->scopeObjects` | 作用域对象列表（方法结尾自动析构） |
+| `$this->arrElementTypes` | 数组元素类型追踪 |
+| `$this->arrValueTypes` | 数组 per-key 类型追踪 |
+| `$this->arrNestedTypes` | 嵌套数组元素类型追踪（2 层） |
 | `$this->classPropTypes` | 类属性类型表 |
 | `$this->classMethodRetTypes` | 类方法返回类型表 |
 | `$this->enumBackingTypes` | 枚举 backing 类型 |
@@ -134,7 +141,7 @@ ExprNode（抽象，含 line/column）
 1. 先解析辅助文件（非 Main），收集枚举名/类名
 2. 再解析 Main 入口文件（此时 `setKnownEnums` 已注入所有枚举名）
 
-**Main 类合并**：扫描所有类中名为 `Main` 且全局命名空间的类作为入口，其余为辅助类。
+**Main 类合并**：扫描所有类中名为 `Main` 且全局命名空间的类作为入口。
 
 ---
 
@@ -145,12 +152,12 @@ ExprNode（抽象，含 line/column）
 | 文件 | 前缀 | 职责 |
 |------|------|------|
 | `common.h` | — | 总入口 |
-| `types.h` | — | 类型系统 |
+| `types.h` | — | 类型系统 + `likely`/`unlikely` |
 | `val.h` | `VAR_*` `STR_LIT` | 便捷宏 |
-| `array.h` | `tphp_fn_arr_` | PHP 数组（对象池优化） |
-| `runtime.h` | `tphp_rt_` | 内部辅助、资源追踪、error |
-| `builtin.h` | `tphp_fn_` | 公开内置 |
-| `os/times.h` | `tphp_fn_` | 系统函数 |
+| `array.h` | `tphp_fn_arr_` | PHP 数组（128 槽 LIFO 复用池 + 1.5× 增长因子） |
+| `runtime.h` | `tphp_rt_` | 内部辅助、64KB 字符串池、资源追踪、error |
+| `builtin.h` | `tphp_fn_` | 公开内置：类型检测、数组函数、implode/explode |
+| `os/times.h` | `tphp_fn_` | 系统函数（跨平台） |
 
 ### 3.2 资源追踪 & error()
 
@@ -160,7 +167,17 @@ ExprNode（抽象，含 line/column）
 
 ### 3.3 数组对象池
 
-`t_array` 使用 256 槽对象池，创建时优先复用已释放的 `t_array` 结构体（`memset(0)` 后 `refcount=1`），避免频繁 `malloc/free`。
+`t_array` 使用 128 槽 LIFO 复用池：
+- `arr_pool_put(a)` — 释放时回收（重置 `length=0, refcount=1`，`memset` entry 区域）
+- `arr_pool_get(cap)` — 创建时优先从池取（匹配容量 ≥ 需求的最近归还项）
+- 池满时回退 `free(a)` / `malloc`
+
+### 3.4 小字符串池
+
+64KB bump allocator（`str_pool_alloc`）：
+- ≤512 字节字符串从池分配（指针移动，零 `malloc`）
+- 超限回退 `malloc`
+- `tphp_rt_str_free` 检查指针范围，池内指针跳过不 `free`
 
 ---
 
@@ -169,19 +186,18 @@ ExprNode（抽象，含 line/column）
 ### 添加新运算符
 
 1. `TokenType`：添加枚举值
-2. `Lexer`：多字符加入 `$multiOps`，三字符特殊处理（如 `<=>`）
+2. `Lexer`：多字符加入 `$multiOps`，三字符特殊处理
 3. `Parser`：在对应优先级方法中添加匹配
-4. `AST/Node.php`：添加 `XxxExpr extends ExprNode` + Visitor 方法（简单运算符可用 `BinaryExpr`）
-5. `CodeGenerator`：`visitBinary()` 中处理 + `inferType()` 返回类型
+4. `AST/Node.php`：添加节点类 + Visitor 方法
+5. `CodeGenerator`：实现 `visitXxx()` + `inferType()` 返回类型
 
 ### 添加内置函数
 
-1. `TokenType` + `Lexer::$keywords` 添加关键词
-2. `Parser`：`parsePrimary()` 标识符检查 + 跳过命名空间解析
-3. `CodeGenerator::visitCall()`：添加处理分支
-4. `CodeGenerator::inferCallReturnType()`：添加返回类型
-5. C 运行时：在 `include/` 下添加实现，并在 `common.h` 中 `#include`
-6. 测试：添加测试文件到 `test/var/`
+1. `CodeGenerator::visitCall()`：添加处理分支
+2. `CodeGenerator::inferCallReturnType()`：添加返回类型
+3. C 运行时：在 `include/` 下添加实现
+4. 测试：添加测试文件到 `test/var/`
+5. 文档：更新 `FUNCTIONS.md` 和 `README.md`
 
 ### 添加系统函数
 
@@ -201,7 +217,8 @@ ExprNode（抽象，含 line/column）
 ### 内存安全
 
 - **error() 全局清理**：退出前遍历资源链释放所有对象/数组/字符串
-- **对象池复用**：`t_array` 释放时回收，创建时 `memset(0)` 防止脏数据
+- **数组对象池**：归还时 `memset(0)` 防止脏数据，容量不足时 `free` 回退
+- **字符串池**：`tphp_rt_str_free` 检查指针范围，池内指针跳过不 `free`
 - **字符串深拷贝**：对象属性赋值时先 `tphp_rt_str_free` 再 `tphp_rt_str_dup`
 - **析构自动释放**：类 `__destruct` 中自动释放所有 `t_string` 属性
 - **数组引用计数**：嵌套数组 `push/set` 自动 `retain`
@@ -219,13 +236,16 @@ ExprNode（抽象，含 line/column）
 | `_cap_` | 闭包捕获 struct |
 | `TPHP_CONST_` | 常量宏 |
 | `_arr_` / `_tmp_` | CodeGenerator 临时变量 |
+| `str_pool_` | 字符串池内部 |
+| `arr_pool_` | 数组池内部 |
 
 ### 代码质量
 
 - **空指针检查**：方法入口 `if (self == NULL) return;`
-- **数组创建**：`if (_arr != NULL) { ... }` 包裹
+- **数组创建**：`if (arr != NULL) { ... }` 包裹
 - **类型不可变**：变量一旦赋值类型固定
-- **TCC 兼容**：避免 C99 特性 TCC 不支持（如 `for` 变量作用域提升到函数级）
+- **TCC 兼容**：避免 C99 特性 TCC 不支持
+- **分支预测**：`likely(x)` 标记热路径，`unlikely(x)` 标记错误/边界
 
 ---
 
@@ -238,13 +258,13 @@ ExprNode（抽象，含 line/column）
 | `src/Token.php` | ~20 | Token 值对象 |
 | `src/AST/Node.php` | ~820 | AST 节点 + Visitor 接口 |
 | `src/Lexer.php` | ~680 | 词法分析（链式属性插值、heredoc、运算符） |
-| `src/Parser.php` | ~1380 | 递归下降解析（**/<=>/混合/match/enum/closure/goto） |
-| `src/CodeGenerator.php` | ~2150 | C 代码生成（内置函数/time系列/error/数组赋值/资源追踪） |
-| `include/types.h` | ~115 | C 类型系统 |
+| `src/Parser.php` | ~1380 | 递归下降解析 |
+| `src/CodeGenerator.php` | ~2650 | C 代码生成（is_*/数组函数/nested_types/arrNestedTypes/propType链式） |
+| `include/types.h` | ~130 | C 类型系统 + likely/unlikely 宏 |
 | `include/val.h` | ~45 | 便捷宏 |
-| `include/array.h` | ~290 | PHP 数组（对象池优化） |
-| `include/runtime.h` | ~290 | 运行时（资源追踪、error、字符串、幂运算） |
-| `include/builtin.h` | ~150 | 公开内置 |
+| `include/array.h` | ~310 | PHP 数组（128 槽复用池 + 1.5× 增长因子 + likely/unlikely） |
+| `include/runtime.h` | ~320 | 运行时（64KB 字符串池、资源追踪、error、幂运算） |
+| `include/builtin.h` | ~330 | 公开内置（类型检测、数组函数、implode/explode） |
 | `include/os/times.h` | ~95 | 系统函数（跨平台） |
 | `include/common.h` | ~15 | 总入口 |
-| `test/var/` | 31 文件 | 测试用例（运算符/时间/error/数组性能） |
+| `test/var/` | 35+ 文件 | 测试用例（array_full/is_type/nested_*/bench_*） |

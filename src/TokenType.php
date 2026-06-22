@@ -64,6 +64,14 @@ enum TokenType: string
     case ISSET      = 'isset';
     case EMPTY_KW   = 'empty';
     case UNSET      = 'unset';
+    case IS_INT     = 'is_int';
+    case IS_FLOAT   = 'is_float';
+    case IS_STRING  = 'is_string';
+    case IS_BOOL    = 'is_bool';
+    case IS_ARRAY   = 'is_array';
+    case IS_OBJECT  = 'is_object';
+    case IS_NULL    = 'is_null';
+    case IS_CALLABLE= 'is_callable';
     case LIST_KW    = 'list';
     case TIME       = 'time';
     case DATE       = 'date';

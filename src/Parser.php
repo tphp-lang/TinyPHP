@@ -1093,7 +1093,7 @@ class Parser
             return $this->setPos($this->parseMatchExpr(), $line, $col);
         }
         // 变量
-        if ($this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP) || $this->check(TokenType::COUNT) || $this->check(TokenType::EXIT) || $this->check(TokenType::DIE) || $this->check(TokenType::ISSET) || $this->check(TokenType::EMPTY_KW) || $this->check(TokenType::UNSET) || $this->check(TokenType::ERROR) || $this->check(TokenType::TIME) || $this->check(TokenType::DATE) || $this->check(TokenType::SLEEP) || $this->check(TokenType::USLEEP) || $this->check(TokenType::HRTIME)) {
+        if ($this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP) || $this->check(TokenType::COUNT) || $this->check(TokenType::EXIT) || $this->check(TokenType::DIE) || $this->check(TokenType::ISSET) || $this->check(TokenType::EMPTY_KW) || $this->check(TokenType::UNSET) || $this->check(TokenType::ERROR) || $this->check(TokenType::TIME) || $this->check(TokenType::DATE) || $this->check(TokenType::SLEEP) || $this->check(TokenType::USLEEP) || $this->check(TokenType::HRTIME) || $this->check(TokenType::IS_INT) || $this->check(TokenType::IS_FLOAT) || $this->check(TokenType::IS_STRING) || $this->check(TokenType::IS_BOOL) || $this->check(TokenType::IS_ARRAY) || $this->check(TokenType::IS_OBJECT) || $this->check(TokenType::IS_NULL) || $this->check(TokenType::IS_CALLABLE)) {
             $name = $this->advance()->lexeme;
 
             // $obj->xxx 或 Class::xxx
@@ -1129,7 +1129,7 @@ class Parser
                     return $this->setPos(new CallExpr(new VariableExpr($name), '__invoke', $args), $line, $col);
                 }
                 // 内置函数不解析命名空间
-                if ($name !== 'var_dump' && $name !== 'count' && $name !== 'exit' && $name !== 'die' && $name !== 'isset' && $name !== 'empty' && $name !== 'unset' && $name !== 'error' && $name !== 'time' && $name !== 'date' && $name !== 'sleep' && $name !== 'usleep' && $name !== 'hrtime') {
+                if ($name !== 'var_dump' && $name !== 'count' && $name !== 'exit' && $name !== 'die' && $name !== 'isset' && $name !== 'empty' && $name !== 'unset' && $name !== 'error' && $name !== 'time' && $name !== 'date' && $name !== 'sleep' && $name !== 'usleep' && $name !== 'hrtime' && !str_starts_with($name, 'is_')) {
                     $name = $this->resolveFunctionName($name);
                 }
                 return $this->setPos(new CallExpr(null, $name, $args), $line, $col);

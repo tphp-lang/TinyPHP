@@ -12,6 +12,17 @@
 #endif
 #endif
 
+/* branch prediction hints — TCC/GCC/Clang 均支持 */
+#ifndef likely
+#if defined(__GNUC__) || defined(__clang__) || defined(__TINYC__)
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#else
+#define likely(x)   (x)
+#define unlikely(x) (x)
+#endif
+#endif
+
 // ============================================================
 // 类型标记枚举
 // ============================================================

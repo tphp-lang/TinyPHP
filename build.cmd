@@ -20,7 +20,7 @@ for %%f in (tcc\*) do if not exist "%%f\" del /q "%%f" 2>nul
 
 echo === 4. 清理 win32\ 中无用文件 ===
 cd tcc\win32
-del /q build-tcc.bat *.c *.h *.def Makefile configure VERSION 2>nul
+del /q build-tcc.bat *.def Makefile configure VERSION 2>nul
 for /d %%d in (*) do if not "%%~nxd"=="include" if not "%%~nxd"=="lib" if not "%%~nxd"=="doc" rmdir /s /q "%%d" 2>nul
 cd ..\..
 

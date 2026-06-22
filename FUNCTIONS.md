@@ -19,7 +19,7 @@ echo "a", "b", "c";        // 多参数逗号分隔
 | 表达式 | ✅ | ✅ |
 | 无返回值 | ✅ | ✅ |
 
-**差异**：无。直接 `printf` 输出。
+**差异**：无。直接 `fwrite` 输出。
 
 ---
 
@@ -53,6 +53,151 @@ count($arr);
 | null/非数组 | 警告 | 未定义行为 |
 
 **差异**：仅支持数组，无递归模式。返回 `int`。
+
+---
+
+### `array_push($arr, $val)` — 尾部追加
+
+```
+array_push($arr, 42);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 单参数追加 | ✅ | ✅ |
+| 返回值（新长度） | ✅ | ✅ |
+| 多值追加 | ✅ | ❌（仅单值） |
+
+**差异**：仅支持一次 push 单个值。返回新数组长度。
+
+---
+
+### `array_pop($arr)` — 尾部弹出
+
+```
+$val = array_pop($arr);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 空数组返回 null | ✅ | ✅ |
+| 返回弹出值 | ✅ | ✅（t_var） |
+| 自动缩减长度 | ✅ | ✅ |
+
+**差异**：返回值是 `t_var`（带类型标签），通过 `var_dump` 可正确显示类型。
+
+---
+
+### `in_array($needle, $haystack)` — 值是否存在
+
+```
+in_array(42, $arr);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 严格模式 `===` | ✅ (第三个参数) | ❌ |
+| int/string/bool/null 比较 | ✅ | ✅ |
+| O(n) 线性扫描 | ✅ | ✅ |
+
+**差异**：不支持严格模式。仅比较 int/string/bool/null 类型。
+
+---
+
+### `array_key_exists($key, $arr)` — 键是否存在
+
+```
+array_key_exists(0, $arr);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| int key | ✅ | ✅ |
+| string key | ✅ | ✅ |
+| null key | 转空字符串 | 未定义行为 |
+
+**差异**：int 键和 string 键分发到不同 C 函数（`_int` / `_str`）。
+
+---
+
+### `array_keys($arr)` — 取所有键
+
+```
+$keys = array_keys($arr);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 返回 int 键数组 | ✅ | ✅ |
+| 返回 string 键（堆拷贝） | ✅ | ✅ |
+| 支持搜索值过滤 | ✅ | ❌ |
+
+**差异**：仅基础形式。返回新数组，内存通过资源追踪管理。
+
+---
+
+### `array_values($arr)` — 取所有值
+
+```
+$vals = array_values($arr);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 返回新数组 | ✅ | ✅ |
+| 重排索引 | ✅ | ✅（int key 从 0 开始） |
+
+**差异**：无。返回新数组。
+
+---
+
+### `array_merge($a, $b)` — 合并两个数组
+
+```
+$merged = array_merge([1,2], [3,4]);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 两个参数 | ✅ | ✅ |
+| int key 重新索引 | ✅ | ✅ |
+| string key 保留 | ✅ | ✅ |
+| 多参数 | ✅ | ❌（仅两个） |
+
+**差异**：仅支持两个参数。原数组不变，返回新数组。
+
+---
+
+### `implode($glue, $arr)` / `join($glue, $arr)` — 连接为字符串
+
+```
+echo implode(",", [1, 2, 3]);  // "1,2,3"
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 分隔符 | ✅ | ✅ |
+| int 元素自动转字符串 | ✅ | ✅ |
+| float 元素 | ✅ | ✅（`%g` 格式） |
+
+**差异**：返回堆分配 `t_string`（≤512 字节使用字符串池）。
+
+---
+
+### `explode($delim, $str)` — 切分为数组
+
+```
+$parts = explode(",", "a,b,c");
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 单字符分隔符 | ✅ | ✅ |
+| 多字符分隔符 | ✅ | ✅ |
+| 空分隔符 | 按字符切分 | 整个字符串为一个元素 |
+| 限制数量参数 | ✅ | ❌ |
+
+**差异**：片段通过字符串池分配（≤512 字节），减少 `malloc`。
 
 ---
 
@@ -108,7 +253,7 @@ isset($x);
 | 0 / "" / false | true | true |
 | 多参数 | ✅ | ❌ |
 
-**差异**：TinyPHP 变量必须声明后才能 `isset`。对 int/float/bool/string 栈值始终 `true`（不可能为 null）。
+**差异**：TinyPHP 变量必须声明后才能 `isset`。对 int/float/bool/string 栈值始终 `true`。
 
 ---
 
@@ -141,10 +286,28 @@ unset($x);
 |---|---|---|
 | int | 变 0 | 变 0 |
 | string | 变空 | 变 `{NULL, 0}` |
-| array | 释放 | `free` + 设 NULL |
+| array | 释放 | 回收到数组池 + 设 NULL |
 | object | 释放 | `__destruct` + `free` |
 
-**差异**：行为一致，TinyPHP 额外从全局资源表注销。
+**差异**：数组回收到复用池而非直接 `free`。
+
+---
+
+### 类型检测系列：`is_int` / `is_float` / `is_string` / `is_bool` / `is_array` / `is_null` / `is_object` / `is_callable`
+
+```
+is_int($x);
+is_array($arr);
+is_object($obj);
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 静态类型 | 运行时判断 | **编译期常量折叠**（如 `is_int(42)` → `true`） |
+| `t_var` (mixed/union) | — | 运行时 `tphp_fn_is_*` 检查标签 |
+| 对象类型 | ✅ | ✅（类名不在基本类型列表 → true） |
+
+**差异**：静态类型变量在编译期直接返回 `true`/`false`，零运行时开销。
 
 ---
 
@@ -168,7 +331,7 @@ list($a, list($b)) = ...;     // 嵌套解构
 | 短语法 `[$a,$b]` | ✅ | ✅ |
 | 键名解构 `["key" => $v]` | ✅ (7.1+) | ❌ |
 
-**差异**：不支持键名解构（依赖字符串键查找+类型提取）。内存安全：生成临时数组指针，读取后立即释放。
+**差异**：不支持键名解构。内存安全：生成临时数组指针，读取后立即释放。
 
 ---
 
@@ -203,7 +366,7 @@ echo date("Y");                    // 当前时间
 | 时区 | php.ini | 系统本地时区 |
 | 内存分配 | 堆 | 静态缓冲区（零分配） |
 
-**差异**：仅支持 8 个格式字符。不支持 `u`（微秒）、`e`（时区）、`O`/`P`（偏移）等。手写解析，不依赖 `strftime`，跨平台一致。
+**差异**：仅支持 8 个格式字符。手写解析，跨平台一致。
 
 ---
 
@@ -235,7 +398,7 @@ usleep(1000);     // 1 毫秒
 | 精度 | 微秒 | 微秒 |
 | Windows 实现 | `usleep` 模拟 | `Sleep(ms)`（毫秒精度） |
 
-**差异**：Windows 上精度退化为毫秒（`Sleep` 最小 1ms）。
+**差异**：Windows 上精度退化为毫秒。
 
 ---
 
@@ -263,8 +426,13 @@ $elapsed = hrtime() - $start;
 
 | 特性 | 说明 |
 |---|---|
-| **零堆分配函数** | `time` `date` `hrtime` 使用静态缓冲区，无 `malloc` |
-| **对象池优化** | `t_array` 256 槽复用，避免频繁 `malloc/free` |
+| **数组对象池** | `t_array` 128 槽 LIFO 复用池，减少 `malloc/free` 抖动 |
+| **小字符串池** | 64KB bump allocator，≤512 字节字符串零 `malloc` |
+| **1.5× 增长因子** | 数组 `push` 扩容时按 `cap + (cap>>1)` 而非 `2×` |
+| **分支预测** | `likely`/`unlikely` 标注所有热路径 |
+| **编译期类型折叠** | `is_int(42)` 等静态类型在编译期求值为 `true`/`false` |
+| **嵌套类型追踪** | 2 层数组自动追踪元素类型（`$arr[0][0]`） |
+| **零堆分配函数** | `time` `date` `hrtime` 使用静态缓冲区 |
 | **error 安全退出** | 遍历全局资源链表释放所有对象/数组/字符串 |
 | **跨平台** | `#ifdef _WIN32` 适配 Windows/Linux/macOS |
 | **TCC 兼容** | 避免 TCC 不支持的 C99 特性 |
@@ -286,7 +454,6 @@ $elapsed = hrtime() - $start;
 | `rand($min, $max)` | 随机整数 | `rand() % (max-min+1) + min` |
 | `mt_rand($min, $max)` | Mersenne Twister 随机数 | `rand()` 或 mt19937 |
 | `defined("CONST")` | 常量是否定义 | 编译期可知 |
-| `is_int / is_float / is_string / is_bool / is_array / is_null / is_callable` | 类型检测 | `inferType` 对照 |
 
 ### 中等难度（⭐⭐ ~60 行/个）
 
@@ -296,20 +463,12 @@ $elapsed = hrtime() - $start;
 | `substr($s, $start, $len?)` | 子串 | `memcpy` 栈缓冲区 |
 | `strpos($haystack, $needle)` | 查找子串位置 | `strstr` / 手写 |
 | `trim($s)` / `ltrim` / `rtrim` | 去空白 | 手写循环 |
-| `explode($delim, $s)` | 分割字符串 | `t_array` 构建 |
-| `implode($glue, $arr)` | 连接数组 | 遍历拼接 |
 | `sprintf($fmt, ...)` | 格式化 | `snprintf` 栈缓冲区 |
-| `array_key_exists($key, $arr)` | 键是否存在 | `tphp_fn_arr_get_str/int != NULL` |
-| `in_array($val, $arr)` | 值是否存在 | 遍历比较 |
-| `array_values($arr)` | 取所有值 | 遍历构建新数组 |
-| `array_keys($arr)` | 取所有键 | 遍历构建新数组 |
 
 ### 较高难度（⭐⭐⭐ ~100 行/个）
 
 | 函数 | 说明 | C 实现 |
 |---|---|---|
-| `array_push($arr, $val)` | 尾部追加 | `tphp_fn_arr_push` |
-| `array_pop($arr)` | 尾部弹出 | 取最后元素 + 缩减 length |
 | `array_shift($arr)` | 头部弹出 | 取首元素 + memmove |
 | `file_get_contents($path)` | 读文件 | `fopen/fread/fclose` + `t_string` |
 | `file_put_contents($path, $data)` | 写文件 | `fopen/fwrite/fclose` |

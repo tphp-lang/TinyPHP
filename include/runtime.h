@@ -141,9 +141,26 @@ static inline t_bool tphp_rt_str_ge(t_string a, t_string b)  { return tphp_rt_st
 static inline t_bool tphp_rt_str_eq(t_string a, t_string b)  { return tphp_rt_str_cmp(a, b) == 0; }
 static inline t_bool tphp_rt_str_ne(t_string a, t_string b)  { return tphp_rt_str_cmp(a, b) != 0; }
 
+// ── 小字符串池 (bump allocator, 64KB, yyjson-style) ────
+
+#define STR_POOL_SIZE 65536
+static char  str_pool_buf[STR_POOL_SIZE];
+static char *str_pool_cur = str_pool_buf;
+
+/** 从小字符串池分配 len+1 字节（<=512 字节用池，超限回退 malloc） */
+static inline char* str_pool_alloc(int len) {
+    if (len <= 0) return NULL;
+    if (unlikely(len > 512)) return (char*)malloc((size_t)len + 1);
+    if (unlikely(str_pool_cur + len + 1 > str_pool_buf + STR_POOL_SIZE))
+        return (char*)malloc((size_t)len + 1);
+    char *p = str_pool_cur;
+    str_pool_cur += len + 1;
+    return p;
+}
+
 // ── 字符串拼接/拷贝/释放 ─────────────────────────────
 
-/** tphp_str_concat — 字符串拼接（堆分配，返回的 data 需手动 free） */
+/** tphp_str_concat — 字符串拼接（短串用池，长串堆分配） */
 static inline t_string tphp_rt_str_concat(t_string a, t_string b) {
     int alen = (a.length > 0 && a.data != NULL) ? a.length : 0;
     int blen = (b.length > 0 && b.data != NULL) ? b.length : 0;
@@ -153,7 +170,7 @@ static inline t_string tphp_rt_str_concat(t_string a, t_string b) {
     if (alen > 0x7FFFFF || blen > 0x7FFFFF) return (t_string){NULL, 0};
     int len = alen + blen;
     if (len <= 0) return (t_string){NULL, 0};
-    char* data = (char*)malloc((size_t)len + 1);
+    char* data = str_pool_alloc(len);
     if (data == NULL) return (t_string){NULL, 0};
     int pos = 0;
     if (alen > 0) { memcpy(data + pos, a.data, (size_t)alen); pos += alen; }
@@ -162,23 +179,28 @@ static inline t_string tphp_rt_str_concat(t_string a, t_string b) {
     return (t_string){data, pos};
 }
 
-/** tphp_str_dup — 深拷贝 t_string 到堆（对象属性安全赋值） */
+/** tphp_str_dup — 深拷贝 t_string（短串用池，长串堆分配） */
 static inline t_string tphp_rt_str_dup(t_string s) {
     if (s.data == NULL || s.length <= 0) return (t_string){NULL, 0};
-    char* d = (char*)malloc((size_t)s.length + 1);
+    char* d = str_pool_alloc(s.length);
     if (d == NULL) return (t_string){NULL, 0};
     memcpy(d, s.data, (size_t)s.length);
     d[s.length] = '\0';
     return (t_string){d, s.length};
 }
 
-/** tphp_str_free — 安全释放 t_string 的堆 data（置 NULL 防 double-free） */
+/** tphp_str_free — 安全释放 t_string 的堆 data（池内指针跳过，置 NULL 防 double-free） */
 static inline void tphp_rt_str_free(t_string* s) {
-    if (s != NULL && s->data != NULL && s->length > 0) {
-        free(s->data);
+    if (unlikely(s == NULL || s->data == NULL || s->length <= 0)) return;
+    // 小字符串池内的指针不释放（bump allocator 无需逐块 free）
+    if (s->data >= str_pool_buf && s->data < str_pool_buf + STR_POOL_SIZE) {
         s->data = NULL;
         s->length = 0;
+        return;
     }
+    free(s->data);
+    s->data = NULL;
+    s->length = 0;
 }
 
 // ── 对象生命周期 ──────────────────────────────────────
