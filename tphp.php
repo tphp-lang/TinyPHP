@@ -266,30 +266,19 @@ if ($inPhar) {
 }
 
 // macOS: explicitly link libtcc1.a
-$libPath = '';
+$macLibPath = '';
 if (PHP_OS_FAMILY === 'Darwin') {
     $base = $inPhar ? ($pharDir . DIRECTORY_SEPARATOR . 'tcc') : dirname($ccExe);
     foreach (['libtcc1.a', 'lib/libtcc1.a', 'lib/tcc/libtcc1.a'] as $rel) {
         $tryLib = $base . DIRECTORY_SEPARATOR . $rel;
-        if (file_exists($tryLib)) { $libPath = ' "' . $tryLib . '"'; break; }
-    }
-    // Debug: confirm libtcc1.a availability
-    echo "       [dbg] tcc base: {$base}\n";
-    echo "       [dbg] libtcc1.a found: " . ($libPath !== '' ? basename(trim($libPath, '"')) . ' (' . filesize(trim($libPath, '"')) . 'B)' : 'MISSING') . "\n";
-    if ($libPath === '' && is_dir($base)) {
-        $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS));
-        foreach ($it as $f) {
-            if (basename($f->getPathname()) === 'libtcc1.a') {
-                echo "       [dbg] alt found: {$f->getPathname()} (" . $f->getSize() . "B)\n";
-                break;
-            }
-        }
+        if (file_exists($tryLib)) { $macLibPath = $tryLib; break; }
     }
 }
 
+$extraFiles = $macLibPath !== '' ? ' "' . $macLibPath . '"' : '';
 $cmd = sprintf(
     '"%s"%s -I"%s" -o "%s" "%s"%s 2>&1',
-    $ccExe, $bFlag, $includeDir, $outExe, $cFile, $libPath
+    $ccExe, $bFlag, $includeDir, $outExe, $cFile, $extraFiles
 );
 
 $tccOutput = [];
