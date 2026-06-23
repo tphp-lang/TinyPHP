@@ -54,8 +54,8 @@ if ((empty($args) && !isset($options['f'])) || isset($options['h']) || isset($op
 
 $outExe = $outExe ?? $options['o'] ?? '';
 
-// --- Collect all .php files ---
-$files = collectFiles($args);
+// --- Collect all source files ---
+[$files, $userCFiles] = collectFiles($args);
 
 if (empty($files)) {
     die("Error: no .php files found\n");
@@ -132,6 +132,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     $functions = [];
     $constants = [];
     $enums = [];
+    $allIncludes = [];
 
     // Two-phase parsing: parse auxiliary files (non-Main) first,
     // collect enums/classes, then parse Main entry last.
@@ -189,6 +190,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $functions    = array_merge($functions, $ast->functions);
         $constants    = array_merge($constants, $ast->constants);
         $enums        = array_merge($enums, $ast->enums);
+        $allIncludes  = array_merge($allIncludes, $ast->includes);
 
         // Collect enum names (FQN) declared in this file for later files
         foreach ($ast->enums as $e) {
@@ -219,7 +221,34 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         rmdir($outDir);
     }
 
-    $merged = new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums);
+    $merged = new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums, $allIncludes);
+
+    // Resolve #include paths relative to each PHP file's directory
+    $extraFlags = '';
+    $extraCFiles = [];
+    if (!empty($allIncludes)) {
+        // Collect unique directories from all PHP source files
+        $srcDirs = [];
+        foreach ($orderedFiles as $f) {
+            $d = realpath(dirname($f));
+            if ($d) $srcDirs[$d] = true;
+        }
+        $srcDirs = array_keys($srcDirs);
+        $extraFlags = ' -I"' . implode('" -I"', $srcDirs) . '"';
+
+        // Find companion .c files for each #include
+        foreach ($allIncludes as $inc) {
+            $baseName = basename($inc, '.h');
+            foreach ($srcDirs as $dir) {
+                $cSrc = $dir . DIRECTORY_SEPARATOR . $baseName . '.c';
+                if (file_exists($cSrc)) {
+                    $extraCFiles[] = $cSrc;
+                    break;
+                }
+            }
+        }
+        $extraCFiles = array_unique($extraCFiles);
+    }
 
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
 
@@ -276,9 +305,11 @@ if (PHP_OS_FAMILY === 'Darwin' && !$cc) {
     $bFlag .= ' -I"' . $tccRoot . DIRECTORY_SEPARATOR . 'include' . '"';
 }
 
+$allCFiles = array_unique(array_merge($userCFiles, $extraCFiles));
+$extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
 $cmd = sprintf(
-    '"%s"%s -I"%s" -o "%s" "%s" 2>&1',
-    $ccExe, $bFlag, $includeDir, $outExe, $cFile
+    '"%s"%s%s -I"%s" -o "%s" "%s"%s 2>&1',
+    $ccExe, $bFlag, $extraFlags, $includeDir, $outExe, $cFile, $extraSrcs
 );
 
 $tccOutput = [];
@@ -295,27 +326,50 @@ echo "       [YES] {$outExe}\n";
 
 // ============================================================
 /** @param string[] $args
- *  @return string[] */
+ *  @return array{0: string[], 1: string[]} */
 function collectFiles(array $args): array
 {
     $files = [];
+    $cFiles = [];
     foreach ($args as $arg) {
         if ($arg === '.') {
-            // 递归扫描当前目录所有 .php（排除 build/ 和 tphp.php）
             $baseDir = getcwd();
             $files = array_merge($files, scanPhpFiles($baseDir));
-        } elseif (is_file($arg) && str_ends_with($arg, '.php')) {
+            $cFiles = array_merge($cFiles, scanCFiles($baseDir));
+        } elseif (is_file($arg)) {
             $real = realpath($arg) ?: $arg;
-            // 拒绝 build/ 目录内的文件
             if (isInBuildDir($real)) {
                 die("Error: files inside build/ are not allowed: {$arg}\n");
             }
-            $files[] = $real;
+            if (str_ends_with($arg, '.php')) {
+                $files[] = $real;
+            } elseif (str_ends_with($arg, '.c')) {
+                $cFiles[] = $real;
+            } else {
+                die("Error: {$arg} is not a valid .php or .c file\n");
+            }
         } else {
-            die("Error: {$arg} is not a valid .php file\n");
+            die("Error: {$arg} is not a valid file\n");
         }
     }
-    return array_unique($files);
+    return [array_unique($files), array_unique($cFiles)];
+}
+
+/** 递归扫描目录下所有 .c 文件，排除 build/ */
+function scanCFiles(string $dir): array
+{
+    $files = [];
+    $items = glob($dir . DIRECTORY_SEPARATOR . '*') ?: [];
+    foreach ($items as $item) {
+        $base = basename($item);
+        if ($base === 'build' && is_dir($item)) continue;
+        if (is_dir($item)) {
+            $files = array_merge($files, scanCFiles($item));
+        } elseif (str_ends_with($base, '.c')) {
+            $files[] = $item;
+        }
+    }
+    return $files;
 }
 
 /** 递归扫描目录下所有 .php 文件，排除 build/ */

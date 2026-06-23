@@ -413,6 +413,11 @@ static inline t_bool tphp_fn_str_contains(t_string haystack, t_string needle) {
     return tphp_fn_strpos(haystack, needle) >= 0;
 }
 
+static inline t_string tphp_fn_sprintf(t_string fmt) {
+    // No args — just copy format string
+    return tphp_rt_str_dup(fmt);
+}
+
 static inline t_string tphp_fn_str_replace(t_string search, t_string replace, t_string subject) {
     if (subject.data == NULL || subject.length <= 0) return (t_string){NULL, 0};
     if (search.data == NULL || search.length <= 0 || search.length > subject.length)

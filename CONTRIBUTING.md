@@ -262,14 +262,15 @@ ExprNode（抽象，含 line/column）
 | `src/Token.php` | ~20 | Token 值对象 |
 | `src/AST/Node.php` | ~820 | AST 节点 + Visitor 接口 |
 | `src/Lexer.php` | ~680 | 词法分析（链式属性插值、heredoc、运算符） |
-| `src/Parser.php` | ~1500 | 递归下降解析（键名解构/尾部逗号） |
-| `src/CodeGenerator.php` | ~3100 | C 代码生成（40+ 内置函数/类型推导/闭包捕获） |
+| `src/Parser.php` | ~1550 | 递归下降解析（键名解构/属性提升/尾部逗号/never/fn） |
+| `src/CodeGenerator.php` | ~3250 | C 代码生成（45+ 内置函数/nullsafe/C互操作/魔术常量） |
 | `include/types.h` | ~130 | C 类型系统 + likely/unlikely 宏 |
 | `include/val.h` | ~45 | 便捷宏 |
 | `include/array.h` | ~440 | PHP 数组（128 槽复用池/sort/qsort/1.5× 增长因子） |
 | `include/runtime.h` | ~300 | 运行时（64KB 字符串池/资源追踪/error） |
 | `include/builtin.h` | ~430 | 公开内置（40+ 内置函数） |
 | `include/rand.h` | ~60 | MT19937 随机数 |
+| `include/p2c.h` | ~15 | PHP↔C 类型桥接 |
 | `include/os/times.h` | ~95 | 系统函数（跨平台） |
 | `include/os/json.h` | ~340 | JSON 编解码（递归编码+解析+无效输入 error） |
 | `include/common.h` | ~15 | 总入口 |

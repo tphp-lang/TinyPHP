@@ -17,6 +17,14 @@ class Lexer
         'enum'        => TokenType::ENUM_KW,
         'public'      => TokenType::PUBLIC_KW,
         'private'     => TokenType::PRIVATE_KW,
+        'final'       => TokenType::FINAL_KW,
+        'readonly'    => TokenType::READONLY_KW,
+        'static'      => TokenType::STATIC_KW,
+        'fn'          => TokenType::FN_KW,
+        '__LINE__'    => TokenType::MAGIC_LINE,
+        '__FILE__'    => TokenType::MAGIC_FILE,
+        '__DIR__'     => TokenType::MAGIC_DIR,
+        'DIRECTORY_SEPARATOR' => TokenType::DIR_SEP,
         'function'    => TokenType::FUNCTION,
         'return'      => TokenType::RETURN_KW,
         'echo'        => TokenType::ECHO_KW,
@@ -29,6 +37,7 @@ class Lexer
         'string'      => TokenType::TYPE_STRING,
         'bool'        => TokenType::TYPE_BOOL,
         'void'        => TokenType::TYPE_VOID,
+        'never'       => TokenType::TYPE_NEVER,
         'array'       => TokenType::TYPE_ARRAY,
         'mixed'       => TokenType::TYPE_MIXED,
         '__construct' => TokenType::CONSTRUCT,
@@ -149,6 +158,19 @@ class Lexer
             return;
         }
 
+        // #include "file.h" → 特殊预处理器指令
+        if ($ch === '#') {
+            $rest = substr($this->source, $this->pos);
+            if (preg_match('/^#include\s+["<](.+?)[">]/', $rest, $m)) {
+                $this->addToken(TokenType::HASH_INCLUDE, $m[1]);
+                $this->advance(strlen($m[0]));
+                return;
+            }
+            // 普通 # 注释 — 跳过整行
+            $this->skipLineComment();
+            return;
+        }
+
         // heredoc / nowdoc: <<<ID ... ID
         if ($ch === '<' && $this->peek(1) === '<' && $this->peek(2) === '<') {
             $this->scanHeredoc();
@@ -184,6 +206,15 @@ class Lexer
             '<<' => TokenType::LT_LT,
             '>>' => TokenType::GT_GT,
         ];
+        // 三字符运算符 (必须在两字符之前检查): === !== ?->
+        $three = $ch . $this->peek(1) . $this->peek(2);
+        $threeOps = ['===' => TokenType::IDENTICAL, '!==' => TokenType::NOT_IDENTICAL, '?->' => TokenType::NULLSAFE_ARROW];
+        if (isset($threeOps[$three])) {
+            $this->addToken($threeOps[$three], $three);
+            $this->advance(3);
+            return;
+        }
+
         $two = $ch . $this->peek(1);
         if (isset($multiOps[$two])) {
             $this->addToken($multiOps[$two], $two);

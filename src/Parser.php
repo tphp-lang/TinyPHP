@@ -90,6 +90,12 @@ class Parser
             $this->consume(TokenType::SEMICOLON, 'Expected ;');
         }
 
+        // #include 指令
+        $includes = [];
+        while ($this->match(TokenType::HASH_INCLUDE)) {
+            $includes[] = $this->previous()->lexeme;
+        }
+
         // 连续 use 声明
         while ($this->match(TokenType::USE)) {
             $this->parseUseDecl();
@@ -130,7 +136,7 @@ class Parser
             }
         }
 
-        return new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums);
+        return new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums, $includes);
     }
 
     // ============================================================
@@ -375,7 +381,14 @@ class Parser
             } elseif ($this->isClassConstStart()) {
                 $classConsts[] = $this->parseClassConstDecl($name);
             } else {
-                $methods[] = $this->parseMethod();
+                $m = $this->parseMethod();
+                // Collect promoted properties from constructor
+                if (!empty($m->promoted)) {
+                    foreach ($m->promoted as $pp) {
+                        $properties[] = $pp;
+                    }
+                }
+                $methods[] = $m;
             }
         }
 
@@ -444,18 +457,20 @@ class Parser
     /** 判断当前 token 序列是否为属性声明开头 */
     private function isPropertyStart(): bool
     {
-        // visibility type $name ...
+        // static type $name → property
+        if ($this->check(TokenType::STATIC_KW)) return true;
+        // visibility static? type $name → property
         if (!$this->check(TokenType::PUBLIC_KW) && !$this->check(TokenType::PRIVATE_KW)) return false;
-        $t2 = $this->peek(1);
+        $hasStatic = $this->peek(1)->type === TokenType::STATIC_KW;
+        $off = $hasStatic ? 2 : 1; // skip static keyword if present
+        $t2 = $this->peek($off);
         $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
-                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED, TokenType::IDENTIFIER];
+                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED, TokenType::TYPE_NEVER, TokenType::IDENTIFIER];
         if (!in_array($t2->type, $typeTokens, true)) return false;
-        // peek(2) should be $variable (= IDENTIFIER with $)
-        $t3 = $this->peek(2);
+        $t3 = $this->peek($off + 1);
         if ($t3->type !== TokenType::IDENTIFIER) return false;
         if (!str_starts_with($t3->lexeme, '$')) return false;
-        // peek(3) should be ; or =
-        $t4 = $this->peek(3);
+        $t4 = $this->peek($off + 2);
         return in_array($t4->type, [TokenType::SEMICOLON, TokenType::EQUALS], true);
     }
 
@@ -486,11 +501,17 @@ class Parser
         $nameToken = $this->parseMethodName();
         $name = $nameToken->lexeme;
 
-        // 参数
+        // 参数 (构造函数用 parseConstructorParams 支持属性提升)
         $this->consume(TokenType::LPAREN, 'Expected (');
         $params = [];
+        $promoted = [];
+        $isCtor = ($name === '__construct');
         if (!$this->check(TokenType::RPAREN)) {
-            $params = $this->parseParams();
+            if ($isCtor) {
+                [$params, $promoted] = $this->parseConstructorParams();
+            } else {
+                $params = $this->parseParams();
+            }
         }
         $this->consume(TokenType::RPAREN, 'Expected )');
 
@@ -503,12 +524,20 @@ class Parser
         // 方法体
         $this->consume(TokenType::LBRACE, 'Expected {');
         $body = [];
+        // 构造函数属性提升：注入 $this->prop = $prop 到方法体开头
+        foreach ($promoted as $pp) {
+            $pname = ltrim($pp->name, '$');
+            $body[] = new AssignPropStmtNode(
+                new PropertyAccessExpr(new VariableExpr('$this'), $pname),
+                new VariableExpr($pp->name)
+            );
+        }
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
             $body[] = $this->parseStmt();
         }
         $this->consume(TokenType::RBRACE, 'Expected }');
 
-        return new MethodNode($name, $visibility, $params, $returnType, $body);
+        return new MethodNode($name, $visibility, $params, $returnType, $body, $promoted);
     }
 
     // ============================================================
@@ -523,6 +552,27 @@ class Parser
             $params[] = $this->parseParam();
         } while ($this->match(TokenType::COMMA));
         return $params;
+    }
+
+    /** @return array{0: ParamNode[], 1: PropertyDeclNode[]} [params, promoted props] */
+    private function parseConstructorParams(): array
+    {
+        $params = [];
+        $promoted = [];
+        do {
+            if ($this->check(TokenType::RPAREN)) break; // trailing comma
+            // Constructor property promotion: public int $x
+            if ($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW)) {
+                $vis = $this->parseVisibility();
+                $type = $this->parseType();
+                $pName = $this->consume(TokenType::IDENTIFIER, 'Expected property name')->lexeme;
+                $promoted[] = new PropertyDeclNode($pName, $type, $vis, null);
+                $params[] = new ParamNode($type, $pName);
+            } else {
+                $params[] = $this->parseParam();
+            }
+        } while ($this->match(TokenType::COMMA));
+        return [$params, $promoted];
     }
 
     private function parseParam(): ParamNode
@@ -924,6 +974,10 @@ class Parser
     private function parseTernary(): ExprNode
     {
         $cond = $this->parseLogicalOr();
+        // ?-> is nullsafe, not ternary
+        if ($this->check(TokenType::QUEST) && $this->peek(1)->type === TokenType::ARROW) {
+            return $cond; // let parsePostfix handle nullsafe chain
+        }
         if ($this->match(TokenType::QUEST)) {
             $then = $this->parseExpr();
             $this->consume(TokenType::COLON, 'Expected :');
@@ -992,7 +1046,7 @@ class Parser
     private function parseEquality(): ExprNode
     {
         $left = $this->parseComparison();
-        while ($this->match(TokenType::EQ) || $this->match(TokenType::NE) || $this->match(TokenType::SPACESHIP)) {
+        while ($this->match(TokenType::EQ) || $this->match(TokenType::NE) || $this->match(TokenType::IDENTICAL) || $this->match(TokenType::NOT_IDENTICAL) || $this->match(TokenType::SPACESHIP)) {
             $op = $this->previous()->lexeme;
             $right = $this->parseComparison();
             $left = $this->setPos(new BinaryExpr($left, $op, $right), $left->line, $left->column);
@@ -1089,14 +1143,15 @@ class Parser
     {
         $expr = $this->parsePrimary();
         while (true) {
-            if ($this->match(TokenType::ARROW)) {
+            if ($this->match(TokenType::ARROW) || $this->match(TokenType::NULLSAFE_ARROW)) {
+                $nullsafe = $this->previous()->type === TokenType::NULLSAFE_ARROW;
                 $member = $this->parseMethodName()->lexeme;
                 if ($this->match(TokenType::LPAREN)) {
                     $args = $this->parseArgs();
                     $this->consume(TokenType::RPAREN, 'Expected )');
-                    $expr = $this->setPos(new CallExpr($expr, $member, $args), $expr->line, $expr->column);
+                    $expr = $this->setPos(new CallExpr($expr, $member, $args, $nullsafe), $expr->line, $expr->column);
                 } else {
-                    $expr = $this->setPos(new PropertyAccessExpr($expr, $member), $expr->line, $expr->column);
+                    $expr = $this->setPos(new PropertyAccessExpr($expr, $member, $nullsafe), $expr->line, $expr->column);
                 }
             } elseif ($this->match(TokenType::LBRACKET)) {
                 $index = $this->parseExpr();
@@ -1137,6 +1192,17 @@ class Parser
         if ($this->match(TokenType::NULL_KW)) {
             return $this->setPos(new NullLiteralExpr(), $line, $col);
         }
+        // __LINE__ / __FILE__ / __DIR__ / DIRECTORY_SEPARATOR
+        $magicTokens = [TokenType::MAGIC_LINE, TokenType::MAGIC_FILE, TokenType::MAGIC_DIR, TokenType::DIR_SEP];
+        foreach ($magicTokens as $mt) {
+            if ($this->match($mt)) {
+                return $this->setPos(new MagicConstExpr($this->previous()->lexeme, $this->previous()->line), $line, $col);
+            }
+        }
+        // fn($x) => expr  箭头函数
+        if ($this->match(TokenType::FN_KW)) {
+            return $this->setPos($this->parseArrowFunction(), $line, $col);
+        }
         // 匿名函数 / 闭包: function(): type { ... }
         if ($this->match(TokenType::FUNCTION)) {
             return $this->setPos($this->parseClosure(), $line, $col);
@@ -1174,9 +1240,10 @@ class Parser
         if ($this->check(TokenType::IDENTIFIER) || $this->check(TokenType::SELF_KW) || $this->check(TokenType::VAR_DUMP) || $this->check(TokenType::COUNT) || $this->check(TokenType::EXIT) || $this->check(TokenType::DIE) || $this->check(TokenType::ISSET) || $this->check(TokenType::EMPTY_KW) || $this->check(TokenType::UNSET) || $this->check(TokenType::ERROR) || $this->check(TokenType::TIME) || $this->check(TokenType::DATE) || $this->check(TokenType::SLEEP) || $this->check(TokenType::USLEEP) || $this->check(TokenType::HRTIME) || $this->check(TokenType::IS_INT) || $this->check(TokenType::IS_FLOAT) || $this->check(TokenType::IS_STRING) || $this->check(TokenType::IS_BOOL) || $this->check(TokenType::IS_ARRAY) || $this->check(TokenType::IS_OBJECT) || $this->check(TokenType::IS_NULL) || $this->check(TokenType::IS_CALLABLE)) {
             $name = $this->advance()->lexeme;
 
-            // $obj->xxx 或 Class::xxx
-            if ($this->match(TokenType::ARROW) || $this->match(TokenType::DOUBLE_COLON)) {
-                $opType = $this->previous()->type; // ARROW or DOUBLE_COLON
+            // $obj->xxx / $obj?->xxx / Class::xxx
+            if ($this->match(TokenType::ARROW) || $this->match(TokenType::NULLSAFE_ARROW) || $this->match(TokenType::DOUBLE_COLON)) {
+                $opType = $this->previous()->type;
+                $nullsafe = ($opType === TokenType::NULLSAFE_ARROW);
                 $memberName = $this->parseMethodName()->lexeme;
 
                 // EnumName::CASE → 枚举访问（需解析命名空间 + use 导入）
@@ -1187,15 +1254,16 @@ class Parser
                     }
                 }
 
-                // 方法调用: $obj->method(args)
+                // 方法调用: $obj->method(args) 或 C->func(args)
                 if ($this->match(TokenType::LPAREN)) {
                     $args = $this->parseArgs();
                     $this->consume(TokenType::RPAREN, 'Expected )');
-                    return $this->setPos(new CallExpr(new VariableExpr($name), $memberName, $args), $line, $col);
+                    $isRawC = ($name === 'C' && $opType !== TokenType::DOUBLE_COLON);
+                    return $this->setPos(new CallExpr(new VariableExpr($name), $memberName, $args, $nullsafe, $isRawC), $line, $col);
                 }
 
-                // 属性访问: $obj->prop
-                return $this->setPos(new PropertyAccessExpr(new VariableExpr($name), $memberName), $line, $col);
+                // 属性访问: $obj->prop / $obj?->prop
+                return $this->setPos(new PropertyAccessExpr(new VariableExpr($name), $memberName, $nullsafe), $line, $col);
             }
 
             // 函数调用（含 var_dump、闭包调用 $var()）
@@ -1293,6 +1361,38 @@ class Parser
     }
 
     /** 匿名函数: function ( params? ) use (vars?) : type? { body } */
+    /** fn($x, $y) => expr  → 闭包语法糖 */
+    private function parseArrowFunction(): ClosureExpr
+    {
+        $this->consume(TokenType::LPAREN, 'Expected (' );
+        $params = [];
+        if (!$this->check(TokenType::RPAREN)) {
+            do {
+                // Arrow params: optional type, then $name
+                $type = $this->checkTypeStart() ? $this->parseType() : 'int';
+                $this->consume(TokenType::IDENTIFIER, 'Expected parameter name');
+                $params[] = new ParamNode($type, $this->previous()->lexeme);
+            } while ($this->match(TokenType::COMMA));
+        }
+        $this->consume(TokenType::RPAREN, 'Expected )');
+        $this->consume(TokenType::DOUBLE_ARROW, 'Expected =>');
+        $bodyExpr = $this->parseExpr();
+        $body = [new ReturnStmtNode($bodyExpr)];
+        return new ClosureExpr($params, 'int', $body, []); // default return type: int
+    }
+
+    /** 检查当前 token 是否为类型关键字（排除 $var） */
+    private function checkTypeStart(): bool
+    {
+        $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
+                       TokenType::TYPE_NEVER];
+        if (in_array($this->peek()->type, $typeTokens, true)) return true;
+        // IDENTIFIER is a type only if not $variable
+        return $this->peek()->type === TokenType::IDENTIFIER
+            && !str_starts_with($this->peek()->lexeme, '$');
+    }
+
     private function parseClosure(): ClosureExpr
     {
         $this->consume(TokenType::LPAREN, 'Expected (');
@@ -1387,9 +1487,17 @@ class Parser
 
     private function parseVisibility(): string
     {
-        if ($this->match(TokenType::PUBLIC_KW)) return 'public';
-        if ($this->match(TokenType::PRIVATE_KW)) return 'private';
-        $this->error('Expected public or private');
+        // static methods default to public
+        if ($this->match(TokenType::STATIC_KW)) return 'public';
+        if ($this->match(TokenType::PUBLIC_KW)) {
+            $this->match(TokenType::STATIC_KW); // optional static after visibility
+            return 'public';
+        }
+        if ($this->match(TokenType::PRIVATE_KW)) {
+            $this->match(TokenType::STATIC_KW); // optional static after visibility
+            return 'private';
+        }
+        $this->error('Expected public, private, or static');
     }
 
     private function parseType(): string
@@ -1402,7 +1510,7 @@ class Parser
         $validTypes = [
             TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
             TokenType::TYPE_BOOL, TokenType::TYPE_VOID, TokenType::TYPE_ARRAY,
-            TokenType::TYPE_MIXED,
+            TokenType::TYPE_MIXED, TokenType::TYPE_NEVER,
             TokenType::IDENTIFIER, // 类名/枚举名作为类型
         ];
         if (!in_array($typeToken->type, $validTypes, true)) {

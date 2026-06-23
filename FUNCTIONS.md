@@ -774,26 +774,91 @@ libc `qsort` 原地排序，重编号 int key。比较 int/float 值，忽略非
 
 ---
 
-## 后续建议实现
+### `sprintf($fmt, ...$args)` — 格式化字符串
 
-### 低难度（⭐）
+```
+sprintf("Hi %s", "Alice");          // "Hi Alice"
+sprintf("Age: %d", 30);             // "Age: 30"
+sprintf("%s is %d", "Bob", 25);    // "Bob is 25"
+```
 
-| 函数 | 说明 |
+| | PHP | TinyPHP |
+|---|---|---|
+| `%s` `%d` `%f` | ✅ | ✅ |
+| 可变参数 | ✅ | ✅（snprintf 256B 栈缓冲） |
+| `%02d` 等格式标记 | ✅ | ✅ |
+| 完整 `printf` 语法 | ✅ | ✅（委托 snprintf） |
+
+**内存安全**：256 字节栈缓冲区，通过 `str_pool_alloc` 分配结果。
+
+---
+
+## 魔术常量
+
+### `__LINE__` / `__FILE__` / `__DIR__` — 编译期常量
+
+```
+echo __LINE__;    // 当前行号
+echo __FILE__;    // 完整文件路径
+echo __DIR__;     // 文件所在目录
+```
+
+| | PHP | TinyPHP |
+|---|---|---|
+| 编译期替换 | runtime | **编译期常量**（AOT 天然支持） |
+| 跨文件引用 | ✅ | ✅ |
+| `__DIR__` 等价 `dirname(__FILE__)` | ✅ | ✅ |
+
+### `DIRECTORY_SEPARATOR` — 目录分隔符
+
+```
+echo DIRECTORY_SEPARATOR;  // "/" (Linux/macOS) 或 "\" (Windows)
+```
+
+编译期替换为 `STR_LIT("/")` 或 `STR_LIT("\\")`。
+
+---
+
+## C 互操作
+
+### `#include "file.h"` — 引入 C 头文件
+
+在 PHP 中直接写 `#include "demo.h"`，转译后在生成的 C 代码顶部输出 `#include "demo.h"`。编译时自动添加所在目录为 `-I` 路径。
+
+### `C->function()` — 直接 C 调用
+
+`C->calc_distance(...)` 生成原生 C 函数调用 `calc_distance(...)`（无 `tphp_` 前缀）。
+
+### 类型桥接 (`p2c.h`)
+
+| PHP → C | C → PHP |
 |---|---|
-| `sprintf` | 格式化字符串 |
+| `c_int($x)` → `(int32_t)` | `php_int($x)` → `(t_int)` |
+| `c_float($x)` → `(double)` | `php_float($x)` → `(t_float)` |
+| `c_str($x)` → `$x.data` | `php_str($x)` → `tphp_rt_str_dup(...)` |
 
-### 中等难度（⭐⭐）
+所有函数默认引入（`common.h` 已包含 `p2c.h`）。
+
+---
+
+## 后续建议实现
 
 | 函数 | 说明 |
 |---|---|
 | `file_get_contents/file_put_contents` | 文件 I/O |
 
-### 设计限制（暂不实现）
+### AOT 不可行
 
 | 特性 | 原因 |
 |---|---|
-| `try/catch/throw` | 需 `setjmp/longjmp` |
-| `yield` | 需状态机 |
-| `include/require/eval` | AOT 不支持 |
-| `preg_match/preg_replace` | 需 PCRE |
-| `PDO/mysqli` | 需外部库 |
+| `eval($code)` | 需要运行时 PHP 解析器 |
+| `include $dynamicPath` / `require` | 编译期路径不可知 |
+| `$$var` 可变变量 | 编译期无法确定符号 |
+| `$obj->$prop` / `new $class()` | 运行时动态解析 |
+| `extract()` / `compact()` | 动态符号表操作 |
+| `Reflection*` / `get_class_methods()` | 需运行时元数据 |
+| `serialize` / `unserialize` | 需类型反射 |
+| `__call` / `__get` / `__set` 魔术方法 | 运行时分发 |
+| `Closure::bind()` / `Closure::fromCallable()` | 运行时作用域绑定 |
+| `preg_match` / PCRE 正则 | 需嵌入 ~200KB 库 |
+| `PDO` / `mysqli` | 需外部链接 |

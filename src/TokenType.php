@@ -29,6 +29,16 @@ enum TokenType: string
     case TYPE_VOID   = 'void';
     case TYPE_ARRAY  = 'array';
     case TYPE_MIXED  = 'mixed';
+    case TYPE_NEVER  = 'never';
+    case FINAL_KW    = 'final';
+    case READONLY_KW = 'readonly';
+    case STATIC_KW   = 'static';
+    case FN_KW       = 'fn';
+    case MAGIC_LINE  = '__LINE__';
+    case MAGIC_FILE  = '__FILE__';
+    case MAGIC_DIR   = '__DIR__';
+    case DIR_SEP     = 'DIRECTORY_SEPARATOR';
+    case HASH_INCLUDE = '#include';
 
     // 魔术方法
     case CONSTRUCT = '__construct';
@@ -98,6 +108,8 @@ enum TokenType: string
     case GE           = '>=';
     case EQ           = '==';
     case NE           = '!=';
+    case IDENTICAL    = '===';
+    case NOT_IDENTICAL = '!==';
     case AND_AND      = '&&';
     case OR_OR        = '||';
     case AMP          = '&';
@@ -120,6 +132,7 @@ enum TokenType: string
     case COMMA        = ',';
     case EQUALS       = '=';
     case ARROW        = '->';
+    case NULLSAFE_ARROW = '?->';
     case DOUBLE_ARROW = '=>';
     case DOUBLE_COLON = '::';
     case NS_SEP       = '\\';

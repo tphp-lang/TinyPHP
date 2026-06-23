@@ -18,6 +18,7 @@ class ProgramNode extends ASTNode
     /** @param FunctionNode[] $functions */
     /** @param ConstNode[] $constants */
     /** @param EnumNode[] $enums */
+    /** @param string[] $includes */
     public function __construct(
         public readonly ?ClassNode $mainClass = null,
         /** @var ClassNode[] */
@@ -27,6 +28,8 @@ class ProgramNode extends ASTNode
         public readonly array $constants = [],
         /** @var EnumNode[] */
         public readonly array $enums = [],
+        /** @var string[] */
+        public readonly array $includes = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -97,6 +100,7 @@ class PropertyDeclNode extends ASTNode
 class MethodNode extends ASTNode
 {
     /** @param ParamNode[] $params */
+    /** @param PropertyDeclNode[] $promoted */
     public function __construct(
         public readonly string $name,
         public readonly string $visibility,  // public | private
@@ -105,6 +109,8 @@ class MethodNode extends ASTNode
         public readonly string $returnType,
         /** @var StmtNode[] */
         public readonly array $body,
+        /** @var PropertyDeclNode[] */
+        public readonly array $promoted = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -472,6 +478,19 @@ class NullLiteralExpr extends ExprNode
     }
 }
 
+// __LINE__ / __FILE__ / __DIR__ / DIRECTORY_SEPARATOR
+class MagicConstExpr extends ExprNode
+{
+    public function __construct(
+        public readonly string $name,
+        int $line = 0,
+    ) { $this->line = $line; }
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitMagicConst($this);
+    }
+}
+
 // 数组条目: key => value（无 key 时 key=null，自增 int）
 class ArrayEntryNode
 {
@@ -516,6 +535,7 @@ class PropertyAccessExpr extends ExprNode
     public function __construct(
         public readonly ExprNode $object,
         public readonly string $property,
+        public readonly bool $isNullsafe = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -743,6 +763,8 @@ class CallExpr extends ExprNode
         public readonly string $name,
         /** @var ExprNode[] */
         public readonly array $args,
+        public readonly bool $isNullsafe = false,
+        public readonly bool $isRawC = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -801,6 +823,7 @@ interface ASTVisitor
     public function visitFloatLiteral(FloatLiteralExpr $node): string;
     public function visitBoolLiteral(BoolLiteralExpr $node): string;
     public function visitNullLiteral(NullLiteralExpr $node): string;
+    public function visitMagicConst(MagicConstExpr $node): string;
     public function visitVariable(VariableExpr $node): string;
     public function visitBinary(BinaryExpr $node): string;
     public function visitTernary(TernaryExpr $node): string;

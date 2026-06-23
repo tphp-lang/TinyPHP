@@ -11,7 +11,10 @@ php tphp.php test/var/var.php
 # 编译多文件（入口必须有全局 class Main）
 php tphp.php main.php demo.php
 
-# 扫描当前目录所有 .php
+# 带 C 源文件
+php tphp.php main.php bridge.php lib.c
+
+# 扫描当前目录所有 .php / .c
 php tphp.php .
 
 # 指定输出 / 编译器
@@ -70,12 +73,12 @@ PHP → Lexer → Token[] → Parser → AST → CodeGenerator → .c → 编译
 ### 运算符
 
 `+` `-` `*` `/` `%` `**` `.` `=` `+=` `-=` `*=` `/=` `.=`
-`==` `!=` `<` `>` `<=` `>=` `<=>` `&&` `||` `!`
-`&` `|` `^` `~` `<<` `>>` `++` `--` `?:` `??` `(int)` `(float)` `(string)` `(bool)`
+`==` `!=` `===` `!==` `<` `>` `<=` `>=` `<=>` `&&` `||` `!`
+`&` `|` `^` `~` `<<` `>>` `++` `--` `?:` `??` `?->` `(int)` `(float)` `(string)` `(bool)`
 
 ### 语法
 
-`if/elseif/else` · `while` · `do-while` · `for` · `foreach` · `switch/case/default` · `match` · `break/continue/goto` · `class/method/property` · `new` · `namespace/use` · `enum` · `function` · `closure/use` · `const`（全局/命名空间/类）· `list()` / `[]` 解构（含键名 `"key"=>$v`）· `self::CONST` / `Class::CONST`
+`if/elseif/else` · `while` · `do-while` · `for` · `foreach` · `switch/case/default` · `match`（多条件 `1,2=>...`）· `break/continue/goto` · `class/method/property` · `new` · `namespace/use` · `enum` · `function` · `closure/use` · `fn($x) => expr` · `const`（全局/命名空间/类）· `list()`/`[]` 解构（含键名 `"key"=>$v`）· `self::CONST`/`Class::CONST` · `?->` nullsafe · `never` 返回类型 · `__construct(public $x)` 属性提升 · `static`/`final`/`readonly` 修饰符 · `#include "file.h"` C 互操作 · `C->function()` 直接 C 调用 · `__LINE__`/`__FILE__`/`__DIR__`/`DIRECTORY_SEPARATOR`
 
 ### 内置函数
 
@@ -83,7 +86,7 @@ PHP → Lexer → Token[] → Parser → AST → CodeGenerator → .c → 编译
 |---|---|
 | 输出 | `echo`, `var_dump` |
 | 数组 | `count`, `array_push`, `array_pop`, `array_shift`, `array_unshift`, `in_array`, `array_key_exists`, `array_keys`, `array_values`, `array_merge`, `array_unique`, `array_reverse`, `array_slice`, `array_sum`, `array_product`, `array_fill`, `sort`, `rsort` |
-| 字符串 | `implode`, `explode`, `strlen`, `trim/ltrim/rtrim`, `substr`, `strpos`, `str_contains`, `str_replace` |
+| 字符串 | `implode`, `explode`, `strlen`, `trim/ltrim/rtrim`, `substr`, `strpos`, `str_contains`, `str_replace`, `sprintf` |
 | 类型 | `is_int/float/string/bool/array/null/object/callable`, `isset`, `empty`, `unset` |
 | 转换 | `intval`, `floatval`, `strval`, `boolval` |
 | 通用 | `max`, `min`, `range`, `rand`, `mt_rand`, `exit/die`, `error` |
@@ -91,6 +94,25 @@ PHP → Lexer → Token[] → Parser → AST → CodeGenerator → .c → 编译
 | JSON | `json_encode`, `json_decode` |
 
 > 详见 [FUNCTIONS.md](FUNCTIONS.md) — 每个函数与 PHP 的差异对照。
+
+### C 互操作
+
+```php
+#include "mylib.h"                          // 引入 C 头文件
+
+$dist = php_float(C->calc_distance(        // C-> 直接调用
+    c_float($x1), c_float($y1),
+    c_float($x2), c_float($y2)
+));
+$rev = php_str(C->reverse_str(c_str($s)));  // c_str → php_str 类型桥接
+```
+
+| 函数 | 说明 |
+|---|---|
+| `c_int/c_float/c_str` | PHP → C 类型转换 |
+| `php_int/php_float/php_str` | C → PHP 类型转换 |
+| `C->function()` | 直接 C 调用，无 name mangling |
+| `#include "file.h"` | 生成 `#include` 到 C 输出 |
 
 ### 内存安全
 
