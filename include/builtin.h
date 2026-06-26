@@ -259,68 +259,127 @@ static inline t_array* tphp_fn_array_merge(t_array* a, t_array* b) {
 }
 
 // implode($glue, $arr) — 用分隔符连接数组元素为字符串
+// 优化：两遍扫描 → 一次分配，O(N) memcpy 替代 O(N²) 逐对拼接
 static inline t_string tphp_fn_implode(t_string glue, t_array* a) {
     if (a == NULL || a->length == 0) return (t_string){NULL, 0};
-    // 先逐一连接，用 tphp_rt_str_concat
-    t_string result = (t_string){NULL, 0};
+
+    int glueLen = (glue.data != NULL && glue.length > 0) ? glue.length : 0;
+
+    // ── Pass 1: 计算总长度 ────────────────────────────────
+    int totalLen = 0;
     for (int i = 0; i < a->length; i++) {
         t_var *v = &a->entries[i].val;
-        t_string part = (t_string){NULL, 0};
+        int partLen = 0;
         if (v->type == TYPE_STRING) {
-            part = v->value._string;
+            partLen = (v->value._string.data != NULL) ? v->value._string.length : 0;
         } else if (v->type == TYPE_INT) {
-            static char _ib[32];
-            int n = snprintf(_ib, sizeof(_ib), "%lld", (long long)v->value._int);
-            part = (t_string){.data = _ib, .length = n};
+            char _ib[32];
+            partLen = snprintf(_ib, sizeof(_ib), "%lld", (long long)v->value._int);
         } else if (v->type == TYPE_FLOAT) {
-            static char _fb[32];
-            int n = snprintf(_fb, sizeof(_fb), "%g", v->value._float);
-            part = (t_string){.data = _fb, .length = n};
+            char _fb[64];
+            partLen = snprintf(_fb, sizeof(_fb), "%g", v->value._float);
         }
-        if (result.data == NULL) {
-            result = tphp_rt_str_dup(part);
-        } else {
-            if (i > 0) result = tphp_rt_str_concat(result, glue);
-            result = tphp_rt_str_concat(result, part);
+        if (partLen < 0) partLen = 0;
+        totalLen += partLen;
+        if (i > 0 && glueLen > 0) totalLen += glueLen;
+        // 防溢出：超过 8MB 拒绝
+        if (unlikely(totalLen > 0x7FFFFF)) return (t_string){NULL, 0};
+    }
+    if (totalLen <= 0) return (t_string){NULL, 0};
+
+    // ── 一次分配 ──────────────────────────────────────────
+    char* buf = str_pool_alloc(totalLen);
+    if (unlikely(buf == NULL)) return (t_string){NULL, 0};
+
+    // ── Pass 2: 逐片写入 ──────────────────────────────────
+    int pos = 0;
+    for (int i = 0; i < a->length; i++) {
+        t_var *v = &a->entries[i].val;
+        // 分隔符（首元素前不写）
+        if (i > 0 && glueLen > 0) {
+            memcpy(buf + pos, glue.data, (size_t)glueLen);
+            pos += glueLen;
+        }
+        // 元素值
+        if (v->type == TYPE_STRING) {
+            t_string s = v->value._string;
+            int slen = (s.data != NULL && s.length > 0) ? s.length : 0;
+            if (slen > 0) {
+                memcpy(buf + pos, s.data, (size_t)slen);
+                pos += slen;
+            }
+        } else if (v->type == TYPE_INT) {
+            int n = snprintf(buf + pos, (size_t)(totalLen - pos + 1),
+                             "%lld", (long long)v->value._int);
+            if (n > 0) pos += n;
+        } else if (v->type == TYPE_FLOAT) {
+            int n = snprintf(buf + pos, (size_t)(totalLen - pos + 1),
+                             "%g", v->value._float);
+            if (n > 0) pos += n;
         }
     }
-    return result;
+    buf[totalLen] = '\0';
+    return (t_string){buf, totalLen};
 }
 
 // explode($delim, $str) — 按分隔符切分字符串为数组
+// 优化：先数分隔符 → 精确容量创建，零 realloc
 static inline t_array* tphp_fn_explode(t_string delim, t_string s) {
-    t_array* out = tphp_fn_arr_create(8);
-    if (out == NULL) return NULL;
-    tphp_rt_register((void*)out, 1);
-    if (s.data == NULL || s.length == 0) return out;
+    if (s.data == NULL || s.length == 0) {
+        t_array* out = tphp_fn_arr_create(0);
+        if (out) tphp_rt_register((void*)out, 1);
+        return out;
+    }
     // 空分隔符 → 整个字符串作为一个元素
     if (delim.length == 0 || delim.data == NULL) {
+        t_array* out = tphp_fn_arr_create(1);
+        if (out == NULL) return NULL;
+        tphp_rt_register((void*)out, 1);
         out = tphp_fn_arr_push(out, VAR_STRING(tphp_rt_str_dup(s)));
         return out;
     }
+
+    // ── Pass 1: 数分隔符，计算片段数 ────────────────────────
+    int pieceCount = 1; // 至少 1 片
+    for (int i = 0; i <= s.length; i++) {
+        if (i + delim.length <= s.length &&
+            memcmp(s.data + i, delim.data, (size_t)delim.length) == 0) {
+            pieceCount++;
+            i += delim.length - 1; // for 循环会 ++
+        }
+    }
+
+    // ── 一次分配精确容量 ──────────────────────────────────
+    t_array* out = tphp_fn_arr_create(pieceCount);
+    if (out == NULL) return NULL;
+    tphp_rt_register((void*)out, 1);
+
+    // ── Pass 2: 切分并 push（容量已够，零 realloc）────────
     int start = 0;
     for (int i = 0; i <= s.length; i++) {
         if (i + delim.length <= s.length &&
             memcmp(s.data + i, delim.data, (size_t)delim.length) == 0) {
             int pieceLen = i - start;
-            char* piece = str_pool_alloc(pieceLen);
-            if (piece) {
-                memcpy(piece, s.data + start, (size_t)pieceLen);
-                piece[pieceLen] = '\0';
-                t_string pieceStr = {.data = piece, .length = pieceLen};
-                out = tphp_fn_arr_push(out, VAR_STRING(pieceStr));
+            if (pieceLen > 0) {
+                char* piece = str_pool_alloc(pieceLen);
+                if (piece) {
+                    memcpy(piece, s.data + start, (size_t)pieceLen);
+                    piece[pieceLen] = '\0';
+                    out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
+                }
             }
             start = i + delim.length;
             i = start - 1;
         }
     }
     int pieceLen = s.length - start;
-    char* piece = str_pool_alloc(pieceLen);
-    if (piece) {
-        memcpy(piece, s.data + start, (size_t)pieceLen);
-        piece[pieceLen] = '\0';
-        t_string pieceStr = {.data = piece, .length = pieceLen};
-        out = tphp_fn_arr_push(out, VAR_STRING(pieceStr));
+    if (pieceLen > 0) {
+        char* piece = str_pool_alloc(pieceLen);
+        if (piece) {
+            memcpy(piece, s.data + start, (size_t)pieceLen);
+            piece[pieceLen] = '\0';
+            out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
+        }
     }
     return out;
 }
