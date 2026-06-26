@@ -50,17 +50,22 @@ tphp main.php    # include/ + tcc/ 自动解压到同级目录
 
 ## 性能
 
-读/遍历/计算总体 **大幅领先** PHP 8.x：
+2026-06-26 实测，PHP 8.5.1 vs TinyPHP × 3 编译器 (bench_tphp, 100K loops)：
 
-| 场景 | TinyPHP | PHP 8.x | 比率 |
-|---|---|---|---|
-| 整数循环 ×500K | 0.04 ns/op | 21 ns/op | **500x** |
-| 数学函数 ×500K | 0.8-1.7 ns/op | 30-70 ns/op | **30-42x** |
-| concat-4 ×500K | 2.2 ns/op | 14 ns/op | **6.1x** |
-| count ×500K | 0.5 ns/op | 17 ns/op | **32x** |
-| 数组创建 ×500K | 3.0 ns/op | 13 ns/op | **4.4x** |
-| json_encode ×10K | 279 ns/op | 244 ns/op | 1.1x 慢 |
-| foreach 1K ×100K | 581 ms | 1,885 ms | **3.2x** |
+| 场景 | PHP 8.5 | TCC | GCC -O2 | Clang -O2 |
+|---|---|---|---|---|
+| foreach 1K ×100K | 1,482 ms | 490 ms (**3.0x**) | 46 ms ⚡ **32.5x** | 50 ms ⚡ **29.9x** |
+| count+for ×100K | 175 ms | 31 ms (**5.7x**) | 6.8 ms ⚡ **25.8x** | 4.9 ms ⚡ **35.6x** |
+| int key 读取 ×100K | 2.1 ms | 0.29 ms (**7.3x**) | 0.12 ms ⚡ **18.2x** | 0.15 ms ⚡ **14.3x** |
+| 嵌套数组读 ×100K | 3.3 ms | 0.50 ms (**6.6x**) | 0.20 ms ⚡ **16.8x** | 0.15 ms ⚡ **22.4x** |
+| array_pop ×100K | 2.9 ms | 1.3 ms (**2.2x**) | 0.35 ms ⚡ **8.3x** | 0.28 ms ⚡ **10.3x** |
+| in_array ×100K | 48 ms | 92 ms (0.5x) | 23 ms ⚡ **2.1x** | 23 ms ⚡ **2.1x** |
+| array_push ×100K | 1.8 ms | 4.4 ms (0.4x) | 3.1 ms (0.6x) | 3.2 ms (0.6x) |
+| explode+implode ×10K | 2.9 ms | 18.7 ms (0.2x) | 15.8 ms (0.2x) | 12.5 ms (0.2x) |
+
+> ⚡ **GCC/Clang -O2 下 7/10 项反超 PHP，最高 35.6x。** 编译器优化的差距可达 **10 倍**。
+>
+> 用法: `tphp main.php -cc gcc` 或 `tphp main.php -cc clang`
 
 ### 核心优化（源自 PHP 8.5 源码分析）
 

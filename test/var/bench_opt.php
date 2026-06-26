@@ -49,14 +49,14 @@ class Main
         $small = [1, 2, 2, 3, 3, 3, 4, 5];
         $N2 = 50000;
         $this->t0 = hrtime();
-        for ($i = 0; $i < $N2; $i++) { $r = array_unique($small); }
+        for ($i = 0; $i < $N2; $i++) { $ra = array_unique($small); }
         echo 'small(8el)x50K: ' . (hrtime() - $this->t0) . "ns\n";
 
         $big = [];
-        for ($i = 0; $i < 500; $i++) { $big = array_push($big, $i % 50); }
+        for ($i = 0; $i < 500; $i++) { array_push($big, $i % 50); }
         $N3 = 5000;
         $this->t0 = hrtime();
-        for ($i = 0; $i < $N3; $i++) { $r = array_unique($big); }
+        for ($i = 0; $i < $N3; $i++) { $ra = array_unique($big); }
         echo 'large(500el)x5K: ' . (hrtime() - $this->t0) . "ns\n";
 
         echo "\n=== Done ===\n";
