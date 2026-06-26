@@ -348,3 +348,41 @@
 | `usort` / `uasort` / `uksort` | 需闭包回调 |
 | `array_filter` / `array_map` / `array_reduce` | 需闭包回调 |
 | `sin/cos/tan` 等三角函数 | 直接 libc 调用，低优先级 |
+| `posix_*` (42 个) | 全 POSIX 专属，Windows 不可用，日常 PHP 极少碰 |
+
+---
+
+## 语法特性计划
+
+### `yield` → 数组展开（编译期降级）
+
+> 状态：📋 已规划，待实现。难度 ★★ / 收益高。
+
+**方案**：不实现 Generator 状态机运行时，而是在 Parser 编译期将 `yield` 展开为纯数组代码。
+
+```php
+// 用户代码
+function gen(): Generator {
+    yield 1;
+    yield 2;
+}
+
+// 编译期转换为
+function gen(): array {
+    $__result = [];
+    $__result[] = 1;
+    $__result[] = 2;
+    return $__result;
+}
+```
+
+| 特性 | 状态 |
+|------|------|
+| `yield expr` → `$__result[] = expr` | ✅ 可转换 |
+| `yield $k => $v` → `$__result[$k] = $v` | ✅ 可转换 |
+| yield 在 for/while/if/try 内 | ✅ 直接替换 |
+| `yield from array` | ✅ 展开为 foreach |
+| `->send()` / `->throw()` 双向通信 | ❌ 编译报错 |
+| 无限生成器 (`while(true) yield`) | ❌ 编译报错（会 OOM） |
+
+**优点**：C 代码质量高（零堆分配、零状态机），性能比 Generator 高 5-15 倍。工作量 ~100 行 Parser，无 runtime 改动。
