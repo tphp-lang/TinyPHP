@@ -28,14 +28,27 @@ require_once __DIR__ . '/src/CodeGenerator.php';
 require_once __DIR__ . '/src/Compiler.php';
 
 // --- Parse arguments ---
-$options = getopt('f:o:h', ['help']);
-$cc      = null;
+$options = getopt('f:o:h', ['help', 'os:', 'arch:']);
+$cc        = null;
+$targetOS  = null; // -os windows|linux|macos
+$targetArch = null; // -arch x86_64|aarch64
 
-// Manual parse -cc xxx and -o xxx (PHP getopt not fully compatible)
+// Normalize arch name
+$archMap = ['x86_64' => 'x86_64', 'amd64' => 'x86_64', 'x64' => 'x86_64',
+            'aarch64' => 'aarch64', 'arm64' => 'aarch64', 'arm' => 'arm'];
+
+// Manual parse -cc xxx, -os xxx, -arch xxx and -o xxx (PHP getopt not fully compatible)
 $posArgs = [];
 for ($i = 1, $n = count($argv); $i < $n; $i++) {
     if ($argv[$i] === '-cc' && isset($argv[$i + 1])) {
         $cc = $argv[++$i];
+    } elseif ($argv[$i] === '-arch' && isset($argv[$i + 1])) {
+        $targetArch = $archMap[strtolower($argv[++$i])] ?? null;
+        if ($targetArch === null) die("Error: unknown arch '{$argv[$i-1]}'. Use: x86_64, aarch64\n");
+    } elseif ($argv[$i] === '-os' && isset($argv[$i + 1])) {
+        $targetOS = strtolower($argv[++$i]);
+        // Normalize: macos → darwin
+        if ($targetOS === 'macos' || $targetOS === 'mac') $targetOS = 'darwin';
     } elseif ($argv[$i] === '-o' && isset($argv[$i + 1])) {
         $outExe = $argv[++$i]; // 覆盖 getopt 解析
     } elseif (!str_starts_with($argv[$i], '-')) {
@@ -43,6 +56,19 @@ for ($i = 1, $n = count($argv); $i < $n; $i++) {
     }
 }
 $args = $posArgs;
+// Also check --os=xxx, --arch=xxx long form
+if (isset($options['os'])) {
+    $targetOS = strtolower($options['os']);
+    if ($targetOS === 'macos' || $targetOS === 'mac') $targetOS = 'darwin';
+}
+if (isset($options['arch']) && $targetArch === null) {
+    $targetArch = $archMap[strtolower($options['arch'])] ?? null;
+    if ($targetArch === null) die("Error: unknown arch '{$options['arch']}'. Use: x86_64, aarch64\n");
+}
+// Default arch per target OS: Windows/Linux → x86_64, macOS → aarch64
+if ($targetOS !== null && $targetArch === null) {
+    $targetArch = ($targetOS === 'darwin') ? 'aarch64' : 'x86_64';
+}
 
 if (isset($options['f'])) {
     $args = array_merge([$options['f']], array_diff($args, [$options['f']]));
@@ -209,9 +235,11 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         die("Error: no global class Main found (entry class must be named Main in the global namespace)\n");
     }
 
-    // Output path (derived from entry filename)
+    // Output path (derived from entry filename, respect -os target)
     if ($outExe === '') {
-        $ext = (PHP_OS_FAMILY === 'Windows') ? '.exe' : '';
+        $ext = ($targetOS === null)
+            ? ((PHP_OS_FAMILY === 'Windows') ? '.exe' : '')
+            : (($targetOS === 'windows') ? '.exe' : '');
         $outExe = $cwd . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . $ext;
     }
     $outDir = $cwd . DIRECTORY_SEPARATOR . 'build';
@@ -297,6 +325,13 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         }
     }
 
+    // 默认 -O2：GCC/Clang 自动加，TCC 不加（TCC 无优化级别）
+    $ccLower = $cc !== null ? strtolower($cc) : '';
+    if ((str_contains($ccLower, 'gcc') || str_contains($ccLower, 'clang'))
+        && !str_contains($extraFlags, '-O')) {
+        $extraFlags .= ' -O2';
+    }
+
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
 
     $gen   = new CodeGenerator();
@@ -311,57 +346,172 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
 // --- Phase 2: C compile → binary ---
 echo "[2/2] Compiling => {$outExe}...\n";
 
-// TCC -B flag: tells TCC where to find its lib/ and include/
+// TCC -B flag: computed after cross-compilation so we know the final compiler
 $bFlag = '';
-if ($inPhar) {
-    // PHAR mode: TCC extracted alongside PHAR
+$tccLibDir = '';
+
+// ── Cross-compilation ─────────────────────────────
+if ($targetOS !== null) {
+    $currentOS = strtolower(PHP_OS_FAMILY); // windows|linux|darwin
+    if ($targetOS === $currentOS) {
+        echo "[*] -os {$targetOS} -arch {$targetArch} == current, native compile\n";
+    } else {
+        echo "[*] Cross-compile: {$currentOS} → {$targetOS}/{$targetArch}\n";
+        // Platform defines
+        $platformDefines = [
+            'windows' => '-D_WIN32 -DWIN32',
+            'linux'   => '-D__linux__ -D__linux',
+            'darwin'  => '-D__APPLE__ -D__MACH__',
+        ];
+        if (isset($platformDefines[$targetOS])) {
+            $extraFlags .= ' ' . $platformDefines[$targetOS];
+        }
+        // Cross-compiler auto-detection
+        // Priority: 1. clang -target (native cross-compile)  2. GCC triplet
+        if ($cc === null) {
+            $triplets = [
+                'windows' . $targetArch => "{$targetArch}-windows-gnu",
+                'linux'   . $targetArch => "{$targetArch}-linux-gnu",
+                'darwin'  . $targetArch => "{$targetArch}-apple-darwin",
+            ];
+            $targetTriple = $triplets[$targetOS . $targetArch] ?? '';
+            $found = null;
+
+            // 1st: try system clang with -target (works from any platform)
+            foreach (['clang', 'clang-19', 'clang-18', 'clang-17'] as $clangBin) {
+                exec("\"{$clangBin}\" --version 2>&1", $vOut, $vRet);
+                if ($vRet === 0) {
+                    $found = "{$clangBin} -target {$targetTriple}";
+                    break;
+                }
+            }
+            // 2nd: try GCC cross-compiler triplets
+            if ($found === null) {
+                $gccTriplets = [
+                    'windows' => ["{$targetArch}-w64-mingw32-", 'i686-w64-mingw32-'],
+                    'linux'   => ["{$targetArch}-linux-gnu-"],
+                    'darwin'  => ["{$targetArch}-apple-darwin-"],
+                ];
+                $candidates = $gccTriplets[$targetOS] ?? [];
+                if ($targetArch === 'x86_64') {
+                    $candidates = array_merge($candidates, $gccTriplets[$targetOS] ?? []);
+                }
+                foreach (array_unique($candidates) as $prefix) {
+                    foreach (['gcc', 'clang'] as $suffix) {
+                        $testCC = $prefix . $suffix;
+                        exec("\"{$testCC}\" --version 2>&1", $vOut, $vRet);
+                        if ($vRet === 0) { $found = $testCC; break 2; }
+                        exec("where \"{$testCC}\" 2>nul", $wOut, $wRet);
+                        if ($wRet === 0) { $found = $testCC; break 2; }
+                    }
+                }
+            }
+            if ($found !== null) {
+                $cc = $found;
+                // Separate binary from flags: "clang -target xxx" → ccExe=clang, extraFlags+=-target xxx
+                if (str_contains($found, ' ')) {
+                    [$ccBinary, $ccArgs] = explode(' ', $found, 2);
+                    $ccExe = $ccBinary;
+                    $extraFlags = $ccArgs . ' ' . $extraFlags;
+                } else {
+                    $ccExe = $found;
+                }
+                echo "[*] Auto-detected cross-compiler: {$found}\n";
+            } else {
+                $installHints = [
+                    'windows' => [
+                        'Linux'   => '  apt install clang mingw-w64',
+                        'Darwin'  => '  brew install llvm mingw-w64',
+                        'Windows' => '  winget install LLVM.LLVM',
+                    ],
+                    'linux' => [
+                        'Darwin'  => '  brew install llvm',
+                        'Windows' => '  winget install LLVM.LLVM',
+                        'Linux'   => '',
+                    ],
+                    'darwin' => [
+                        'Linux'   => '  apt install clang lld',
+                        'Windows' => '  Unsupported (macOS requires Apple SDK)',
+                        'Darwin'  => '',
+                    ],
+                ];
+                $hint = $installHints[$targetOS][PHP_OS_FAMILY] ?? '';
+                die("Error: no cross-compiler (clang/gcc) found for '{$targetOS}'.\n\n"
+                  . "Install LLVM/clang (recommended) or MinGW-w64:\n"
+                  . ($hint ? "{$hint}\n\n" : "\n")
+                  . "Or specify manually: -cc <compiler> -os {$targetOS}\n"
+                  . "Example: -cc x86_64-w64-mingw32-gcc -os windows\n");
+            }
+        }
+    }
+    // Platform-specific output extension
+    if ($targetOS === 'windows' && !str_ends_with($outExe, '.exe')) {
+        $outExe .= '.exe';
+    } elseif ($targetOS !== 'windows' && str_ends_with($outExe, '.exe')) {
+        $outExe = substr($outExe, 0, -4);
+    }
+}
+
+// Now compute TCC-specific flags (after cross-compilation may have changed $cc)
+$ccLower = $cc !== null ? strtolower($cc) : '';
+$isTCC = ($cc === null || str_contains($ccLower, 'tcc'));
+if ($isTCC && $inPhar) {
     if (PHP_OS_FAMILY === 'Windows') {
         $tccSysDir = $pharDir . DIRECTORY_SEPARATOR . 'tcc' . DIRECTORY_SEPARATOR . 'win32';
     } elseif (PHP_OS_FAMILY !== 'Darwin') {
-        // Linux: use -B, macOS: skip -B (compiled-in paths + explicit libtcc1.a work better)
         $tccSysDir = $pharDir . DIRECTORY_SEPARATOR . 'tcc';
     }
     if (isset($tccSysDir) && is_dir($tccSysDir)) {
         $bFlag = ' -B"' . $tccSysDir . '"';
     }
-} else {
+} elseif ($isTCC) {
     // Dev mode: auto-detect TCC standalone directory
     if (PHP_OS_FAMILY !== 'Darwin') {
         $tccBase = dirname($ccExe);
-        $standaloneDirs = [
-            $tccBase . '/tcc-standalone',
-            $tccBase,
-        ];
-        foreach ($standaloneDirs as $dir) {
-            if (is_dir($dir . '/lib') || is_dir($dir . '/include')) {
-                $bFlag = ' -B"' . realpath($dir) . '"';
-                break;
+        // build.sh puts libtcc1.a at tcc/lib/tcc/ — match that path
+        $libDir = $tccBase . '/lib/tcc';
+        if (is_dir($libDir) && file_exists($libDir . '/libtcc1.a')) {
+            $bFlag = ' -B"' . realpath($libDir) . '"';
+        } else {
+            foreach ([$tccBase . '/tcc-standalone', $tccBase] as $dir) {
+                if (is_dir($dir . '/lib') || is_dir($dir . '/include')) {
+                    $bFlag = ' -B"' . realpath($dir) . '"';
+                    break;
+                }
             }
         }
     }
 }
-
-$tccLibDir = '';
-if (PHP_OS_FAMILY === 'Darwin' && !$cc) {
-    // Vlang-style: -B points to lib/tcc where libtcc1.a lives, not tcc/ root
+if (PHP_OS_FAMILY === 'Darwin' && $isTCC) {
     $tccRoot = $inPhar ? ($pharDir . DIRECTORY_SEPARATOR . 'tcc') : dirname($ccExe);
     $tccLibDir = $tccRoot . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'tcc';
     if (!is_dir($tccLibDir)) $tccLibDir = $tccRoot;
     $bFlag = ' -B"' . $tccLibDir . '" -L"' . $tccLibDir . '"';
-    // Also add explicit include paths (TCC on macOS doesn't always pick up -B includes)
     $bFlag .= ' -I"' . $tccRoot . DIRECTORY_SEPARATOR . 'include' . '"';
 }
 
 $allCFiles = array_unique(array_merge($userCFiles, $extraCFiles));
 $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
+// Linux needs -lm for math functions (round, ceil, floor, sqrt, pow, etc.)
+$linkFlags = '';
+if (PHP_OS_FAMILY !== 'Windows' && ($targetOS === null || $targetOS !== 'windows')) {
+    $linkFlags .= ' -lm';
+}
 $cmd = sprintf(
-    '"%s"%s%s -I"%s" -o "%s" "%s"%s 2>&1',
-    $ccExe, $bFlag, $extraFlags, $includeDir, $outExe, $cFile, $extraSrcs
+    '"%s" %s%s%s -I"%s" -o "%s" "%s"%s 2>&1',
+    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $extraSrcs
 );
 
 $tccOutput = [];
 $retval = 0;
-exec($cmd, $tccOutput, $retval);
+// TCC on Linux may resolve lib paths relative to CWD
+$savedCwd = getcwd();
+if ($savedCwd !== false && @chdir(__DIR__)) {
+    exec($cmd, $tccOutput, $retval);
+    @chdir($savedCwd);
+} else {
+    exec($cmd, $tccOutput, $retval);
+}
 
 if ($retval !== 0 || !file_exists($outExe) || filesize($outExe) < 64) {
     echo "[NO] Compile failed:\n";
@@ -464,16 +614,18 @@ function extractPharDir(string $pharDir, string $destDir): void
 function showHelp(): never
 {
     echo <<<HELP
-TinyPHP — PHP → C transpiler (multi-file support)
+TinyPHP — PHP → C transpiler (multi-file support, cross-compile)
 
 Usage:
-  tphp <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>]
+  tphp <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>] [-os <target>] [-arch <arch>]
   tphp -f <file.php> [-o <output>]
   tphp .                     compile all .php in current dir
 
 Options:
   -o <output>       output file path (default: named after entry file)
   -cc <compiler>    specify C compiler (default: built-in TCC)
+  -os <target>      cross-compile target: windows, linux, macos
+  -arch <arch>      target architecture: x86_64, aarch64 (default: host)
   -h, --help        show help
 
 Examples:
@@ -482,6 +634,9 @@ Examples:
   tphp main.php -o app.exe
   tphp main.php -cc gcc
   tphp main.php -cc "clang -O2"
+  tphp main.php -os linux                          (x86_64 Linux)
+  tphp main.php -os linux -arch aarch64             (ARM64 Linux)
+  tphp main.php -os windows -cc gcc                 (x86_64 Windows via mingw)
 
 HELP;
     exit(0);

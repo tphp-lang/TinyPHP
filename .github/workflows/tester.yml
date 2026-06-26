@@ -1,0 +1,156 @@
+name: Tester
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ============================================================
+  # Linux x86_64
+  # ============================================================
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC & deps
+        run: |
+          sudo apt update
+          sudo apt install -y gcc make libc6-dev git
+
+      - name: Build TCC
+        run: |
+          bash build.sh
+          ./tcc/tcc -v
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+          ./php -v
+
+      - name: Run Tester
+        run: ./php tester.php
+
+  # ============================================================
+  # Linux aarch64
+  # ============================================================
+  linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-aarch64-glibc.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC & deps
+        run: |
+          sudo apt update
+          sudo apt install -y gcc make libc6-dev git
+
+      - name: Build TCC
+        run: |
+          bash build.sh
+          ./tcc/tcc -v
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+          ./php -v
+
+      - name: Run Tester
+        run: ./php tester.php
+
+  # ============================================================
+  # macOS aarch64
+  # ============================================================
+  macos-aarch64:
+    runs-on: macos-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build TCC
+        run: |
+          set -e
+          export LANG=C
+          SDK=$(xcrun --show-sdk-path)
+          git clone --depth 1 --branch mob https://repo.or.cz/tinycc.git tinycc-src
+          cd tinycc-src
+          for i in include/*.h; do test -f $i && ln -sf $i $(basename $i); done
+          ./configure \
+            --prefix=../tcc \
+            --bindir=../tcc \
+            --crtprefix="../tcc:/usr/lib" \
+            --libpaths="../tcc:/usr/local/lib:/usr/lib:/lib" \
+            --sysincludepaths="../tcc/include:/usr/local/include:$SDK/usr/include" \
+            --extra-cflags="-I$SDK/usr/include -O3" \
+            --cc=cc \
+            --config-new_macho=yes \
+            --config-codesign=yes \
+            --config-bcheck=yes \
+            --config-backtrace=yes \
+            --enable-static
+          make
+          make install
+          cd ..
+          find tcc -name libtcc1.a -exec cp {} tcc/libtcc1.a \; -quit
+          test -f tcc/libtcc1.a || { echo "ERROR: libtcc1.a not found"; exit 1; }
+          ln -sf /usr/lib/libSystem.B.dylib tcc/libc.dylib 2>/dev/null || true
+          echo 'int main(){return 0;}' > _test_tcc.c
+          ./tcc/tcc -o _test_tcc _test_tcc.c && echo "TCC standalone OK" \
+            || { echo "TCC FAIL";./tcc/tcc -v -v 2>&1; exit 1; }
+          rm -f _test_tcc.c _test_tcc
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+          ./php -v
+
+      - name: Run Tester
+        run: ./php tester.php
+
+  # ============================================================
+  # Windows x86_64
+  # ============================================================
+  windows-x86_64:
+    runs-on: windows-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+            git
+
+      - name: Build TCC
+        shell: pwsh
+        run: .\build.cmd
+
+      - name: Download PHP
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:PHP_URL -OutFile php.zip
+          Expand-Archive -Path php.zip -DestinationPath .
+          ls php.exe
+
+      - name: Run Tester
+        shell: pwsh
+        run: .\php.exe tester.php
