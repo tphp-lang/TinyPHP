@@ -1,4 +1,4 @@
-<?php
+<?php // @exit 1 — §7 tests invalid JSON which triggers error()
 
 class Main
 {

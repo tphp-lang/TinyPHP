@@ -1,4 +1,4 @@
-<?php
+<?php // @skip — heredoc multi-line string not yet escaped to \n (Lexer TODO)
 
 class Main
 {

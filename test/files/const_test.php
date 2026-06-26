@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with const_data.php
 
 use Calculator;
 use Logger;

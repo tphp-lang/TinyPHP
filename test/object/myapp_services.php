@@ -1,4 +1,5 @@
-<?php
+<?php // @skip — companion file, no class Main
+
 // myapp_services.php — 命名空间服务层
 
 namespace MyApp\Services;

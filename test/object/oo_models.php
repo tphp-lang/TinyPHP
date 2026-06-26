@@ -1,4 +1,5 @@
-<?php
+<?php // @skip — companion file, no class Main
+
 
 interface Named { public function getName(): string; }
 interface Identifiable { public function getId(): int; }

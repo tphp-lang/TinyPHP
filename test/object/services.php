@@ -1,4 +1,5 @@
-<?php
+<?php // @skip — companion file, no class Main
+
 
 // OrderService
 class OrderService

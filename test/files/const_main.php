@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with const_global.php,const_lib.php
 
 use Lib\Config;
 use Lib\App;

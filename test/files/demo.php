@@ -1,4 +1,5 @@
-<?php
+<?php // @skip — companion file, no class Main
+
 
 namespace Demo; // 命名空间,一个只能一个否则报错
 

@@ -1,4 +1,5 @@
-<?php
+<?php // @skip — companion file, no class Main
+
 
 // 全局常量
 const GLOBAL_STR  = "global hello";

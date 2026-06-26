@@ -1,4 +1,4 @@
-<?php
+<?php // @exit 1 — tests error() which triggers exit(1)
 
 class Demo
 {

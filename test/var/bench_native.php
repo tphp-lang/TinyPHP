@@ -1,4 +1,4 @@
-<?php
+<?php // @skip — native PHP benchmark, not a TPHP entry point
 
 // PHP 原生数组性能测试 (hrtime(true) 返回纳秒整数)
 declare(strict_types=1);

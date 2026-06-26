@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with enums.php
 
 use Complex\Enums\Status;
 use Complex\Enums\Role;
@@ -248,10 +248,10 @@ class Main
 
         // 关联数组 + foreach key=>val
         $user = ["name" => "Alice", "age" => 30, "score" => 95];
-        foreach ($user as $k => $v) {
-            echo $k;
+        foreach ($user as $k2 => $v2) {
+            echo $k2;
             echo ": ";
-            var_dump($v);
+            var_dump($v2);
         }
 
         // 嵌套数组

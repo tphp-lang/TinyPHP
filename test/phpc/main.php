@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with phpc.php
 
 use function Phpc\calc_distance;
 use function Phpc\calc_factorial;

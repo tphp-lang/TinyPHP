@@ -1,4 +1,4 @@
-<?php
+<?php // @skip — native PHP benchmark, not a TPHP entry point
 
 echo "=== PHP 原生数组性能 ===\n\n";
 

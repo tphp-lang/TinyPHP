@@ -1618,7 +1618,7 @@ class Parser
         $typeToken = $this->advance();
         $castType = $typeToken->lexeme; // int, float, string, bool, array
         $this->consume(TokenType::RPAREN, 'Expected )');
-        $expr = $this->parsePrimary(); // 只转换紧邻表达式，不吞掉 . 运算符
+        $expr = $this->parseUnary(); // parseUnary 支持 (int)-2 这种负数字面量
         return $this->setPos(new CastExpr($castType, $expr), $line, $col);
     }
 
@@ -1626,7 +1626,7 @@ class Parser
     // 辅助方法
     // ============================================================
 
-    /** 解析方法名（IDENTIFIER | 类型关键字 | CONSTRUCT | DESTRUCT | 内置函数名） */
+    /** 解析方法名（IDENTIFIER | 类型关键字 | CONSTRUCT | DESTRUCT | 内置函数名 | 保留字） */
     private function parseMethodName(): Token
     {
         $tok = $this->advance();
@@ -1636,6 +1636,8 @@ class Parser
             TokenType::TYPE_BOOL, TokenType::TYPE_VOID, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
             TokenType::COUNT, TokenType::VAR_DUMP, TokenType::ECHO_KW,
             TokenType::DIE, TokenType::ISSET, TokenType::EMPTY_KW, TokenType::LIST_KW, TokenType::EXIT, TokenType::UNSET,
+            // PHP 保留字也可作为方法名
+            TokenType::NULL_KW, TokenType::TRUE_KW, TokenType::FALSE_KW,
         ];
         if (!in_array($tok->type, $valid, true)) {
             $this->error("Expected method name, got '{$tok->lexeme}'");

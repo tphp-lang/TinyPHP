@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with oo_models.php
 
 class Main
 {

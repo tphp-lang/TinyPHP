@@ -1,4 +1,5 @@
-<?php
+<?php // @skip — companion file, no class Main
+
 
 // Product — 基础模型，测试属性类型 + 构造器提升
 class Product

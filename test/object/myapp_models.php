@@ -1,4 +1,5 @@
-<?php
+<?php // @skip — companion file, no class Main
+
 // myapp_models.php — 命名空间模型
 
 namespace MyApp\Models;

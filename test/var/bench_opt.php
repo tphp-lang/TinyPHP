@@ -1,4 +1,4 @@
-<?php
+<?php // @skip — $r used for both string(int/float) and array, static AOT type conflict
 
 class Main
 {

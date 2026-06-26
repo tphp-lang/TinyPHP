@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with myapp_models.php,myapp_services.php
 // myapp_main.php — 命名空间 OOP 入口
 
 use MyApp\Models\User;

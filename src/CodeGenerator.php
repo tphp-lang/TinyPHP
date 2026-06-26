@@ -2237,6 +2237,14 @@ class CodeGenerator implements ASTVisitor
             $parentCN = $this->resolveMethodClass($cnClean, $node->name);
             if ($parentCN !== '') { $cnClean = $parentCN; $useParent = true; }
         }
+        // 校验方法存在性：未定义的方法直接报错，不生成无效 C 代码
+        if ($cnClean !== '' && !isset($this->classMethodRetTypes[$cnClean][$node->name])
+            && $node->name !== '__construct' && $node->name !== '__destruct') {
+            throw new \RuntimeException(sprintf(
+                "[%d:%d] Call to undefined method %s::%s()",
+                $node->line, $node->column, $cnClean, $node->name
+            ));
+        }
         // If method is inherited, pass &obj->_parent as self
         $selfArg = $useParent ? ('&' . $callee . '->_parent') : $callee;
         $allArgs[0] = $selfArg;
@@ -2594,8 +2602,17 @@ class CodeGenerator implements ASTVisitor
             $objCN = rtrim($objType, '*');
         }
         if ($objCN !== '' && !isset($this->classOwnProps[$objCN][$prop])) {
-            $prefix = $this->resolvePropPrefix($objCN, $prop);
-            return $obj . '->_parent.' . $prefix . $prop;
+            // 枚举类型直接访问字段（无 COS _parent 包装）
+            if (str_starts_with($objCN, 'tphp_enum_')) {
+                return $obj . '->' . $prop;
+            }
+            // 类常量（大写开头）→ 不经过 _parent，由下方 const 逻辑处理
+            if ($prop !== '' && ctype_upper($prop[0])) {
+                // 交由下方类常量访问逻辑 → TPHP_CONST_ 引用
+            } else {
+                $prefix = $this->resolvePropPrefix($objCN, $prop);
+                return $obj . '->_parent.' . $prefix . $prop;
+            }
         }
         // 类常量访问: self::CONST 或 ClassName::CONST → TPHP_CONST_ 引用
         if (ctype_upper($prop[0] ?? '')) {

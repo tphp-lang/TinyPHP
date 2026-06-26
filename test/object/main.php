@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with models.php,services.php
 
 class Main
 {

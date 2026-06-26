@@ -1,4 +1,4 @@
-<?php
+<?php // @multi @with demo.php,other/demo.php,all/aa.php,other/other.php
 
 /* use Demo\Demo; // 导入命名空间的 Demo 类
 use function Demo\myDemoFn; // 导入命名空间的 myDemoFn 函数

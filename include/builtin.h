@@ -596,6 +596,52 @@ static inline t_float tphp_fn_ceil(t_float v)  { return ceil(v); }
 static inline t_float tphp_fn_floor(t_float v) { return floor(v); }
 static inline t_float tphp_fn_sqrt(t_float v)  { return v >= 0.0 ? sqrt(v) : 0.0; }
 
+/* ============================================================
+ * 断言函数 — 测试框架专用，失败时打印错误并 exit(非零)
+ *   assert_true($cond)           → 布尔断言
+ *   assert_eq_int($a, $b)        → 整数相等
+ *   assert_eq_float($a, $b)      → 浮点相等
+ *   assert_eq_str($a, $b)        → 字符串相等
+ *   assert_false($cond)          → 布尔取反断言
+ * ============================================================ */
+static inline void tphp_fn_assert_true(t_bool cond) {
+    if (unlikely(!cond)) {
+        tphp_rt_free_all();
+        fputs("\nASSERT FAIL: assert_true()\n\n", stderr);
+        exit(2);
+    }
+}
+static inline void tphp_fn_assert_false(t_bool cond) {
+    if (unlikely(cond)) {
+        tphp_rt_free_all();
+        fputs("\nASSERT FAIL: assert_false()\n\n", stderr);
+        exit(2);
+    }
+}
+static inline void tphp_fn_assert_eq_int(t_int a, t_int b) {
+    if (unlikely(a != b)) {
+        tphp_rt_free_all();
+        fprintf(stderr, "\nASSERT FAIL: assert_eq_int(%lld, %lld)\n\n",
+            (long long)a, (long long)b);
+        exit(2);
+    }
+}
+static inline void tphp_fn_assert_eq_float(t_float a, t_float b) {
+    if (unlikely(a != b)) {
+        tphp_rt_free_all();
+        fprintf(stderr, "\nASSERT FAIL: assert_eq_float(%g, %g)\n\n", a, b);
+        exit(2);
+    }
+}
+static inline void tphp_fn_assert_eq_str(t_string a, t_string b) {
+    if (unlikely(!tphp_rt_str_eq(a, b))) {
+        tphp_rt_free_all();
+        fprintf(stderr, "\nASSERT FAIL: assert_eq_str(len=%d vs len=%d)\n\n",
+            a.length, b.length);
+        exit(2);
+    }
+}
+
 
 
 
