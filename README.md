@@ -168,6 +168,7 @@ throw new Exception('error');
 | JSON | `json_encode`, `json_decode` |
 | 环境 | `getenv`, `putenv` |
 | 进程 | `pcntl_fork/waitpid/wait/exec/alarm/get_last_error/strerror`（POSIX 专属） |
+| POSIX | `posix_getpid/ppid/uid/gid/getcwd/isatty/kill/strerror/get_last_error/ttyname/uname/times`（POSIX 专属） |
 
 > 详见 [FUNCTIONS.md](FUNCTIONS.md) — 每个函数与 PHP 的差异对照。
 

@@ -1133,6 +1133,12 @@ class CodeGenerator implements ASTVisitor
             if ($expr->name === 'pcntl_alarm')    return 't_int';
             if ($expr->name === 'pcntl_get_last_error') return 't_int';
             if ($expr->name === 'pcntl_strerror') return 't_string';
+            // ── posix ──
+            if (str_starts_with($expr->name, 'posix_')) {
+                if ($expr->name === 'posix_uname' || $expr->name === 'posix_times') return 't_array*';
+                if ($expr->name === 'posix_getcwd' || $expr->name === 'posix_strerror' || $expr->name === 'posix_ttyname') return 't_string';
+                return 't_int';
+            }
         }
         // 闭包调用 → 查 closureSigs
         if ($expr->name === '__invoke' && $expr->callee instanceof VariableExpr) {
@@ -2363,6 +2369,15 @@ class CodeGenerator implements ASTVisitor
             if ($n4 === 'pcntl_alarm')     return "pcntl_alarm({$c4})";
             if ($n4 === 'pcntl_get_last_error') return "pcntl_get_last_error()";
             if ($n4 === 'pcntl_strerror')  return "pcntl_strerror({$c4})";
+        }
+
+        // ── posix (POSIX, Windows→error) ──────────────────
+        if ($node->callee === null && str_starts_with($node->name, 'posix_')) {
+            $a5 = array_map(fn($a) => $a->accept($this), $node->args);
+            $n5 = $node->name;
+            if (empty($a5)) return "{$n5}()";
+            $args = implode(', ', $a5);
+            return "{$n5}({$args})";
         }
 
         // 闭包调用: $h() → ((t_int(*)(...))h.func)(args)

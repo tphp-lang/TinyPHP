@@ -1,5 +1,7 @@
 <?php
 
+// @exit 1 — POSIX only, Windows will crash (expected)
+
 class Main {
     public function main(): void {
         // pcntl_fork returns -1 on Win / no-fork, child exits immediately on Linux

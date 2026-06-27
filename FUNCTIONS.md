@@ -22,11 +22,12 @@
 | 随机数 | 2 | [↓](#随机数) |
 | 环境/类型 | 3 | [↓](#环境--类型) |
 | 进程控制 | 7 | [↓](#进程控制-pcntl) |
+| POSIX 系统 | 12 | [↓](#posix-系统) |
 | 异常 | 4 | [↓](#异常) |
 | OOP 语法 | 10 | [↓](#oop-语法) |
 | C 互操作 | 24 | [↓](#c-互操作-phpc) |
 | 断言 | 5 | [↓](#断言测试框架用) |
-| **合计** | **166** | |
+| **合计** | **178** | |
 | | | [↓](#待实现--暂缓) |
 
 ---
@@ -269,6 +270,26 @@ POSIX 专属（Windows 调用触发 `tphp_fn_error()` 退出）。`include/os/pc
 | `pcntl_alarm($sec)` | `alarm()` | SIGALRM 闹钟 |
 | `pcntl_get_last_error()` | `errno` | 获取 errno |
 | `pcntl_strerror($no)` | `strerror()` | errno→错误消息 |
+
+---
+
+## POSIX 系统
+
+POSIX 专属（Windows 调用触发 `tphp_fn_error()` 退出）。`include/os/posix.h`。13 个常用函数。
+
+| 函数 | C 实现 | 说明 |
+|---|---|---|
+| `posix_getpid()` / `getppid()` | `getpid()` / `getppid()` | 进程 ID |
+| `posix_getuid()` / `geteuid()` | `getuid()` / `geteuid()` | 用户 ID |
+| `posix_getgid()` / `getegid()` | `getgid()` / `getegid()` | 组 ID |
+| `posix_getcwd()` | `getcwd()` + 栈缓冲 | 当前目录 |
+| `posix_isatty($fd)` | `isatty()` | 是否终端 |
+| `posix_kill($pid,$sig)` | `kill()` | 发信号 |
+| `posix_strerror($no)` | `strerror()` | errno→消息 |
+| `posix_get_last_error()` | `errno` | 获取 errno |
+| `posix_ttyname($fd)` | `ttyname()` | 终端名 |
+| `posix_uname()` | `uname()` → 关联数组 | sysname/nodename/release/version/machine |
+| `posix_times()` | `times()` → 关联数组 | ticks/utime/stime/cutime/cstime |
 
 ---
 
