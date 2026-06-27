@@ -97,11 +97,16 @@ static inline t_array* posix_uname(void) {
     tphp_rt_register((void*)a, 1);
     struct utsname u;
     if (uname(&u) < 0) return a;
-    a = tphp_fn_arr_set_str(a, (t_string){"sysname",7},  VAR_STRING((t_string){u.sysname,  (int)strlen(u.sysname)}));
-    a = tphp_fn_arr_set_str(a, (t_string){"nodename",8}, VAR_STRING((t_string){u.nodename, (int)strlen(u.nodename)}));
-    a = tphp_fn_arr_set_str(a, (t_string){"release",7},  VAR_STRING((t_string){u.release,  (int)strlen(u.release)}));
-    a = tphp_fn_arr_set_str(a, (t_string){"version",7},  VAR_STRING((t_string){u.version,  (int)strlen(u.version)}));
-    a = tphp_fn_arr_set_str(a, (t_string){"machine",7},  VAR_STRING((t_string){u.machine,  (int)strlen(u.machine)}));
+    t_string _sys  = {u.sysname,  (int)strlen(u.sysname)};
+    t_string _node = {u.nodename, (int)strlen(u.nodename)};
+    t_string _rel  = {u.release,  (int)strlen(u.release)};
+    t_string _ver  = {u.version,  (int)strlen(u.version)};
+    t_string _mach = {u.machine,  (int)strlen(u.machine)};
+    a = tphp_fn_arr_set_str(a, (t_string){"sysname",7},  VAR_STRING(_sys));
+    a = tphp_fn_arr_set_str(a, (t_string){"nodename",8}, VAR_STRING(_node));
+    a = tphp_fn_arr_set_str(a, (t_string){"release",7},  VAR_STRING(_rel));
+    a = tphp_fn_arr_set_str(a, (t_string){"version",7},  VAR_STRING(_ver));
+    a = tphp_fn_arr_set_str(a, (t_string){"machine",7},  VAR_STRING(_mach));
     return a;
 }
 
