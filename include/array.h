@@ -78,6 +78,13 @@ static inline t_array* tphp_fn_arr_create(int cap) {
     return a;
 }
 
+/** 标量/值转单元素数组 — 避免 ({...}) 跨平台兼容问题 */
+static inline t_array* tphp_fn_arr_from_val(t_var val) {
+    t_array* a = tphp_fn_arr_create(1);
+    if (a != NULL) a = tphp_fn_arr_push(a, val);
+    return a;
+}
+
 /** 带容量提示的创建（至少分配 cap 个槽，但最小 4） */
 static inline t_array* tphp_fn_arr_create_hint(int cap, int total) {
     (void)total;

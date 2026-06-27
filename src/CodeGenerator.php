@@ -3493,10 +3493,7 @@ class CodeGenerator implements ASTVisitor
     private function castToArray(ExprNode $expr): string
     {
         if ($expr instanceof NullLiteralExpr) return 'tphp_fn_arr_create(0)';
-
-        $tmp = "_arr_cast_" . (++$this->tmpVarCounter);
-        $val = $this->wrapVar($expr);
-        return "({ t_array* {$tmp} = tphp_fn_arr_create(0); if ({$tmp} != NULL) { {$tmp} = tphp_fn_arr_push({$tmp}, {$val}); } {$tmp}; })";
+        return 'tphp_fn_arr_from_val(' . $this->wrapVar($expr) . ')';
     }
 
     public function visitArrayAccess(ArrayAccessExpr $node): string

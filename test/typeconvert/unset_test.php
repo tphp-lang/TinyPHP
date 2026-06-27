@@ -43,8 +43,8 @@
 #debug string(4) "loop"
 #debug string(4) "loop"
 #debug string(4) "loop"
-#debug string(5) "iter_0"
-#debug string(5) "iter_1"
+#debug string(6) "iter_0"
+#debug string(6) "iter_1"
 #debug all unset tests passed
 
 class Main
