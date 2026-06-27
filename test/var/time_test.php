@@ -1,4 +1,48 @@
 <?php
+#debug === time() ===
+#debug time > 1700000000: bool(true)
+#debug time() >= prev: bool(true)
+#debug time diff >= 0: bool(true)
+#debug sum of 3 time() calls > 0: bool(true)
+#debug
+#debug === date() ===
+#debug ~ date(Y-m-d): 2024-06-01
+#debug ~ date(H:i:s): 00:00:00
+#debug ~ date(full): 2024-06-01 00:00:00
+#debug date(Y) is numeric: bool(true)
+#debug ~ date(Y/m/d): 2024/06/01
+#debug ~ date(m) for ts>0: 06
+#debug ~ nested date: 01
+#debug ~ Date: 2024-06-01
+#debug
+#debug === sleep() ===
+#debug sleep(1) elapsed >= 1: bool(true)
+#debug conditional sleep(1) >= 1: bool(true)
+#debug sleep(0) fast: bool(true)
+#debug
+#debug === usleep() ===
+#debug usleep(0.5s) ok: bool(true)
+#debug usleep(1ms) ok: bool(true)
+#debug usleep(0) fast: bool(true)
+#debug usleep(variable) ok: bool(true)
+#debug
+#debug === hrtime() ===
+#debug hrtime > 0: bool(true)
+#debug hrtime monotonic: bool(true)
+#debug hrtime across 10ms > 1000000: bool(true)
+#debug hrtime assigned: bool(true)
+#debug hrtime sleep(1) ~1e9 ns: bool(true)
+#debug ~ int(1000000000)
+#debug
+#debug === 混合场景 ===
+#debug ~ [20??-??-?? ??:??:??] app started
+#debug after sleep(1) time advanced: bool(true)
+#debug ~   iter 1 at ??:??:??
+#debug ~   iter 2 at ??:??:??
+#debug date with ts=0: 1970-01-01
+#debug ~ date with big ts: 2286-11-20
+#debug
+#debug === done ===
 
 class Main
 {

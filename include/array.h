@@ -25,7 +25,9 @@ static int tphp_fn_str_hash(t_string s);
 
 // === Array Freelist Pool (LIFO, up to 128 cached arrays) ===
 
+#ifndef ARR_POOL_MAX
 #define ARR_POOL_MAX  128
+#endif
 static t_array*  arr_freelist[ARR_POOL_MAX];
 static int       arr_freelist_count = 0;
 

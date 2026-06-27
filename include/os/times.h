@@ -21,7 +21,7 @@ static inline t_int tphp_fn_time(void) {
 // 手写解析 PHP date 格式字符，零堆分配。
 static inline t_string tphp_fn_date(t_string fmt, t_int timestamp) {
     static char out[256];
-    time_t t = (time_t)(timestamp > 0 ? timestamp : time(NULL));
+    time_t t = (time_t)(timestamp >= 0 ? timestamp : time(NULL));
     struct tm *tm = localtime(&t);
     if (tm == NULL) return (t_string){NULL, 0};
 
@@ -75,7 +75,10 @@ static inline t_int tphp_fn_hrtime(void) {
     if (freq.QuadPart == 0) QueryPerformanceFrequency(&freq);
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    return (t_int)(now.QuadPart * 1000000000LL / freq.QuadPart);
+    // 拆分计算避免 now * 1e9 溢出 64-bit
+    t_int sec  = now.QuadPart / freq.QuadPart;
+    t_int nsec = (now.QuadPart % freq.QuadPart) * 1000000000LL / freq.QuadPart;
+    return sec * 1000000000LL + nsec;
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);

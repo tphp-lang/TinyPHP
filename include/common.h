@@ -8,11 +8,12 @@
 #include "types.h"
 #include "val.h"
 #include "compat.h"
+#include <math.h>              // 系统 math.h，runtime.h/object.h 等需要 pow/ceil/floor
+#include "runtime.h"           // tphp_fn_error 定义在此，必须在 array/math 之前
 #include "object/object.h"
 #include "array.h"
-#include "runtime.h"
 #include "builtin.h"
-#include "math.h"
+#include "math.h"              // TinyPHP math 扩展
 #include "conv.h"
 #include "hash.h"
 #include "object/exception.h"

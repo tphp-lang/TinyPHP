@@ -2156,7 +2156,7 @@ class CodeGenerator implements ASTVisitor
         if ($node->callee === null && $node->name === 'date') {
             $args = array_map(fn($a) => $a->accept($this), $node->args);
             $fmt  = $args[0] ?? 'STR_LIT("%c")';
-            $ts   = $args[1] ?? '0';
+            $ts   = $args[1] ?? '-1';  // -1 = not passed, use current time
             return 'tphp_fn_date(' . $fmt . ', ' . $ts . ')';
         }
 

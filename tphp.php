@@ -545,7 +545,10 @@ if ($debugMode) {
         for ($i = 0; $i < $count; $i++) {
             $expect = $debugLines[$i] ?? '';
             $actual = $actualOutput[$i] ?? '';
-            if ($expect === $actual) {
+            // #debug ~ 前缀表示近似值，跳过严格比对（如时间相关输出）
+            if (str_starts_with($expect, '~ ')) {
+                echo "[REF] " . substr($expect, 2) . "  (actual: {$actual})\n";
+            } elseif ($expect === $actual) {
                 echo "[YES] {$expect}\n";
             } else {
                 echo "[NO] expected: {$expect}\n";

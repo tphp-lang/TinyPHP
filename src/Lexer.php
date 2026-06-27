@@ -204,10 +204,20 @@ class Lexer
                 $this->advance(strlen($m[0]));
                 return;
             }
-            // #debug text — 仅 --debug 模式产生 token，否则当作注释跳过
-            if (preg_match('/^#debug ([^\r\n]+)/', $rest, $m)) {
+            // #debug [text] — 仅 --debug 模式产生 token
+            //   "#debug text" → 捕获 text
+            //   "#debug" 或 "#debug " → 捕获空串（表示空输出行）
+            if (preg_match('/^#debug[ \t]([^\r\n]*)/', $rest, $m)) {
                 if ($this->debugMode) {
                     $this->addToken(TokenType::HASH_DEBUG, $m[1]);
+                }
+                $this->advance(strlen($m[0]));
+                return;
+            }
+            // 裸 #debug 行（无双文）→ 空行
+            if (preg_match('/^#debug(?=[\s]*(\r?\n|$))/', $rest, $m)) {
+                if ($this->debugMode) {
+                    $this->addToken(TokenType::HASH_DEBUG, '');
                 }
                 $this->advance(strlen($m[0]));
                 return;
