@@ -101,7 +101,7 @@ PHP → Lexer → Token[] → Parser → AST → CodeGenerator → .c → 编译
 - **Lexer**: 逐字符扫描，~75 种 Token，支持字符串插值/heredoc
 - **Parser**: 递归下降，运算符优先级完整
 - **CodeGenerator**: 访问者模式，生成类型安全的 C 代码
-- **C 运行时**: COS 风格对象系统（16B 头 + struct 嵌套继承），setjmp/longjmp 异常，ROPE 多片段字符串拼接，256 位 JSON 转义位图，128 槽数组复用池+启动预热，64KB 字符串池
+- **C 运行时**: COS 风格对象系统（16B 头 + struct 嵌套继承），setjmp/longjmp 异常，ROPE 多片段字符串拼接，256 位 JSON 转义位图，128 槽数组复用池+启动预热，128 槽对象复用池，64KB 字符串池，`compat.h` TCC/GCC/Clang 三编译器兼容层
 - **编译器**: 内置 TCC (mob 分支)，支持 GCC/Clang
 
 ## 支持特性
@@ -156,14 +156,16 @@ throw new Exception('error');
 | 类别 | 函数 |
 |---|---|
 | 输出 | `echo`, `var_dump` |
-| 数组 | `count`, `array_push`, `array_pop`, `array_shift`, `array_unshift`, `in_array`, `array_key_exists`, `array_keys`, `array_values`, `array_merge`, `array_unique`, `array_reverse`, `array_slice`, `array_sum`, `array_product`, `array_fill`, `array_search`, `sort`, `rsort`, `shuffle` |
-| 字符串 | `implode`, `explode`, `strlen`, `trim/ltrim/rtrim`, `substr`, `strpos`, `str_contains`, `str_replace`, `strtolower`, `strtoupper`, `sprintf` |
-| 类型 | `is_int/float/string/bool/array/null/object/callable`, `isset`, `empty`, `unset` |
+| 数组 | `count`, `array_push`, `array_pop`, `array_shift`, `array_unshift`, `in_array`, `array_key_exists`, `array_keys`, `array_values`, `array_merge`, `array_unique`, `array_reverse`, `array_slice`, `array_sum`, `array_product`, `array_fill`, `array_search`, `sort`, `rsort`, `shuffle`, `array_key_first`, `array_key_last`, `array_rand`, `array_is_list`, `current`, `key`, `next`, `prev`, `end`, `reset` |
+| 字符串 | `implode`, `explode`, `strlen`, `trim/ltrim/rtrim`, `substr`, `strpos`, `str_contains`, `str_replace`, `strtolower`, `strtoupper`, `sprintf`, `ord`, `chr`, `str_starts_with`, `str_ends_with`, `is_numeric` |
+| 类型 | `is_int/float/string/bool/array/null/object/callable`, `isset`, `empty`, `unset`, `gettype` |
 | 转换 | `intval`, `floatval`, `strval`, `boolval` |
-| 数学 | `abs`, `round`, `ceil`, `floor`, `sqrt` |
+| 数学 | `abs`, `round`, `ceil`, `floor`, `sqrt`, `pow`, `pi`, `deg2rad`, `rad2deg`, `intdiv` |
+| 进制 | `bindec`, `hexdec`, `octdec`, `decbin`, `decoct`, `dechex`, `number_format` |
 | 通用 | `max`, `min`, `range`, `rand`, `mt_rand`, `exit/die`, `error` |
-| 时间 | `time`, `date`, `sleep`, `usleep`, `hrtime`, `microtime` |
+| 时间 | `time`, `date`, `sleep`, `usleep`, `hrtime`, `microtime`, `strtotime`, `mktime`, `uniqid` |
 | JSON | `json_encode`, `json_decode` |
+| 环境 | `getenv`, `putenv` |
 
 > 详见 [FUNCTIONS.md](FUNCTIONS.md) — 每个函数与 PHP 的差异对照。
 

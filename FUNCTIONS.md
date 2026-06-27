@@ -9,21 +9,23 @@
 | 类别 | 函数数 | 跳转 |
 |---|---|---|
 | 输出/调试 | 4 | [↓](#输出--调试) |
-| 类型检测 | 11 | [↓](#类型检测) |
+| 类型检测 | 12 | [↓](#类型检测) |
 | 类型转换 | 10 | [↓](#类型转换) |
-| 数组 | 26 | [↓](#数组) |
-| 字符串 | 13 | [↓](#字符串) |
-| 数学 | 8 | [↓](#数学) |
+| 数组 | 36 | [↓](#数组) |
+| 字符串 | 21 | [↓](#字符串) |
+| 数学 | 13 | [↓](#数学) |
+| 进制转换 | 7 | [↓](#进制转换) |
 | 文件 I/O | 2 | [↓](#文件-io) |
-| 时间 | 6 | [↓](#时间) |
+| 时间 | 9 | [↓](#时间) |
 | JSON | 2 | [↓](#json) |
 | 随机数 | 2 | [↓](#随机数) |
+| 环境/类型 | 3 | [↓](#环境--类型) |
 | 异常 | 4 | [↓](#异常) |
 | OOP 语法 | 10 | [↓](#oop-语法) |
 | C 互操作 | 24 | [↓](#c-互操作-phpc) |
 | 断言 | 5 | [↓](#断言测试框架用) |
-| **小计** | **103** | |
-| **待实现** | **66** | [↓](#待实现函数) |
+| **小计** | **130** | |
+| **待实现** | **39** | [↓](#待实现函数) |
 
 ---
 
@@ -45,6 +47,7 @@
 | `is_int($x)` | `$x` 类型固定为 `t_int` → 编译期 `true` |
 | `is_float/is_string/is_bool/is_array/is_null/is_object` | 同上 |
 | `is_callable($x)` | 闭包类型 → `true` |
+| `is_numeric($s)` | null-terminated 副本 + `strtoll`/`strtod` 扫描 |
 | `isset($var)` | 非指针类型 → `true`；指针 → `ptr != NULL` |
 | `empty($var)` | 按类型分发：int→`==0`，string→`strlen==0`，float/bool 同 |
 | `unset($var)` | 对象 → `tp_obj_release`；数组 → `free` |
@@ -66,7 +69,7 @@
 
 ## 数组
 
-所有数组函数通过 `include/array.h` 实现。数组为 `t_array*` 指针（128 槽 LIFO 复用池 + 1.5× 增长因子）。
+所有数组函数通过 `include/array.h` 实现。数组为 `t_array*` 指针（128 槽 LIFO 复用池 + 1.5× 增长因子）。新增 `cursor` 字段（4 字节）支持内部指针操作。
 
 | 函数 | C 实现 | 时间 | 差异 |
 |---|---|---|---|
@@ -92,6 +95,14 @@
 | `shuffle($arr)` | Fisher-Yates 原地洗牌 | O(n) | — |
 | `range($start, $end, $step?)` | 预知长度一次分配 | O(n) | step=0 → error |
 | `max($arr)` / `min($arr)` | 遍历比较 | O(n) | 空数组 → error |
+| `array_key_first($a)` | `len>0 ? 0 : -1` | O(1) | — |
+| `array_key_last($a)` | `len>0 ? len-1 : -1` | O(1) | — |
+| `array_rand($a)` | `rand(0, len-1)` | O(1) | — |
+| `array_is_list($a)` | 遍历检查 key=0,1,2... | O(n) | — |
+| `current($a)` | `entries[cursor].val` | O(1) | — |
+| `key($a)` | `entries[cursor].key` | O(1) | — |
+| `next($a)` / `prev($a)` | `cursor++` / `cursor--` | O(1) | 越界返回 null |
+| `end($a)` / `reset($a)` | `cursor=len-1` / `cursor=0` | O(1) | — |
 
 ---
 
@@ -102,8 +113,8 @@
 
 | 函数 | C 实现 | 性能 | 差异 |
 |---|---|---|---|
-| `implode($glue, $arr)` | 计算总长 → `str_pool_alloc` → memcpy | O(n) | — |
-| `explode($sep, $s)` | 线性查找 + 逐段 `str_pool_alloc` | O(n) | — |
+| `implode($glue, $arr)` | 两遍扫描 + 一次 memcpy | O(n) | 防溢出 8MB 上限 |
+| `explode($sep, $s)` | 先数分隔符→精确容量 + 零 realloc | O(n) | — |
 | `strlen($s)` | `s.length` | O(1) | null → 0 |
 | `trim($s)` | 首尾遍历 → 无空白时零分配返回原串 | O(n) | 仅 ASCII 空白 |
 | `ltrim($s)` / `rtrim($s)` | 遍历 → 无空白时零分配 | O(n) | 同上 |
@@ -114,6 +125,10 @@
 | `sprintf($fmt, ...)` | `snprintf(NULL,0,...)` 测大小 → `str_pool_alloc` | O(n) | 无长度上限，全 C 格式符 |
 | `strtolower($s)` | 逐字符检测 → 无大写时零分配返回原串 | O(n) | 仅 ASCII |
 | `strtoupper($s)` | 逐字符检测 → 无小写时零分配返回原串 | O(n) | 仅 ASCII |
+| `ord($s)` / `chr($n)` | `(unsigned char)s[0]` / 单字符 string | O(1) | — |
+| `str_starts_with($h,$n)` | 单次 `memcmp` 前缀 | O(len(n)) | — |
+| `str_ends_with($h,$n)` | 单次 `memcmp` 后缀 | O(len(n)) | — |
+| `is_numeric($s)` | null-terminated 副本 + `strtoll/strtod` 扫描 | O(n) | — |
 
 ---
 
@@ -122,13 +137,32 @@
 | 函数 | C 实现 | 性能 |
 |---|---|---|
 | `abs($x)` | `llabs(x)` | O(1) |
-| `round($x)` | libc `round()` | O(1) |
+| `round($x)` | libc `round()` / TCC 自研 fallback | O(1) |
 | `ceil($x)` | libc `ceil()` | O(1) |
 | `floor($x)` | libc `floor()` | O(1) |
 | `sqrt($x)` | libc `sqrt(x)`，x<0 → 0 | O(1) |
 | `pow($base, $exp)`（`**` 运算符） | `tphp_rt_pow_int` 循环 / `pow()` 浮点 | O(log n) |
+| `pi()` | `M_PI` 常量 | O(1) |
+| `deg2rad($d)` / `rad2deg($r)` | `d * M_PI / 180` | O(1) |
+| `intdiv($a, $b)` | `a / b`，零除→error | O(1) |
 | `rand($min, $max)` | libc `rand()` LCG | O(1) |
 | `mt_rand($min, $max)` | **MT19937** 真 Mersenne Twister | O(1) |
+
+---
+
+## 进制转换
+
+全栈分配，零堆分配。进制转换直接调用 libc `strtoll`/`snprintf`。
+
+| 函数 | C 实现 | 性能 |
+|---|---|---|
+| `bindec($s)` | `strtoll(s, NULL, 2)` | O(1) |
+| `hexdec($s)` | `strtoll(s, NULL, 16)` | O(1) |
+| `octdec($s)` | `strtoll(s, NULL, 8)` | O(1) |
+| `decbin($n)` | 位反转 + 栈缓冲 | O(log n) |
+| `decoct($n)` | `snprintf "%llo"` | O(1) |
+| `dechex($n)` | `snprintf "%llx"` | O(1) |
+| `number_format($n, $d?)` | 自研千分位分组 + 四舍五入 | O(log n) |
 
 ---
 
@@ -151,6 +185,9 @@
 | `usleep($us)` | `usleep(us)` | O(us) |
 | `hrtime()` | `QueryPerformanceCounter`(Win) / `clock_gettime`(Unix) | O(1) |
 | `microtime()` | 同上，返回 float 秒 | O(1) |
+| `mktime($h,$m,$s,$mo,$d,$y)` | 日历天数累加法，零外部依赖 | O(year-1970) |
+| `strtotime($s)` | 解析 `Y-m-d H:i:s` + mktime 计算 | O(n) |
+| `uniqid($prefix?)` | `sprintf "%08lx%05lx", time, rand` | O(1) |
 
 ---
 
@@ -169,6 +206,16 @@
 |---|---|---|---|
 | `rand($min, $max)` | libc LCG | 2^31 | ❌ |
 | `mt_rand($min, $max)` | **MT19937** | 2^19937-1 | ❌ |
+
+---
+
+## 环境 / 类型
+
+| 函数 | C 实现 | 说明 |
+|---|---|---|
+| `gettype($v)` | type switch → 字符串常 | 类型名为 PHP 风格 (`"int"/"float"/...`) |
+| `getenv($k)` | libc `getenv()` + 静态缓冲 | Windows/Linux 通用 |
+| `putenv($s)` | libc `putenv()` | `KEY=VALUE` 格式 |
 
 ---
 
@@ -196,7 +243,7 @@
 | `parent::method()` | `&self->_parent` + 父类函数名 | — |
 | `__CLASS__` | 编译期字符串常量 | `$this->className` |
 | `__METHOD__` | 编译期字符串常量 | `ClassName::methodName` |
-| `__destruct` | 作用域结束自动 `tp_obj_release` | 开发者无需手动释放 |
+| `__destruct` | 作用域结束自动 `tp_obj_release` | 池回收，零 free |
 
 ---
 
@@ -231,8 +278,9 @@
 |---|---|
 | 资源追踪链表 | `tphp_rt_register(ptr, type)` 注册 → `error()` 时遍历释放 |
 | 64KB 字符串池 | bump allocator，≤512B 零 `malloc`，非池化走 `malloc` |
-| 128 槽数组池 | LIFO 复用，1.5× 增长因子 |
-| COS refcount | `tp_obj_retain` / `tp_obj_release`，归零 → `__destruct` → `free` |
+| 128 槽数组池 | LIFO 复用，1.5× 增长因子，cursor 自动重置 |
+| 128 槽对象池 | LIFO 复用，`tp_obj_release` 回收到池 |
+| COS refcount | `tp_obj_retain` / `tp_obj_release`，归零 → `__destruct` → pool |
 | scope 自动析构 | `visitMethod` 尾注入 `tp_obj_release(var)` |
 | 异常安全 | `tp_throw` 先 `tphp_rt_free_all()` 再 `longjmp` |
 | 分支预测 | `likely(x)` 热路径，`unlikely(x)` 错误边界 |
@@ -240,57 +288,24 @@
 
 ---
 
-## 断言（测试框架用）
+## 编译器兼容
 
-| 函数 | C 实现 | 说明 |
-|---|---|---|
-| `assert_true($cond)` | `tphp_fn_assert_true()` | 断言为真 |
-| `assert_false($cond)` | `tphp_fn_assert_false()` | 断言为假 |
-| `assert_eq_int($a, $b)` | `tphp_fn_assert_eq_int()` | 整数相等断言 |
-| `assert_eq_float($a, $b)` | `tphp_fn_assert_eq_float()` | 浮点相等断言 |
-| `assert_eq_str($a, $b)` | `tphp_fn_assert_eq_str()` | 字符串相等断言 |
+| 文件 | 说明 |
+|---|---|
+| `include/compat.h` | TCC 专属：`ceil/floor/sqrt/pow` extern 声明 + `round` fallback 实现 |
+| `include/os/json.h` | TCC 专属：`isnan`/`isinf` 自研实现 |
+| `include/conv.h` | TCC 专属：`_tphp_pow10` 循环替代 `pow()` |
+| `include/val.h` | `typeof` 检查已 `#if defined(__GNUC__) \|\| defined(__clang__)` 守卫 |
+| `tphp.php` | Win GCC `-Wno-implicit-function-declaration` 自动添加 |
+| **设计原则** | 所有 TCC 特殊处理用 `#ifdef __TINYC__` 隔离，GCC/Clang 路径不受影响 |
 
 ---
 
 ## 待实现函数
 
 > 基于 PHP 8.5.7 `ext/standard` + `ext/date` + `ext/pcntl` 对照分析。
-> 评分：常用度 ⭐1-5 × (6 − 难易度 ★1-5) = 收益分，≥20 为第一梯队。
 
-### 🔴 第一梯队（收益 ≥20，~2h）
-
-| 函数 | 常用度 | 难度 | 实现方式 |
-|------|--------|------|----------|
-| `ord($ch)` / `chr($n)` | ⭐⭐⭐⭐⭐ | ★ | `(int)ch` / 单字符 string |
-| `str_starts_with($h,$n)` | ⭐⭐⭐⭐⭐ | ★ | `strpos == 0` |
-| `str_ends_with($h,$n)` | ⭐⭐⭐⭐⭐ | ★ | `strrpos + len` |
-| `intdiv($a,$b)` | ⭐⭐⭐⭐⭐ | ★ | `(t_int)(a/b)`，零除→error |
-| `pow($base,$exp)` | ⭐⭐⭐⭐ | ★ | 复用 `tphp_rt_pow_float/int` |
-| `pi()` | ⭐⭐⭐⭐ | ★ | `return 3.141592653589793` |
-| `deg2rad($d)` / `rad2deg($r)` | ⭐⭐⭐ | ★ | `d * pi / 180` / `r * 180 / pi` |
-| `getenv($k)` / `putenv($k,$v)` | ⭐⭐⭐⭐⭐ | ★ | libc `getenv` / `putenv` |
-| `gettype($v)` | ⭐⭐⭐⭐⭐ | ★ | type switch → `"int"/"string"/...` |
-| `is_numeric($s)` | ⭐⭐⭐⭐⭐ | ★★ | `strtol`/`strtod` 消费检查 |
-| `number_format($n,$d?)` | ⭐⭐⭐⭐⭐ | ★★ | 整数部分+sprintf 小数 |
-| `array_key_first($a)` | ⭐⭐⭐⭐⭐ | ★ | `len>0 ? 0 : -1` |
-| `array_key_last($a)` | ⭐⭐⭐⭐⭐ | ★ | `len>0 ? len-1 : -1` |
-| `array_rand($a)` | ⭐⭐⭐⭐⭐ | ★★ | `rand(0, count-1)` |
-| `array_is_list($a)` | ⭐⭐⭐⭐ | ★★ | 遍历检查 key=0,1,2... |
-| `current($a)` / `key($a)` | ⭐⭐⭐⭐⭐ | ★ | `entries[cursor]` |
-| `next($a)` / `prev($a)` | ⭐⭐⭐⭐ | ★ | `cursor++` / `cursor--` |
-| `end($a)` / `reset($a)` | ⭐⭐⭐⭐ | ★ | `cursor=len-1` / `cursor=0` |
-| `bindec($s)` | ⭐⭐⭐⭐ | ★ | `strtol(s, NULL, 2)` |
-| `hexdec($s)` | ⭐⭐⭐⭐⭐ | ★ | `strtol(s, NULL, 16)` |
-| `octdec($s)` | ⭐⭐⭐ | ★ | `strtol(s, NULL, 8)` |
-| `decbin($n)` / `decoct($n)` | ⭐⭐⭐ | ★ | `sprintf "%b"/"%o"` |
-| `dechex($n)` | ⭐⭐⭐⭐ | ★ | `sprintf "%x"` |
-| `strtotime($s)` | ⭐⭐⭐⭐⭐ | ★★ | 解析 `Y-m-d H:i:s` + mktime 计算 |
-| `mktime($h,$m,$s,$mo,$d,$y)` | ⭐⭐⭐⭐ | ★ | 日历天数累加 |
-| `uniqid()` | ⭐⭐⭐⭐⭐ | ★★ | `sprintf "%08x%05x",time,rand` |
-
-> 共 27 个函数，实现位置：`include/builtin.h` + `src/CodeGenerator.php::visitCall()`
-
-### 🟡 第二梯队（收益 15-19，~4h）
+### 🟡 第二梯队（~4h）
 
 | 函数 | 常用度 | 难度 | 实现方式 |
 |------|--------|------|----------|
@@ -301,19 +316,17 @@
 | `str_pad($s,$len,$pad?)` | ⭐⭐⭐ | ★★ | 计算填充 + memcpy |
 | `substr_count($h,$n)` | ⭐⭐⭐⭐ | ★★ | strpos 循环计数 |
 | `str_shuffle($s)` | ⭐⭐⭐ | ★★ | Fisher-Yates |
-| `addslashes($s)` | ⭐⭐⭐⭐ | ★★ | 扫描 `' " \ \0` 插入 `\` |
-| `stripslashes($s)` | ⭐⭐⭐ | ★★ | 扫描 `\` 跳过 |
+| `addslashes($s)` / `stripslashes($s)` | ⭐⭐⭐⭐ | ★★ | 扫描转义/反转义 |
 | `bin2hex($s)` / `hex2bin($s)` | ⭐⭐⭐⭐ | ★★ | 查表 `0x0-0xf` |
-| `urlencode($s)` | ⭐⭐⭐⭐⭐ | ★★ | 非字母→`%XX` |
-| `urldecode($s)` | ⭐⭐⭐⭐⭐ | ★★ | `%XX`→字符 |
+| `urlencode($s)` / `urldecode($s)` | ⭐⭐⭐⭐⭐ | ★★ | 编码/解码 |
 | `array_chunk($a,$size)` | ⭐⭐⭐⭐ | ★★ | 按 size 切片 |
-| `array_combine($k,$v)` | ⭐⭐⭐⭐ | ★★ | keys→keys, values→values |
+| `array_combine($k,$v)` | ⭐⭐⭐⭐ | ★★ | keys+values 合并 |
 | `array_flip($a)` | ⭐⭐⭐⭐ | ★★ | key↔value 互换 |
 | `array_column($a,$col)` | ⭐⭐⭐⭐⭐ | ★★★ | 遍历提取字段 |
 
 > 共 19 个函数
 
-### 🟢 第三梯队（收益 10-14，~2-3d）
+### 🟢 第三梯队（~2-3d）
 
 | 函数 | 常用度 | 难度 | 说明 |
 |------|--------|------|------|
@@ -330,8 +343,7 @@
 | `pcntl_wait(&$st)` | ⭐⭐⭐ | ★★ | 等待任意子进程 |
 | `pcntl_exec($p,$a?)` | ⭐⭐⭐ | ★★ | execve 执行新程序 |
 | `pcntl_alarm($sec)` | ⭐⭐ | ★ | SIGALRM 闹钟 |
-| `pcntl_get_last_error()` | ⭐⭐⭐ | ★ | 获取 errno |
-| `pcntl_strerror($no)` | ⭐⭐⭐ | ★ | errno→错误消息 |
+| `pcntl_get_last_error()` / `pcntl_strerror($no)` | ⭐⭐⭐ | ★ | errno 获取/转换 |
 
 > 共 20 个函数。pcntl 为 POSIX 专属（不支持 Windows）。
 
@@ -348,7 +360,7 @@
 | `usort` / `uasort` / `uksort` | 需闭包回调 |
 | `array_filter` / `array_map` / `array_reduce` | 需闭包回调 |
 | `sin/cos/tan` 等三角函数 | 直接 libc 调用，低优先级 |
-| `posix_*` (42 个) | 全 POSIX 专属，Windows 不可用，日常 PHP 极少碰 |
+| `posix_*` (42 个) | 全 POSIX 专属，Windows 不可用 |
 
 ---
 

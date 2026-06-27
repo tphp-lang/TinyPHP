@@ -331,6 +331,10 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         && !str_contains($extraFlags, '-O')) {
         $extraFlags .= ' -O2';
     }
+    // MinGW GCC workaround: math.h functions may not be declared
+    if (PHP_OS_FAMILY === 'Windows' && str_contains($ccLower, 'gcc')) {
+        $extraFlags .= ' -Wno-implicit-function-declaration';
+    }
 
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
 

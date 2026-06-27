@@ -14,6 +14,11 @@ static inline t_int tphp_fn_rand(t_int min, t_int max) {
     return min + (t_int)(rand() % (max - min + 1));
 }
 
+// 别名（array_rand/uniqid 等内部使用）
+static inline t_int tphp_fn_rand_int(t_int min, t_int max) {
+    return tphp_fn_rand(min, max);
+}
+
 /* ─── Mersenne Twister MT19937 ──────────────────────────── */
 
 #define MT_N 624

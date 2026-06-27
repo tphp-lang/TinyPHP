@@ -36,6 +36,7 @@ static inline void arr_pool_put(t_array *a) {
     // 重置状态
     a->length   = 0;
     a->refcount = 1;
+    a->cursor   = 0;
     // 清零 entry 区域防止残留数据
     memset(a->entries, 0, (size_t)a->capacity * sizeof(t_arr_entry));
     arr_freelist[arr_freelist_count++] = a;
@@ -52,6 +53,7 @@ static inline t_array* arr_pool_get(int cap) {
             arr_freelist[i] = arr_freelist[--arr_freelist_count];
             a->length   = 0;
             a->refcount = 1;
+            a->cursor   = 0;
             return a;
         }
     }
@@ -623,3 +625,77 @@ static inline int tphp_fn_str_hash(t_string s) {
         h = ((h << 5) + h) + (unsigned char)s.data[i];
     return (int)h;
 }
+
+// ── array_key_first / array_key_last — O(1) ──────────────────
+static inline t_int tphp_fn_array_key_first(t_array* a) {
+    if (a == NULL || a->length == 0) return -1;
+    // 返回第一个 entry 的 key（int 键时）
+    if (a->entries[0].key.type == TYPE_INT) return a->entries[0].key.value._int;
+    return 0; // string key 返回 0 占位
+}
+
+static inline t_int tphp_fn_array_key_last(t_array* a) {
+    if (a == NULL || a->length == 0) return -1;
+    int idx = a->length - 1;
+    if (a->entries[idx].key.type == TYPE_INT) return a->entries[idx].key.value._int;
+    return idx;
+}
+
+// ── array_rand($arr) — 随机取键 ──────────────────────────────
+static inline t_int tphp_fn_rand_int(t_int min, t_int max);
+
+static inline t_int tphp_fn_array_rand(t_array* a) {
+    if (a == NULL || a->length == 0) return -1;
+    int idx = (int)tphp_fn_rand_int(0, a->length - 1);
+    return (a->entries[idx].key.type == TYPE_INT) ? a->entries[idx].key.value._int : idx;
+}
+
+// ── array_is_list($arr) — PHP 8.1+，检查是否 0,1,2...n-1 键 ─
+static inline t_bool tphp_fn_array_is_list_int(t_array* a) {
+    if (a == NULL) return false;
+    for (int i = 0; i < a->length; i++) {
+        if (a->entries[i].key.type != TYPE_INT || a->entries[i].key.value._int != i)
+            return false;
+    }
+    return true;
+}
+
+// ── 数组内部指针：current / key / next / prev / end / reset ───
+static inline t_var tphp_fn_current(t_array* a) {
+    if (a == NULL || a->length == 0) return (t_var){TYPE_NULL, {0}};
+    if (a->cursor < 0 || a->cursor >= a->length) return (t_var){TYPE_NULL, {0}};
+    return a->entries[a->cursor].val;
+}
+
+static inline t_var tphp_fn_key(t_array* a) {
+    if (a == NULL || a->length == 0) return (t_var){TYPE_NULL, {0}};
+    if (a->cursor < 0 || a->cursor >= a->length) return (t_var){TYPE_NULL, {0}};
+    return a->entries[a->cursor].key;
+}
+
+static inline t_var tphp_fn_next(t_array* a) {
+    if (a == NULL || a->length == 0) return (t_var){TYPE_NULL, {0}};
+    a->cursor++;
+    if (a->cursor >= a->length) return (t_var){TYPE_NULL, {0}};
+    return a->entries[a->cursor].val;
+}
+
+static inline t_var tphp_fn_prev(t_array* a) {
+    if (a == NULL || a->length == 0) return (t_var){TYPE_NULL, {0}};
+    a->cursor--;
+    if (a->cursor < 0) return (t_var){TYPE_NULL, {0}};
+    return a->entries[a->cursor].val;
+}
+
+static inline t_var tphp_fn_end(t_array* a) {
+    if (a == NULL || a->length == 0) return (t_var){TYPE_NULL, {0}};
+    a->cursor = a->length - 1;
+    return a->entries[a->cursor].val;
+}
+
+static inline t_var tphp_fn_reset(t_array* a) {
+    if (a == NULL || a->length == 0) return (t_var){TYPE_NULL, {0}};
+    a->cursor = 0;
+    return a->entries[0].val;
+}
+

@@ -9,12 +9,25 @@
 //   内存安全: 编码使用 tphp_rt_str_concat, 解码递归释放中间数组
 // ============================================================
 
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "types.h"
 #include "val.h"
+
+/* TCC lacks isinf/isnan → inline fallback */
+#ifdef __TINYC__
+static inline int _tphp_isinf(double x) {
+    union { double d; uint64_t u; } u = {x};
+    return (u.u & 0x7FFFFFFFFFFFFFFFULL) == 0x7FF0000000000000ULL;
+}
+#define isinf(x) _tphp_isinf(x)
+#define isnan(x) ((x) != (x))
+#endif
 
 /* === JSON Encode ========================================= */
 

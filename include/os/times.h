@@ -4,6 +4,7 @@
 // ============================================================
 
 #include <time.h>
+#include <stdint.h>
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -94,4 +95,117 @@ static inline t_float tphp_fn_microtime(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (t_float)ts.tv_sec + (t_float)ts.tv_nsec / 1e9;
 #endif
+}
+
+// ── mktime(h, m, s, mon, day, year) — 生成时间戳 ────────────
+// 日历天数累加法，零依赖外部库
+static inline t_bool _is_leap(t_int y) {
+    return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+}
+
+static inline t_int tphp_fn_mktime(t_int h, t_int m, t_int s,
+                                     t_int mon, t_int day, t_int year) {
+    static const int8_t _mdays[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+
+    // 从 1970-01-01 起算天数
+    t_int days = 0;
+    // 年
+    if (year >= 1970) {
+        for (t_int y = 1970; y < year; y++) days += _is_leap(y) ? 366 : 365;
+    } else {
+        for (t_int y = year; y < 1970; y++) days -= _is_leap(y) ? 366 : 365;
+    }
+    // 月（mon 1-12）
+    for (t_int i = 0; i < mon - 1 && i < 12; i++) {
+        days += _mdays[i];
+        if (i == 1 && _is_leap(year)) days++;
+    }
+    // 日
+    days += day - 1;
+    // 时分秒 → 秒
+    return days * 86400 + h * 3600 + m * 60 + s;
+}
+
+// ── strtotime($s) — 字符串 → 时间戳 ─────────────────────────
+// 支持 Y-m-d H:i:s, Y/m/d H:i:s, Y-m-d, Y/m/d, 纯数字(time())
+static inline t_int tphp_fn_strtotime(t_string s) {
+    if (s.data == NULL || s.length == 0) return 0;
+
+    // 纯数字 → 直接返回
+    t_bool allDig = true;
+    for (int i = 0; i < s.length; i++) {
+        if (s.data[i] < '0' || s.data[i] > '9') { allDig = false; break; }
+    }
+    if (allDig) return (t_int)strtoll(s.data, NULL, 10);
+
+    // 解析 Y-m-d H:i:s 或 Y/m/d H:i:s
+    int Y = 1970, M = 1, D = 1, H = 0, I = 0, S = 0;
+    int n = 0;
+    char sep = '-'; // 试探分隔符
+    if (s.length > 4 && s.data[4] == '/') sep = '/';
+
+    // Y-m-d 部分
+    char part[32];
+    int start = 0, pi = 0;
+    for (int j = 0; j <= s.length; j++) {
+        char c = (j < s.length) ? s.data[j] : ' ';
+        if (c == sep || c == ' ' || c == '\0' || c == 'T') {
+            if (pi > 0) {
+                memcpy(part, s.data + start, (size_t)pi);
+                part[pi] = '\0';
+                int val = atoi(part);
+                if (n == 0) Y = val; else if (n == 1) M = val; else if (n == 2) D = val;
+                n++;
+                pi = 0;
+            }
+            start = j + 1;
+            if (c == ' ' || c == 'T') break;
+        } else if (c == ':') {
+            if (pi > 0) {
+                memcpy(part, s.data + start, (size_t)pi);
+                part[pi] = '\0';
+                int val = atoi(part);
+                if (n == 3) H = val; else if (n == 4) I = val; else if (n == 5) S = val;
+                n++;
+                pi = 0;
+            }
+            start = j + 1;
+        } else {
+            pi++;
+        }
+    }
+    if (pi > 0 && n >= 3) {
+        memcpy(part, s.data + start, (size_t)pi);
+        part[pi] = '\0';
+        int val = atoi(part);
+        if (n == 3) H = val; else if (n == 4) I = val; else if (n == 5) S = val;
+    }
+
+    return tphp_fn_mktime((t_int)H, (t_int)I, (t_int)S,
+                           (t_int)M, (t_int)D, (t_int)Y);
+}
+
+// ── uniqid($prefix?) — 唯一 ID ──────────────────────────────
+static inline t_string tphp_fn_uniqid0(void);
+static inline t_int tphp_fn_time(void);
+static inline t_int tphp_fn_rand_int(t_int min, t_int max);
+
+static inline t_string tphp_fn_uniqid(t_string prefix) {
+    static char buf[48];
+    t_int t = tphp_fn_time();
+    t_int r = tphp_fn_rand_int(0, 99999);
+
+    int plen = (prefix.data != NULL && prefix.length > 0) ? prefix.length : 0;
+    if (plen > 32) plen = 32;
+
+    int pos = 0;
+    if (plen > 0) { memcpy(buf, prefix.data, (size_t)plen); pos += plen; }
+    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
+                    "%08lx%05lx", (unsigned long)t, (unsigned long)r);
+    buf[pos] = '\0';
+    return (t_string){buf, pos};
+}
+
+static inline t_string tphp_fn_uniqid0(void) {
+    return tphp_fn_uniqid((t_string){NULL, 0});
 }

@@ -7,8 +7,13 @@
 //   包括：echo, var_dump 等。
 // ============================================================
 
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <math.h>
 #include "types.h"
 
 // ============================================================
@@ -663,6 +668,96 @@ static inline t_float tphp_fn_sqrt(t_float v)  { return v >= 0.0 ? sqrt(v) : 0.0
  *   assert_eq_str($a, $b)        → 字符串相等
  *   assert_false($cond)          → 布尔取反断言
  * ============================================================ */
+// ── ord($ch) / chr($n) — 字符 ↔ ASCII ──────────────────────
+static inline t_int tphp_fn_ord(t_string s) {
+    if (s.data == NULL || s.length < 1) return 0;
+    return (t_int)(unsigned char)s.data[0];
+}
+
+static inline t_string tphp_fn_chr(t_int n) {
+    static char _chr[2];
+    _chr[0] = (char)(n & 0xFF);
+    _chr[1] = '\0';
+    return (t_string){_chr, 1};
+}
+
+// ── str_starts_with / str_ends_with — PHP 8.0+ ──────────────
+static inline t_bool tphp_fn_str_starts_with(t_string haystack, t_string needle) {
+    if (haystack.data == NULL || needle.data == NULL) return false;
+    if (needle.length == 0) return true;
+    if (needle.length > haystack.length) return false;
+    return memcmp(haystack.data, needle.data, (size_t)needle.length) == 0;
+}
+
+static inline t_bool tphp_fn_str_ends_with(t_string haystack, t_string needle) {
+    if (haystack.data == NULL || needle.data == NULL) return false;
+    if (needle.length == 0) return true;
+    if (needle.length > haystack.length) return false;
+    return memcmp(haystack.data + haystack.length - needle.length,
+                  needle.data, (size_t)needle.length) == 0;
+}
+
+// ── is_numeric($str) — 检查是否为数值字符串 ──────────────────
+static inline t_bool tphp_fn_is_numeric_str(t_string s) {
+    if (s.data == NULL || s.length == 0) return false;
+    // 需要 null-terminated 副本给 strto*
+    char buf[256];
+    int len = s.length < 255 ? s.length : 255;
+    memcpy(buf, s.data, (size_t)len);
+    buf[len] = '\0';
+    char *end = NULL;
+    strtoll(buf, &end, 10);
+    if (end == buf + len) return true;
+    strtod(buf, &end);
+    if (end == buf + len) return true;
+    return false;
+}
+
+// ── gettype($v) — 返回类型字符串 ─────────────────────────────
+static inline t_string tphp_fn_gettype(t_var v) {
+    static const char *names[] = {
+        [TYPE_NULL]     = "NULL",
+        [TYPE_INT]      = "int",
+        [TYPE_FLOAT]    = "float",
+        [TYPE_BOOL]     = "bool",
+        [TYPE_STRING]   = "string",
+        [TYPE_ARRAY]    = "array",
+        [TYPE_OBJECT]   = "object",
+        [TYPE_CALLBACK] = "object",
+    };
+    const char *nm = (v.type <= TYPE_CALLBACK) ? names[v.type] : "unknown";
+    return (t_string){(char*)nm, (int)strlen(nm)};
+}
+
+// ── getenv / putenv — 环境变量 ───────────────────────────────
+#include <stdlib.h>
+static inline t_string tphp_fn_getenv(t_string key) {
+    if (key.data == NULL) return (t_string){NULL, 0};
+    static char _env[4096];
+    // 临时复制到可写缓冲区（getenv 返回的指针可能不安全）
+    char tmp[256];
+    int klen = key.length < 255 ? key.length : 255;
+    memcpy(tmp, key.data, (size_t)klen);
+    tmp[klen] = '\0';
+    char *val = getenv(tmp);
+    if (val == NULL) return (t_string){NULL, 0};
+    int vlen = (int)strlen(val);
+    if (vlen > 4095) vlen = 4095;
+    memcpy(_env, val, (size_t)vlen);
+    _env[vlen] = '\0';
+    return (t_string){_env, vlen};
+}
+
+static inline void tphp_fn_putenv(t_string key) {
+    if (key.data == NULL) return;
+    static char _buf[1024];
+    int len = key.length < 1023 ? key.length : 1023;
+    memcpy(_buf, key.data, (size_t)len);
+    _buf[len] = '\0';
+    putenv(_buf);
+}
+
+// ── 断言 ────────────────────────────────────────────────────
 static inline void tphp_fn_assert_true(t_bool cond) {
     if (unlikely(!cond)) {
         tphp_rt_free_all();

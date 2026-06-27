@@ -105,5 +105,6 @@ struct _t_array {
     int length;
     int capacity;
     int refcount;
+    int cursor;             // internal pointer for current/next/prev/end/reset
     t_arr_entry entries[];  // flexible array member
 };

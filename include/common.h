@@ -7,10 +7,13 @@
 
 #include "types.h"
 #include "val.h"
+#include "compat.h"
 #include "object/object.h"
 #include "array.h"
 #include "runtime.h"
 #include "builtin.h"
+#include "math.h"
+#include "conv.h"
 #include "object/exception.h"
 #include "object/try.h"
 #include "os/times.h"

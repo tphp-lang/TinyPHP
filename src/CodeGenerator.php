@@ -1083,6 +1083,28 @@ class CodeGenerator implements ASTVisitor
             if ($expr->name === 'strval')   return 't_string';
             if ($expr->name === 'boolval')  return 't_bool';
             if ($expr->name === 'rand' || $expr->name === 'mt_rand') return 't_int';
+            // ── 第一梯队新增 ──
+            if ($expr->name === 'pi')              return 't_float';
+            if ($expr->name === 'deg2rad' || $expr->name === 'rad2deg') return 't_float';
+            if ($expr->name === 'intdiv')          return 't_int';
+            if ($expr->name === 'pow')             return 't_var';
+            if ($expr->name === 'ord')             return 't_int';
+            if ($expr->name === 'chr')             return 't_string';
+            if ($expr->name === 'str_starts_with' || $expr->name === 'str_ends_with') return 't_bool';
+            if ($expr->name === 'is_numeric')      return 't_bool';
+            if ($expr->name === 'gettype')         return 't_string';
+            if ($expr->name === 'getenv')          return 't_string';
+            if ($expr->name === 'putenv')          return 'void';
+            if ($expr->name === 'bindec' || $expr->name === 'hexdec' || $expr->name === 'octdec') return 't_int';
+            if ($expr->name === 'decbin' || $expr->name === 'decoct' || $expr->name === 'dechex') return 't_string';
+            if ($expr->name === 'number_format')   return 't_string';
+            if ($expr->name === 'array_key_first' || $expr->name === 'array_key_last') return 't_int';
+            if ($expr->name === 'array_rand')      return 't_int';
+            if ($expr->name === 'array_is_list')   return 't_bool';
+            if ($expr->name === 'current' || $expr->name === 'key' || $expr->name === 'next' || $expr->name === 'prev' || $expr->name === 'end' || $expr->name === 'reset') return 't_var';
+            if ($expr->name === 'strtotime')       return 't_int';
+            if ($expr->name === 'mktime')          return 't_int';
+            if ($expr->name === 'uniqid')          return 't_string';
         }
         // 闭包调用 → 查 closureSigs
         if ($expr->name === '__invoke' && $expr->callee instanceof VariableExpr) {
@@ -2171,12 +2193,85 @@ class CodeGenerator implements ASTVisitor
             return implode('; ', $lines) . ';';
         }
 
+        // is_numeric — 必须在通用 is_* 前处理（它不是类型检测）
+        if ($node->callee === null && $node->name === 'is_numeric') {
+            if (empty($node->args)) return 'false';
+            $argCode = $node->args[0]->accept($this);
+            return 'tphp_fn_is_numeric_str(' . $argCode . ')';
+        }
+
         // is_int / is_string / is_float / is_bool / is_array / is_object / is_null / is_callable
         if ($node->callee === null && str_starts_with($node->name, 'is_')) {
             $args = array_map(fn($a) => $a->accept($this), $node->args);
             $code = !empty($args) ? $args[0] : 'false';
             $type = !empty($node->args) ? $this->inferType($node->args[0]) : 't_int';
             return $this->generateIsCheck($node->name, $code, $type);
+        }
+
+        // ── 第一梯队新增 ────────────────────────────────────
+        if ($node->callee === null) {
+            $n = $node->name;
+            $a = array_map(fn($a) => $a->accept($this), $node->args);
+            $c = count($a) > 0 ? $a[0] : '';
+
+            // 零参函数
+            if ($n === 'pi')            return 'tphp_fn_pi()';
+            if ($n === 'uniqid' && empty($a)) return 'tphp_fn_uniqid0()';
+            // 单参 int/float
+            if ($n === 'deg2rad' && $c) return "tphp_fn_deg2rad((t_float)({$c}))";
+            if ($n === 'rad2deg' && $c) return "tphp_fn_rad2deg((t_float)({$c}))";
+            // 双参
+            if ($n === 'intdiv')       return "tphp_fn_intdiv({$a[0]}, {$a[1]})";
+            // 字符
+            if ($n === 'ord')          return "tphp_fn_ord({$c})";
+            if ($n === 'chr')          return "tphp_fn_chr({$c})";
+            // 字符串检查
+            if ($n === 'str_starts_with' || $n === 'str_ends_with')
+                return "tphp_fn_{$n}({$a[0]}, {$a[1]})";
+            if ($n === 'is_numeric')   return "tphp_fn_is_numeric_str({$c})";
+            // 类型 — 需要包装为 t_var
+            if ($n === 'gettype') {
+                $t0 = $this->inferType($node->args[0]);
+                $w = match ($t0) {
+                    't_int' => "VAR_INT({$c})",
+                    't_float' => "VAR_FLOAT((t_float)({$c}))",
+                    't_bool' => "VAR_BOOL({$c})",
+                    't_string' => "VAR_STRING({$c})",
+                    default => "VAR_NULL",
+                };
+                return "tphp_fn_gettype({$w})";
+            }
+            if ($n === 'getenv')       return "tphp_fn_getenv({$c})";
+            if ($n === 'putenv')       return "tphp_fn_putenv({$c});";
+            // 进制转换
+            if ($n === 'bindec')       return "tphp_fn_bindec({$c})";
+            if ($n === 'hexdec')       return "tphp_fn_hexdec({$c})";
+            if ($n === 'octdec')       return "tphp_fn_octdec({$c})";
+            if ($n === 'decbin')       return "tphp_fn_decbin({$c})";
+            if ($n === 'decoct')       return "tphp_fn_decoct({$c})";
+            if ($n === 'dechex')       return "tphp_fn_dechex({$c})";
+            // number_format
+            if ($n === 'number_format') {
+                if (count($a) >= 2) return "tphp_fn_number_format2((t_float)({$a[0]}), {$a[1]})";
+                return "tphp_fn_number_format((t_float)({$a[0]}))";
+            }
+            // 数组
+            if ($n === 'array_key_first' || $n === 'array_key_last')
+                return "tphp_fn_{$n}({$c})";
+            if ($n === 'array_rand')   return "tphp_fn_array_rand({$c})";
+            if ($n === 'array_is_list') return "tphp_fn_array_is_list_int({$c})";
+            if (in_array($n, ['current','key','next','prev','end','reset']))
+                return "tphp_fn_{$n}({$c})";
+            // 时间
+            if ($n === 'strtotime')    return "tphp_fn_strtotime({$c})";
+            if ($n === 'mktime')       return "tphp_fn_mktime({$a[0]},{$a[1]},{$a[2]},{$a[3]},{$a[4]},{$a[5]})";
+            if ($n === 'uniqid' && $c) return "tphp_fn_uniqid({$c})";
+            // pow → 类型强制 t_var，内部做 int/float 分发
+            if ($n === 'pow') {
+                $ta = ($this->inferType($node->args[0]) === 't_int') ? "VAR_INT({$a[0]})" : "VAR_FLOAT((t_float)({$a[0]}))";
+                $tb = ($this->inferType($node->args[1]) === 't_int') ? "VAR_INT({$a[1]})" : "VAR_FLOAT((t_float)({$a[1]}))";
+                return "tphp_fn_pow({$ta}, {$tb})";
+            }
         }
 
         // 闭包调用: $h() → ((t_int(*)(...))h.func)(args)

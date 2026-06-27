@@ -7,15 +7,18 @@
 //   包括：初始化、内存管理、字符串转换/比较/拼接、对象析构等。
 // ============================================================
 
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <math.h>
 #include "types.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include <math.h>
 
 // ── 初始化 ────────────────────────────────────────────
 
