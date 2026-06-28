@@ -203,19 +203,19 @@ static inline t_var* tphp_fn_arr_get_str(t_array *a, t_string key) {
 
 // === Typed getters for codegen ===
 
-static inline t_int tphp_arr_item_int(t_array *a, int idx) {
+static inline t_int tphp_fn_arr_item_int(t_array *a, int idx) {
     if (unlikely(a == NULL || idx < 0 || idx >= a->length)) return 0;
     t_var *v = &a->entries[idx].val;
     return likely(v->type == TYPE_INT) ? v->value._int : 0;
 }
 
-static inline t_float tphp_arr_item_float(t_array *a, int idx) {
+static inline t_float tphp_fn_arr_item_float(t_array *a, int idx) {
     if (unlikely(a == NULL || idx < 0 || idx >= a->length)) return 0.0;
     t_var *v = &a->entries[idx].val;
     return (v->type == TYPE_FLOAT) ? v->value._float : 0.0;
 }
 
-static inline t_string tphp_arr_item_str(t_array *a, int idx) {
+static inline t_string tphp_fn_arr_item_str(t_array *a, int idx) {
     if (unlikely(a == NULL || idx < 0 || idx >= a->length)) return (t_string){.data = NULL, .length = 0, .is_local = false};
     t_var *v = &a->entries[idx].val;
     if (v->type == TYPE_STRING) return v->value._string;
@@ -227,25 +227,25 @@ static inline t_string tphp_arr_item_str(t_array *a, int idx) {
     return (t_string){.data = NULL, .length = 0, .is_local = false};
 }
 
-static inline t_bool tphp_arr_item_bool(t_array *a, int idx) {
+static inline t_bool tphp_fn_arr_item_bool(t_array *a, int idx) {
     if (unlikely(a == NULL || idx < 0 || idx >= a->length)) return false;
     t_var *v = &a->entries[idx].val;
     return (v->type == TYPE_BOOL) ? v->value._bool : (v->type == TYPE_INT && v->value._int != 0);
 }
 
-static inline t_array* tphp_arr_item_array(t_array *a, int idx) {
+static inline t_array* tphp_fn_arr_item_array(t_array *a, int idx) {
     if (unlikely(a == NULL || idx < 0 || idx >= a->length)) return NULL;
     t_var *v = &a->entries[idx].val;
     return (v->type == TYPE_ARRAY) ? v->value._array : NULL;
 }
 
-static inline void* tphp_arr_item_object(t_array *a, int idx) {
+static inline void* tphp_fn_arr_item_object(t_array *a, int idx) {
     if (unlikely(a == NULL || idx < 0 || idx >= a->length)) return NULL;
     t_var *v = &a->entries[idx].val;
     return (v->type == TYPE_OBJECT) ? v->value._ptr : NULL;
 }
 
-static inline t_callback tphp_arr_item_callback(t_array *a, int idx) {
+static inline t_callback tphp_fn_arr_item_callback(t_array *a, int idx) {
     if (unlikely(a == NULL || idx < 0 || idx >= a->length)) return (t_callback){NULL, NULL};
     t_var *v = &a->entries[idx].val;
     return (v->type == TYPE_CALLBACK) ? v->value._callback : (t_callback){NULL, NULL};

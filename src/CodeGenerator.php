@@ -2232,7 +2232,7 @@ class CodeGenerator implements ASTVisitor
                 $code = $arg->accept($this);
                 $type = $this->inferType($arg);
                 $lines[] = match ($type) {
-                    't_string'   => "tphp_rt_str_free(&{$code}); {$code} = (t_string){.data = NULL, .length = 0, .is_local = false};",
+                    't_string'   => "{$code} = (t_string){.data = NULL, .length = 0, .is_local = false};",
                     't_array*'   => "tphp_rt_unregister((void*){$code}); if ({$code} != NULL) { tphp_fn_arr_free({$code}); {$code} = NULL; }",
                     't_callback' => "if (({$code}).env != NULL) { tphp_rt_unregister(({$code}).env); free(({$code}).env); ({$code}).env = NULL; } ({$code}).func = NULL;",
                     'null'       => "{$code} = NULL;",
@@ -2268,136 +2268,71 @@ class CodeGenerator implements ASTVisitor
             $a = array_map(fn($a) => $a->accept($this), $node->args);
             $c = count($a) > 0 ? $a[0] : '';
 
-            // 零参函数
-            if ($n === 'pi')            return 'tphp_fn_pi()';
+            // 特殊：需要类型转换或非标准 C 名
             if ($n === 'uniqid' && empty($a)) return 'tphp_fn_uniqid0()';
-            // 单参 int/float
-            if ($n === 'deg2rad' && $c) return "tphp_fn_deg2rad((t_float)({$c}))";
-            if ($n === 'rad2deg' && $c) return "tphp_fn_rad2deg((t_float)({$c}))";
-            // 双参
-            if ($n === 'intdiv')       return "tphp_fn_intdiv({$a[0]}, {$a[1]})";
-            // 字符
-            if ($n === 'ord')          return "tphp_fn_ord({$c})";
-            if ($n === 'chr')          return "tphp_fn_chr({$c})";
-            // 字符串检查
-            if ($n === 'str_starts_with' || $n === 'str_ends_with')
-                return "tphp_fn_{$n}({$a[0]}, {$a[1]})";
-            if ($n === 'is_numeric')   return "tphp_fn_is_numeric_str({$c})";
-            // 类型 — 需要包装为 t_var
+            if ($n === 'uniqid' && $c)        return "tphp_fn_uniqid({$c})";
+            if ($n === 'deg2rad' && $c)       return "tphp_fn_deg2rad((t_float)({$c}))";
+            if ($n === 'rad2deg' && $c)       return "tphp_fn_rad2deg((t_float)({$c}))";
             if ($n === 'gettype') {
                 $t0 = $this->inferType($node->args[0]);
                 $w = match ($t0) {
-                    't_int' => "VAR_INT({$c})",
-                    't_float' => "VAR_FLOAT((t_float)({$c}))",
-                    't_bool' => "VAR_BOOL({$c})",
-                    't_string' => "VAR_STRING({$c})",
+                    't_int' => "VAR_INT({$c})", 't_float' => "VAR_FLOAT((t_float)({$c}))",
+                    't_bool' => "VAR_BOOL({$c})", 't_string' => "VAR_STRING({$c})",
                     default => "VAR_NULL",
                 };
                 return "tphp_fn_gettype({$w})";
             }
-            if ($n === 'getenv')       return "tphp_fn_getenv({$c})";
-            if ($n === 'putenv')       return "tphp_fn_putenv({$c});";
-            // 进制转换
-            if ($n === 'bindec')       return "tphp_fn_bindec({$c})";
-            if ($n === 'hexdec')       return "tphp_fn_hexdec({$c})";
-            if ($n === 'octdec')       return "tphp_fn_octdec({$c})";
-            if ($n === 'decbin')       return "tphp_fn_decbin({$c})";
-            if ($n === 'decoct')       return "tphp_fn_decoct({$c})";
-            if ($n === 'dechex')       return "tphp_fn_dechex({$c})";
-            // number_format
             if ($n === 'number_format') {
                 if (count($a) >= 2) return "tphp_fn_number_format2((t_float)({$a[0]}), {$a[1]})";
                 return "tphp_fn_number_format((t_float)({$a[0]}))";
             }
-            // 数组
-            if ($n === 'array_key_first' || $n === 'array_key_last')
-                return "tphp_fn_{$n}({$c})";
-            if ($n === 'array_rand')   return "tphp_fn_array_rand({$c})";
-            if ($n === 'array_is_list') return "tphp_fn_array_is_list_int({$c})";
-            if (in_array($n, ['current','key','next','prev','end','reset']))
-                return "tphp_fn_{$n}({$c})";
-            // 时间
-            if ($n === 'strtotime')    return "tphp_fn_strtotime({$c})";
-            if ($n === 'mktime')       return "tphp_fn_mktime({$a[0]},{$a[1]},{$a[2]},{$a[3]},{$a[4]},{$a[5]})";
-            if ($n === 'uniqid' && $c) return "tphp_fn_uniqid({$c})";
-            // pow → 类型强制 t_var，内部做 int/float 分发
             if ($n === 'pow') {
                 $ta = ($this->inferType($node->args[0]) === 't_int') ? "VAR_INT({$a[0]})" : "VAR_FLOAT((t_float)({$a[0]}))";
                 $tb = ($this->inferType($node->args[1]) === 't_int') ? "VAR_INT({$a[1]})" : "VAR_FLOAT((t_float)({$a[1]}))";
                 return "tphp_fn_pow({$ta}, {$tb})";
             }
+            if ($n === 'mktime')   return "tphp_fn_mktime({$a[0]},{$a[1]},{$a[2]},{$a[3]},{$a[4]},{$a[5]})";
+            // 非标准 C 名
+            if ($n === 'is_numeric')   return "tphp_fn_is_numeric_str({$c})";
+            if ($n === 'array_is_list') return "tphp_fn_array_is_list_int({$c})";
+
+            // 通用回退：tphp_fn_函数名(参数) — C 编译器兜底
+            if (empty($a)) return "tphp_fn_{$n}()";
+            return "tphp_fn_{$n}(" . implode(', ', $a) . ")";
         }
 
-        // ── 第二梯队 ────────────────────────────────────────
+        // ── 第二/三梯队：默认参数 / 非标准 C 名 ─────────────
         if ($node->callee === null) {
             $n2 = $node->name;
             $a2 = array_map(fn($a) => $a->accept($this), $node->args);
             $c2 = count($a2) > 0 ? $a2[0] : '';
-            // 单参字符串
-            if (in_array($n2, ['ucfirst','lcfirst','strrev','addslashes','stripslashes','bin2hex','hex2bin','urlencode','urldecode','str_shuffle']))
-                return "tphp_fn_{$n2}({$c2})";
-            // 双参
-            if ($n2 === 'str_repeat') return "tphp_fn_str_repeat({$a2[0]}, {$a2[1]})";
-            if ($n2 === 'substr_count') return "tphp_fn_substr_count({$a2[0]}, {$a2[1]})";
-            // str_split($s, $chunk=1)
+            // 默认参数
             if ($n2 === 'str_split') {
                 $ck = count($a2) >= 2 ? $a2[1] : '1';
                 return "tphp_fn_str_split({$c2}, {$ck})";
             }
-            // str_pad($s, $len, $pad, $type)
             if ($n2 === 'str_pad') {
                 $pad = count($a2) >= 3 ? $a2[2] : '(t_string){NULL,0}';
                 $ty  = count($a2) >= 4 ? $a2[3] : '0';
                 return "tphp_fn_str_pad({$c2}, {$a2[1]}, {$pad}, {$ty})";
             }
-            // 数组
-            if ($n2 === 'array_chunk') return "tphp_fn_array_chunk({$a2[0]}, {$a2[1]})";
-            if ($n2 === 'array_combine') return "tphp_fn_array_combine({$a2[0]}, {$a2[1]})";
-            if ($n2 === 'array_flip') return "tphp_fn_array_flip({$c2})";
-            if ($n2 === 'array_column') return "tphp_fn_array_column_str({$a2[0]}, {$a2[1]})";
-        }
-
-        // ── 第三梯队 ────────────────────────────────────────
-        if ($node->callee === null) {
-            $n3 = $node->name;
-            $a3 = array_map(fn($a) => $a->accept($this), $node->args);
-            $c3 = count($a3) > 0 ? $a3[0] : '';
-            if ($n3 === 'md5')             return "tphp_fn_md5({$c3})";
-            if ($n3 === 'sha1')            return "tphp_fn_sha1({$c3})";
-            if ($n3 === 'crc32')           return "tphp_fn_crc32_str({$c3})";
-            if ($n3 === 'parse_url')       return "tphp_fn_parse_url({$c3})";
-            if ($n3 === 'parse_str')       return "tphp_fn_parse_str({$c3})";
-            if ($n3 === 'strtr') {
-                if (count($a3) >= 3) return "tphp_fn_strtr2({$a3[0]}, {$a3[1]}, {$a3[2]})";
-                return $c3;
+            // 非标准 C 名
+            if ($n2 === 'crc32')           return "tphp_fn_crc32_str({$c2})";
+            if ($n2 === 'array_column')     return "tphp_fn_array_column_str({$a2[0]}, {$a2[1]})";
+            if ($n2 === 'strtr') {
+                if (count($a2) >= 3) return "tphp_fn_strtr2({$a2[0]}, {$a2[1]}, {$a2[2]})";
+                return $c2;
             }
-            if ($n3 === 'asort')           return "tphp_fn_asort({$c3})";
-            if ($n3 === 'arsort')          return "tphp_fn_arsort({$c3})";
-            if ($n3 === 'ksort')           return "tphp_fn_ksort({$c3})";
-            if ($n3 === 'krsort')          return "tphp_fn_krsort({$c3})";
         }
 
-        // ── pcntl (POSIX, Windows→error) ──────────────────
-        if ($node->callee === null) {
-            $n4 = $node->name;
+        // ── pcntl: 仅 &$status 引用参数需要特殊处理 ─────────
+        if ($node->callee === null && str_starts_with($node->name, 'pcntl_')) {
             $a4 = array_map(fn($a) => $a->accept($this), $node->args);
-            $c4 = count($a4) > 0 ? $a4[0] : '';
-            if ($n4 === 'pcntl_fork')      return "pcntl_fork()";
-            if ($n4 === 'pcntl_waitpid')   return "pcntl_waitpid({$a4[0]}, &{$a4[1]}, " . ($a4[2] ?? '0') . ")";
-            if ($n4 === 'pcntl_wait')      return "pcntl_wait(&{$a4[0]})";
-            if ($n4 === 'pcntl_exec')      return "pcntl_exec({$c4})";
-            if ($n4 === 'pcntl_alarm')     return "pcntl_alarm({$c4})";
-            if ($n4 === 'pcntl_get_last_error') return "pcntl_get_last_error()";
-            if ($n4 === 'pcntl_strerror')  return "pcntl_strerror({$c4})";
-        }
-
-        // ── posix (POSIX, Windows→error) ──────────────────
-        if ($node->callee === null && str_starts_with($node->name, 'posix_')) {
-            $a5 = array_map(fn($a) => $a->accept($this), $node->args);
-            $n5 = $node->name;
-            if (empty($a5)) return "{$n5}()";
-            $args = implode(', ', $a5);
-            return "{$n5}({$args})";
+            if ($node->name === 'pcntl_waitpid')
+                return "tphp_fn_pcntl_waitpid({$a4[0]}, &{$a4[1]}, " . ($a4[2] ?? '0') . ")";
+            if ($node->name === 'pcntl_wait')
+                return "tphp_fn_pcntl_wait(&{$a4[0]})";
+            // 其余 pcntl_* 走通用回退
         }
 
         // 闭包调用: $h() → ((t_int(*)(...))h.func)(args)
@@ -3068,7 +3003,7 @@ class CodeGenerator implements ASTVisitor
             $this->declaredVars[$var] = true;
             $this->varTypes[$var] = 't_int';
             $prefix = $isDeclared ? '' : 't_int ';
-            $lines[] = "{$prefix}{$var} = ({$arrName} && {$arrName}->length > {$idx}) ? tphp_arr_item_int({$arrName}, {$idx}) : 0;";
+            $lines[] = "{$prefix}{$var} = ({$arrName} && {$arrName}->length > {$idx}) ? tphp_fn_arr_item_int({$arrName}, {$idx}) : 0;";
             $idx++;
         }
     }
@@ -3576,15 +3511,15 @@ class CodeGenerator implements ASTVisitor
             }
         }
         return match ($et) {
-            't_int'      => "tphp_arr_item_int({$arr}, (int)({$idx}))",
-            't_float'    => "tphp_arr_item_float({$arr}, (int)({$idx}))",
-            't_string'   => "tphp_arr_item_str({$arr}, (int)({$idx}))",
-            't_bool'     => "tphp_arr_item_bool({$arr}, (int)({$idx}))",
-            't_array*'   => "tphp_arr_item_array({$arr}, (int)({$idx}))",
-            't_callback' => "tphp_arr_item_callback({$arr}, (int)({$idx}))",
+            't_int'      => "tphp_fn_arr_item_int({$arr}, (int)({$idx}))",
+            't_float'    => "tphp_fn_arr_item_float({$arr}, (int)({$idx}))",
+            't_string'   => "tphp_fn_arr_item_str({$arr}, (int)({$idx}))",
+            't_bool'     => "tphp_fn_arr_item_bool({$arr}, (int)({$idx}))",
+            't_array*'   => "tphp_fn_arr_item_array({$arr}, (int)({$idx}))",
+            't_callback' => "tphp_fn_arr_item_callback({$arr}, (int)({$idx}))",
             default      => (str_contains($et, 'tphp_class_') || str_contains($et, 'tphp_enum_'))
-                ? "((" . $et . ")tphp_arr_item_object({$arr}, (int)({$idx})))"
-                : "tphp_arr_item_int({$arr}, (int)({$idx}))",
+                ? "((" . $et . ")tphp_fn_arr_item_object({$arr}, (int)({$idx})))"
+                : "tphp_fn_arr_item_int({$arr}, (int)({$idx}))",
         };
     }
 

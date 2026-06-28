@@ -256,11 +256,34 @@ GitHub Actions 工作流在 push/PR 时自动在 Linux x86_64/aarch64、macOS aa
 
 ### 添加内置函数
 
-1. `CodeGenerator::visitCall()` — 添加分支
-2. `CodeGenerator::inferCallReturnType()` — 添加返回类型
-3. C 运行时 — 在对应 `include/*.h` 添加 `static inline` 实现
-4. 测试 — 添加测试文件并写 `#debug` 预期输出
-5. 文档 — 更新 `FUNCTIONS.md`
+**原则：通用回退，C 编译器兜底。** CodeGenerator **不需要**为每个函数写 `if` 分支。
+
+1. C 运行时 — 在对应 `include/*.h` 添加 `static inline` 实现，函数名必须是 `tphp_fn_{PHP函数名}`
+2. CodeGenerator — **无需修改 `visitCall()`**（除非需要特殊处理）
+3. 测试 — 添加测试文件并写 `#debug` 预期输出
+4. 文档 — 更新 `FUNCTIONS.md`
+
+**为什么不需要写 if 分支？** CodeGenerator 末尾有通用回退：
+```php
+// 自动生成 tphp_fn_{函数名}(参数列表) — C 编译器校验函数是否存在
+if (empty($a)) return "tphp_fn_{$n}()";
+return "tphp_fn_{$n}(" . implode(', ', $a) . ")";
+```
+
+**何时需要写 if 分支？** 仅以下三种情况：
+
+| 情况 | 示例 | 说明 |
+|------|------|------|
+| 类型转换 | `deg2rad` `number_format` | 参数需要 `(t_float)` cast |
+| 默认参数 | `str_split($s, $chunk=1)` `str_pad` | PHP 默认值不能直接传给 C |
+| 非标准 C 名 | `crc32`→`crc32_str` `array_is_list`→`array_is_list_int` | C 函数名与 PHP 名不同 |
+
+**错误做法（禁止）：**
+```php
+if ($n === 'md5')   return "tphp_fn_md5({$c})";    // ❌ 冗余！通用回退已覆盖
+if ($n === 'sha1')  return "tphp_fn_sha1({$c})";   // ❌ 同上
+if ($n === 'asort') return "tphp_fn_asort({$c})";  // ❌ 同上
+```
 
 ### 添加新语句/语法
 
@@ -273,6 +296,29 @@ GitHub Actions 工作流在 push/PR 时自动在 Linux x86_64/aarch64、macOS aa
 
 参照 `include/os/` 下现有文件模式：`static inline` 函数 + `common.h` 按依赖顺序引入。
 
+### 函数命名规范
+
+**所有公开内置函数必须使用 `tphp_fn_` 前缀**，这是强制规则，CodeGenerator 据此生成 C 调用。
+
+| 前缀 | 用途 | 示例 |
+|------|------|------|
+| `tphp_fn_` | **公开内置函数（PHP 可调用）** | `tphp_fn_json_encode`、`tphp_fn_posix_getpid`、`tphp_fn_sort` |
+| `tphp_fn_arr_` | 数组操作函数 | `tphp_fn_arr_push`、`tphp_fn_arr_item_int` |
+| `tphp_rt_` | 运行时内部辅助 | `tphp_rt_str_concat`、`tphp_rt_free_all` |
+| `tp_` | 对象系统内部 | `tp_obj_alloc`、`tp_obj_release`、`tp_throw` |
+| `phpc_` / `c_` / `php_` | C 互操作 | `phpc_arr_int`、`c_int`、`php_str` |
+| `_` 前缀 | 文件内部辅助 | `_is_leap`、`_cmp_key`、`_md5_init` |
+
+**严禁**以下错误前缀：
+
+| 错误 | 原因 | 正确写法 |
+|------|------|---------|
+| `posix_getpid` | 缺少 `tphp_fn_` | `tphp_fn_posix_getpid` |
+| `pcntl_fork` | 缺少 `tphp_fn_` | `tphp_fn_pcntl_fork` |
+| `tphp_arr_item_int` | 缺少 `fn_` | `tphp_fn_arr_item_int` |
+
+**CodeGenerator 端**：PHP 调用 `posix_getpid()` 时，CodeGen 自动拼接 `tphp_fn_` 前缀生成 `tphp_fn_posix_getpid()`。手动写的函数调用（如 `pcntl_fork`）需在 CodeGen 的 `visitCall` 中显式写出完整 C 函数名。
+
 ---
 
 ## 6. 安全编码规范
@@ -283,16 +329,19 @@ GitHub Actions 工作流在 push/PR 时自动在 Linux x86_64/aarch64、macOS aa
 
 ### 命名防冲突
 
+详见 §5「函数命名规范」。速查：
+
 | 前缀 | 用途 |
 |------|------|
+| `tphp_fn_` | **所有公开内置函数强制前缀** |
+| `tphp_fn_arr_` | 数组操作函数 |
 | `tphp_class_` | 用户类 |
-| `tphp_fn_` | 函数（内置 + 用户） |
-| `tphp_rt_` | 运行时内部 |
-| `tphp_enum_` | 枚举结构体 |
+| `tphp_enum_` | 枚举 struct |
 | `_e_` | 枚举 static 实例 |
+| `tphp_rt_` | 运行时内部 |
+| `tp_` | 对象系统 |
 | `TPHP_CONST_` | 常量宏 |
-| `phpc_` | C 互操作 |
-| `c_` / `php_` | C ↔ PHP 类型桥接 |
+| `phpc_` / `c_` / `php_` | C 互操作 |
 | `_arr_` / `_tmp_` | CodeGen 临时变量 |
 | `str_pool_` / `arr_pool_` / `_obj_pool_` | 池内部 |
 

@@ -11,31 +11,31 @@ void tphp_fn_error(t_string msg, const char *php_file, int php_line);
 #define POSIX_WIN_ERR(name) \
     tphp_fn_error((t_string){"posix_" name "(): not available on Windows", 40}, "<php>", 0)
 
-static inline t_int posix_getpid(void)      { POSIX_WIN_ERR("getpid"); return -1; }
-static inline t_int posix_getppid(void)     { POSIX_WIN_ERR("getppid"); return -1; }
-static inline t_int posix_getuid(void)      { POSIX_WIN_ERR("getuid"); return -1; }
-static inline t_int posix_geteuid(void)     { POSIX_WIN_ERR("geteuid"); return -1; }
-static inline t_int posix_getgid(void)      { POSIX_WIN_ERR("getgid"); return -1; }
-static inline t_int posix_getegid(void)     { POSIX_WIN_ERR("getegid"); return -1; }
-static inline t_string posix_getcwd(void)   { POSIX_WIN_ERR("getcwd"); return (t_string){NULL,0}; }
-static inline t_int posix_isatty(t_int fd)  { (void)fd; return 0; }
-static inline t_int posix_kill(t_int pid, t_int sig) { (void)pid;(void)sig; POSIX_WIN_ERR("kill"); return -1; }
-static inline t_string posix_strerror(t_int no) {
+static inline t_int tphp_fn_posix_getpid(void)      { POSIX_WIN_ERR("getpid"); return -1; }
+static inline t_int tphp_fn_posix_getppid(void)     { POSIX_WIN_ERR("getppid"); return -1; }
+static inline t_int tphp_fn_posix_getuid(void)      { POSIX_WIN_ERR("getuid"); return -1; }
+static inline t_int tphp_fn_posix_geteuid(void)     { POSIX_WIN_ERR("geteuid"); return -1; }
+static inline t_int tphp_fn_posix_getgid(void)      { POSIX_WIN_ERR("getgid"); return -1; }
+static inline t_int tphp_fn_posix_getegid(void)     { POSIX_WIN_ERR("getegid"); return -1; }
+static inline t_string tphp_fn_posix_getcwd(void)   { POSIX_WIN_ERR("getcwd"); return (t_string){NULL,0}; }
+static inline t_int tphp_fn_posix_isatty(t_int fd)  { (void)fd; return 0; }
+static inline t_int tphp_fn_posix_kill(t_int pid, t_int sig) { (void)pid;(void)sig; POSIX_WIN_ERR("kill"); return -1; }
+static inline t_string tphp_fn_posix_strerror(t_int no) {
     static char _b[64]; int n = snprintf(_b, 64, "errno=%lld", (long long)no);
     return (t_string){_b, n > 0 ? n : 0};
 }
-static inline t_int posix_get_last_error(void)  { return 0; }
-static inline t_int posix_ttyname(t_int fd)     { (void)fd; POSIX_WIN_ERR("ttyname"); return -1; }
+static inline t_int tphp_fn_posix_get_last_error(void)  { return 0; }
+static inline t_int tphp_fn_posix_ttyname(t_int fd)     { (void)fd; POSIX_WIN_ERR("ttyname"); return -1; }
 
 // uname → returns array, stub with empty
-static inline t_array* posix_uname(void) {
+static inline t_array* tphp_fn_posix_uname(void) {
     t_array* a = tphp_fn_arr_create(5);
     if (a) tphp_rt_register((void*)a, 1);
     return a;
 }
 
 // times → returns array with dummy values
-static inline t_array* posix_times(void) {
+static inline t_array* tphp_fn_posix_times(void) {
     t_array* a = tphp_fn_arr_create(5);
     if (a) tphp_rt_register((void*)a, 1);
     return a;
@@ -53,15 +53,15 @@ static inline t_array* posix_times(void) {
 #include "types.h"
 
 // ── Process identity (1-line wrappers) ────────────────────
-static inline t_int posix_getpid(void)   { return (t_int)getpid(); }
-static inline t_int posix_getppid(void)  { return (t_int)getppid(); }
-static inline t_int posix_getuid(void)   { return (t_int)getuid(); }
-static inline t_int posix_geteuid(void)  { return (t_int)geteuid(); }
-static inline t_int posix_getgid(void)   { return (t_int)getgid(); }
-static inline t_int posix_getegid(void)  { return (t_int)getegid(); }
+static inline t_int tphp_fn_posix_getpid(void)   { return (t_int)getpid(); }
+static inline t_int tphp_fn_posix_getppid(void)  { return (t_int)getppid(); }
+static inline t_int tphp_fn_posix_getuid(void)   { return (t_int)getuid(); }
+static inline t_int tphp_fn_posix_geteuid(void)  { return (t_int)geteuid(); }
+static inline t_int tphp_fn_posix_getgid(void)   { return (t_int)getgid(); }
+static inline t_int tphp_fn_posix_getegid(void)  { return (t_int)getegid(); }
 
 // ── getcwd ────────────────────────────────────────────────
-static inline t_string posix_getcwd(void) {
+static inline t_string tphp_fn_posix_getcwd(void) {
     static char _buf[4096];
     if (getcwd(_buf, sizeof(_buf)) == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
     int len = (int)strlen(_buf);
@@ -69,21 +69,21 @@ static inline t_string posix_getcwd(void) {
 }
 
 // ── isatty ────────────────────────────────────────────────
-static inline t_int posix_isatty(t_int fd) { return isatty((int)fd) ? 1 : 0; }
+static inline t_int tphp_fn_posix_isatty(t_int fd) { return isatty((int)fd) ? 1 : 0; }
 
 // ── kill ──────────────────────────────────────────────────
-static inline t_int posix_kill(t_int pid, t_int sig) { return (t_int)kill((pid_t)pid, (int)sig); }
+static inline t_int tphp_fn_posix_kill(t_int pid, t_int sig) { return (t_int)kill((pid_t)pid, (int)sig); }
 
 // ── strerror / errno ──────────────────────────────────────
-static inline t_string posix_strerror(t_int no) {
+static inline t_string tphp_fn_posix_strerror(t_int no) {
     char *msg = strerror((int)no);
     int len = (int)strlen(msg);
     return (t_string){msg, len};
 }
-static inline t_int posix_get_last_error(void) { return (t_int)errno; }
+static inline t_int tphp_fn_posix_get_last_error(void) { return (t_int)errno; }
 
 // ── ttyname ───────────────────────────────────────────────
-static inline t_string posix_ttyname(t_int fd) {
+static inline t_string tphp_fn_posix_ttyname(t_int fd) {
     char *t = ttyname((int)fd);
     if (t == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
     int len = (int)strlen(t);
@@ -91,7 +91,7 @@ static inline t_string posix_ttyname(t_int fd) {
 }
 
 // ── uname → array[sysname,nodename,release,version,machine] ──
-static inline t_array* posix_uname(void) {
+static inline t_array* tphp_fn_posix_uname(void) {
     t_array* a = tphp_fn_arr_create(5);
     if (a == NULL) return NULL;
     tphp_rt_register((void*)a, 1);
@@ -111,7 +111,7 @@ static inline t_array* posix_uname(void) {
 }
 
 // ── times → array[ticks,utime,stime,cutime,cstime] ────────
-static inline t_array* posix_times(void) {
+static inline t_array* tphp_fn_posix_times(void) {
     t_array* a = tphp_fn_arr_create(5);
     if (a == NULL) return NULL;
     tphp_rt_register((void*)a, 1);
