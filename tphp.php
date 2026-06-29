@@ -181,13 +181,56 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     $extRoot = $inPhar ? ($extRootPhar ?? __DIR__ . DIRECTORY_SEPARATOR . 'ext') : (__DIR__ . DIRECTORY_SEPARATOR . 'ext');
     $importCFiles = [];
     $importedExts = [];  // 已处理的扩展名，避免重复
+
+    // Magic constants for #include / #flag
+    $magicExt = str_replace('\\', '/', realpath(__DIR__ . '/ext'));
+    $magicInc = str_replace('\\', '/', realpath($includeDir));
+    $magicCmd = str_replace('\\', '/', $cwd);
+
     for ($fi = 0; $fi < count($files); $fi++) {
         $src = file_get_contents($files[$fi]);
-        if (preg_match_all('/^#import\s+(\w[\w\/\-\.]*)/m', (string)$src, $m)) {
+        // Preprocess: expand magic constants in #include directives
+        $filePath = realpath($files[$fi]);
+        $fileDir = dirname($filePath);
+        $src = preg_replace_callback(
+            '/^(#include\s+)(.+)$/m',
+            function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
+                $inc = $m[2];
+                // Already quoted or system header → leave as-is
+                if (str_starts_with($inc, '"') || str_starts_with($inc, '<')) {
+                    return $m[0];
+                }
+                // Expand magic constants
+                $inc = str_replace('__DIR__', $fileDir, $inc);
+                $inc = str_replace('__EXT__', $magicExt, $inc);
+                $inc = str_replace('__INC__', $magicInc, $inc);
+                $inc = str_replace('__CMD__', $magicCmd, $inc);
+                $inc = str_replace('DIRECTORY_SEPARATOR', DIRECTORY_SEPARATOR, $inc);
+                $inc = str_replace('\\', '/', $inc); // normalize Windows backslashes for PCRE
+                $inc = rtrim($inc, "\r\n");           // strip trailing CR from .+ match on Windows
+                // Wrap in quotes (simplify: strip . concatenation noise)
+                $inc = preg_replace('/\s*\.\s*"/', '/', $inc);
+                $inc = preg_replace('/"\s*\.\s*/', '', $inc);
+                $inc = trim($inc, '" ');
+                return $m[1] . '"' . $inc . '"';
+            },
+            (string)$src
+        );
+        if (preg_match_all('/^#import\s+(\w+)/m', (string)$src, $m)) {
             foreach ($m[1] as $extName) {
                 if (isset($importedExts[$extName])) continue;  // 已导入，跳过
+                // Security: #import only accepts plain extension names (no paths)
+                if (str_contains($extName, '..') || str_contains($extName, '/') || str_contains($extName, '\\')) {
+                    die("Error: #import '{$extName}' contains path traversal — only extension names are allowed\n");
+                }
                 $importedExts[$extName] = true;
                 $extSrc = $extRoot . DIRECTORY_SEPARATOR . $extName . DIRECTORY_SEPARATOR . 'src';
+                // Security: resolve via realpath and verify the path stays within ext/
+                $extSrcReal = realpath($extSrc);
+                if ($extSrcReal === false || !str_starts_with($extSrcReal, realpath($extRoot))) {
+                    die("Error: #import '{$extName}' resolves outside the extensions directory\n");
+                }
+                $extSrc = $extSrcReal;
                 if (!is_dir($extSrc)) die("Error: #import {$extName} — ext/{$extName}/src/ not found\n");
                 $extPhp = glob($extSrc . DIRECTORY_SEPARATOR . '*.php');
                 $extC   = glob($extSrc . DIRECTORY_SEPARATOR . '*.c');
@@ -226,6 +269,29 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         if ($source === false || trim($source) === '') {
             die("Error: PHP file is empty: {$file}\n");
         }
+        // Preprocess: expand magic constants in #include directives
+        $fileDir = dirname(realpath($file));
+        $source = preg_replace_callback(
+            '/^(#include\s+)(.+)$/m',
+            function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
+                $inc = $m[2];
+                if (str_starts_with($inc, '"') || str_starts_with($inc, '<')) {
+                    return $m[0];
+                }
+                $inc = str_replace('__DIR__', $fileDir, $inc);
+                $inc = str_replace('__EXT__', $magicExt, $inc);
+                $inc = str_replace('__INC__', $magicInc, $inc);
+                $inc = str_replace('__CMD__', $magicCmd, $inc);
+                $inc = str_replace('DIRECTORY_SEPARATOR', DIRECTORY_SEPARATOR, $inc);
+                $inc = str_replace('\\', '/', $inc); // normalize Windows backslashes for PCRE
+                $inc = rtrim($inc, "\r\n");           // strip trailing CR from .+ match on Windows
+                $inc = preg_replace('/\s*\.\s*"/', '/', $inc);
+                $inc = preg_replace('/"\s*\.\s*/', '', $inc);
+                $inc = trim($inc, '" ');
+                return $m[1] . '"' . $inc . '"';
+            },
+            (string)$source
+        );
 
         $lexer  = new Lexer($source, $debugMode);
         $tokens = $lexer->tokenize();
@@ -320,9 +386,37 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $extraFlags = ' -I"' . implode('" -I"', $srcDirs) . '"';
 
         // Find companion .c files for each #include
+        $projectRoot = str_replace('\\', '/', __DIR__);
         foreach ($allIncludes as $inc) {
             $fileName = is_array($inc) ? $inc['file'] : $inc;
-            $baseName = basename($fileName, '.h');
+            // Security: resolve via realpath, verify within project root
+            $resolvedInclude = null;
+            // Absolute path (from __INC__/__EXT__/__CMD__ expansion): resolve directly
+            if (str_starts_with($fileName, '/') || preg_match('/^[A-Za-z]:/', $fileName)) {
+                $raw = realpath($fileName);
+                if ($raw !== false) {
+                    $candidate = str_replace('\\', '/', $raw);
+                    if (str_starts_with($candidate, $projectRoot)) {
+                        $resolvedInclude = $candidate;
+                    }
+                }
+            } else {
+                // Relative path: resolve against source directories
+                foreach ($srcDirs as $dir) {
+                    $raw = realpath($dir . DIRECTORY_SEPARATOR . $fileName);
+                    if ($raw === false) continue;
+                    $candidate = str_replace('\\', '/', $raw);
+                    if (str_starts_with($candidate, $projectRoot)) {
+                        $resolvedInclude = $candidate;
+                        break;
+                    }
+                }
+            }
+            if ($resolvedInclude === null) {
+                die("Error: #include '{$fileName}' resolves outside the project or does not exist\n"
+                  . "  Project root: {$projectRoot}\n");
+            }
+            $baseName = basename($resolvedInclude, '.h');
             foreach ($srcDirs as $dir) {
                 $cSrc = $dir . DIRECTORY_SEPARATOR . $baseName . '.c';
                 if (file_exists($cSrc)) {
@@ -349,13 +443,54 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             // macOS fallback to cc (which is Clang)
             $ccClass = 'Clang';
         }
+        // Allowed #flag prefixes (whitelist — blocks arbitrary flag injection)
+        $allowedFlagPrefixes = [
+            '-I', '-L', '-l', '-D', '-U',
+            '-O0', '-O1', '-O2', '-O3', '-Os', '-Og', '-Ofast',
+            '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-W',
+            '-std', '-m', '-f', '-g', '-pthread', '-static', '-shared',
+            '-B',  // TCC library path
+        ];
         foreach ($allFlags as $f) {
             $pf = $f['platform'] ?? '';
             $cf = $f['compiler'] ?? '';
+            $flagsStr = $f['flags'] ?? '';
             $platformOk = ($pf === '' || ($platformMap[$pf] ?? '') === $currentOS);
             $compilerOk = ($cf === '' || $cf === $ccClass);
-            if ($platformOk && $compilerOk) {
-                $extraFlags .= ' ' . $f['flags'];
+            if (!$platformOk || !$compilerOk) continue;
+
+            // Security: block shell metacharacters (prevent command injection)
+            if (preg_match('/[`$|;&><\n\r\\\\]/', $flagsStr)) {
+                die("Error: #flag '{$flagsStr}' contains unsafe shell characters (backtick, $, |, ;, &, >, <, \\n, \\, newline)\n");
+            }
+
+            // Security: validate each individual flag token against whitelist
+            $tokens = preg_split('/\s+/', trim($flagsStr));
+            foreach ($tokens as $tok) {
+                if ($tok === '' || $tok === '-') continue;
+                // Non-flag values (file paths, raw numbers) — always allowed
+                if (!str_starts_with($tok, '-')) {
+                    continue;
+                }
+                // Check against whitelist
+                $allowed = false;
+                foreach ($allowedFlagPrefixes as $pfx) {
+                    if (str_starts_with($tok, $pfx)) { $allowed = true; break; }
+                }
+                if (!$allowed) {
+                    die("Error: #flag '{$tok}' is not in the allowed list. Allowed prefixes: " . implode(', ', $allowedFlagPrefixes) . "\n");
+                }
+                // Security: resolve -I and -L paths via realpath (prevents traversal via ..)
+                if ((str_starts_with($tok, '-I') || str_starts_with($tok, '-L')) && strlen($tok) > 2) {
+                    $path = substr($tok, 2);
+                    $resolved = realpath($path);
+                    if ($resolved === false) {
+                        die("Error: #flag '{$tok}' path does not exist: {$path}\n");
+                    }
+                    $extraFlags .= ' ' . $tok[0] . $tok[1] . '"' . $resolved . '"';
+                    continue;
+                }
+                $extraFlags .= ' ' . $tok;
             }
         }
     }

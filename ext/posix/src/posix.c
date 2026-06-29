@@ -1,4 +1,4 @@
-#include "../posix.h"
+#include "posix.h"
 #include <string.h>
 #include <runtime.h>
 

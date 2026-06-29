@@ -187,7 +187,7 @@ class Lexer
                 return;
             }
             // #import name — 引入 ext/name/ 扩展（自动加载 ext/name/src/*.php + *.c）
-            if (preg_match('/^#import\s+(\w[\w\/\-\.]*)/', $rest, $m)) {
+            if (preg_match('/^#import\s+(\w[\w\-]*)/', $rest, $m)) {
                 $this->addToken(TokenType::HASH_IMPORT, $m[1]);
                 $this->advance(strlen($m[0]));
                 return;
@@ -577,6 +577,10 @@ class Lexer
     private function scanVariable(): void
     {
         $this->advance(); // skip $
+        // Check for $$var (variable variables) — unsupported in AOT
+        if ($this->pos < strlen($this->source) && $this->peek() === '$') {
+            $this->error('Variable variables ($$var) are not supported in AOT mode. Use an array map instead: $map[$key] replaces $$key.');
+        }
         $name = '';
         while ($this->pos < strlen($this->source) && (ctype_alnum($this->peek()) || $this->peek() === '_')) {
             $name .= $this->peek();

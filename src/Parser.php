@@ -161,15 +161,15 @@ class Parser
                 $tok = $this->peek();
                 $this->error("Unsupported top-level code '{$tok->lexeme}' (multi-file compilation only accepts namespace/use/class/function/const/enum declarations)");
             } elseif ($this->check(TokenType::HASH_INCLUDE)) {
-                $this->error('#include 指令必须放在文件最前面（namespace/use/class/function 声明之前）');
+                $this->error('#include must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::CC_FLAG)) {
-                $this->error('#flag 指令必须放在文件最前面（namespace/use/class/function 声明之前）');
+                $this->error('#flag must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_CALLBACK)) {
-                $this->error('#callback 指令必须放在文件最前面（namespace/use/class/function 声明之前）');
+                $this->error('#callback must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_IMPORT)) {
-                $this->error('#import 指令必须放在文件最前面（namespace/use/class/function 声明之前）');
+                $this->error('#import must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_DEBUG)) {
-                $this->error('#debug 指令必须放在文件最前面（namespace/use/class/function 声明之前）');
+                $this->error('#debug must be placed at the top of the file (before namespace/use/class/function declarations)');
             } else {
                 $this->error('Expected namespace/use/class/function/const/enum, got ' . $this->peek()->lexeme);
             }
@@ -1450,6 +1450,16 @@ class Parser
                 // $var() → 闭包调用
                 if (str_starts_with($name, '$')) {
                     return $this->setPos(new CallExpr(new VariableExpr($name), '__invoke', $args), $line, $col);
+                }
+                // Friendly errors for unsupported PHP functions
+                $unsupportedFns = [
+                    'eval'    => "eval() is not supported in AOT mode. Use match() or a callback dispatch map instead.",
+                    'include' => "include/require is not supported in AOT mode. Use #include for C headers, or multi-file compilation.",
+                    'require' => "include/require is not supported in AOT mode. Use #include for C headers, or multi-file compilation.",
+                    'yield'   => "yield/generators are not supported. Collect results into an array and return it, or use a callback iterator.",
+                ];
+                if (isset($unsupportedFns[$name])) {
+                    $this->error($unsupportedFns[$name]);
                 }
                 // 内置函数和桥接函数不解析命名空间
                 $globalFns = ['var_dump','count','exit','die','isset','empty','unset',

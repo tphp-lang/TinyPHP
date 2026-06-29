@@ -40,7 +40,50 @@ php tphp.php main.php -os windows          # Windows .exe
 | `-cc <compiler>` | 指定 C 编译器（默认内置 TCC） |
 | `-os <target>` | 跨编译目标：`windows`、`linux`、`macos` |
 | `-arch <arch>` | 目标架构：`x86_64`、`aarch64`（Windows/Linux 默认 x86_64，macOS 默认 aarch64） |
+| `--debug` | 打印编译命令，运行二进制并与 `#debug` 预期输出逐行比对 |
 | `-h, --help` | 显示帮助 |
+
+### 测试与调试（`#debug`）
+
+在源码任意位置插入 `#debug` 指令声明预期输出，配合 `--debug` 自动编译运行并比对：
+
+```php
+<?php
+#debug int(42)
+#debug string(5) "hello"
+#debug bool(true)
+
+class Main {
+    public function main(): void {
+        var_dump(42);
+        var_dump("hello");
+        var_dump(true);
+    }
+}
+```
+
+```bash
+php tphp.php test.php --debug
+# [YES] int(42)
+# [YES] string(5) "hello"
+# [YES] bool(true)
+```
+
+| 写法 | 含义 |
+|------|------|
+| `#debug text` | 预期该行输出为 `text`（精确匹配） |
+| `#debug` | 预期该行为空行 |
+| `#debug ~ text` | 预期近似值（如时间/时区相关），`[REF]` 只展示不判错 |
+
+**文件级测试注解**（放在 `<?php` 同一行或下一行）：
+
+| 注解 | 位置 | 含义 |
+|------|------|------|
+| `// @skip` (文件头注释) | `<?php` 同行 | CI 自动跳过该文件（如 OS 限定、需要外部环境） |
+| `// @multi @with x,y` | `<?php` 同行 | 多文件编译提示 |
+
+CI 测试自动发现：`php .github/scripts/run_tests.php` 递归扫描 `test/` 下所有含 `#debug` 且不含 `@skip` 的文件。
+
 
 ## 入口逻辑
 
@@ -112,21 +155,21 @@ use MyApp\Models\User;
 
 ### ❌ 不支持（AOT 物理不可行）
 
-| 特性 | 原因 |
-|------|------|
-| `eval()` | 没有运行时解释器 |
-| `$$var` 可变变量 | 编译时不知道变量名 |
-| `include/require` | 没有运行时文件加载 |
-| `__call` `__get` `__set` | 没有运行时分发 |
-| `$obj->{$method}()` | 编译时不知道方法名 |
-| `yield` / Generator | 需要协程运行时（不做） |
+| 特性 | 原因 | 替代方案 |
+|------|------|---------|
+| `eval()` | 没有运行时解释器 | `switch`/`match` 分支调度，或回调分发 |
+| `$$var` 可变变量 | 编译时不知道变量名 | `array` 映射：`$map[$key]` 替代 `$$key` |
+| `include/require` | 没有运行时文件加载 | `#include` 引入 C 头文件，或多文件编译 |
+| `__call` `__get` `__set` | 没有运行时分发 | 显式定义方法，或用 `switch` 在单个方法内分发 |
+| `$obj->{$method}()` | 编译时不知道方法名 | 回调 map：`$fn = $map[$name]; $fn($args);` |
+| `yield` / Generator | 需要协程运行时（不做） | `array` 收集结果后返回，或回调遍历 |
 
 ### ⬜ 不做（权衡决定）
 
-| 特性 | 原因 |
-|------|------|
-| `?int` `int\|string` | 会破坏"类型固定 = 零运行时开销"的核心优势 |
-| `...$args` 可变参数 | 需要动态栈构造 |
+| 特性 | 原因 | 替代方案 |
+|------|------|---------|
+| `?int` `int\|string` | 破坏"类型固定 = 零运行时开销" | `mixed` 类型 + 手动类型检查 |
+| `...$args` 可变参数 | 需要动态栈构造 | 传 `array` 替代 |
 
 ### 🔢 内置函数
 
@@ -191,12 +234,29 @@ class Main {
 ### 编译控制
 
 ```php
-#include "include/demo.h"       // 项目头文件 → #include "include/demo.h"
-#include <math.h>                 // 系统头文件 → #include <math.h>
+#include "include/demo.h"                      // 项目头文件 → #include "include/demo.h"
+#include __DIR__ . "/../demo.h"                // 相对源文件目录向上
+#include __EXT__ . "/demo/src/demo.h"          // ext/ 目录引用
+#include __INC__ . "/common.h"                 // include/ 目录引用
+#include __CMD__ . "/local_lib.h"              // 当前工作目录引用
+#include __DIR__ . DIRECTORY_SEPARATOR . "x.h" // 跨平台路径分隔
+#include <math.h>                              // 系统头文件 → #include <math.h>
 #flag Linux -lm                  // Linux 链接数学库
 #flag GCC -O2 -DNDEBUG           // 仅 GCC 优化
 #flag Clang -Wall -Werror        // 仅 Clang 严格警告
 ```
+
+`#include` 路径中支持 PHP 魔术常量展开：
+
+| 常量 | 展开为 | 示例 |
+|------|--------|------|
+| `__DIR__` | 源文件所在目录（绝对路径） | `__DIR__ . "/../demo.h"` |
+| `__EXT__` | 编译器 `ext/` 目录 | `__EXT__ . "/pcntl/src/pcntl.h"` |
+| `__INC__` | 编译器 `include/` 目录 | `__INC__ . "/common.h"` |
+| `__CMD__` | 执行 `tphp` 的当前工作目录 | `__CMD__ . "/my_lib.h"`（`tphp .` 时有用） |
+| `DIRECTORY_SEPARATOR` | `/`（Linux/macOS）或 `\`（Windows） | 跨平台路径拼接 |
+
+> 展开后经 `realpath()` 解析并校验在项目根目录内。`#include "path"` 和 `#include <name>` 的引号/尖括号格式不受影响，原样通过。
 
 | 指令 | 语法 | 编译器输出 | 去重 |
 |------|------|-----------|------|
@@ -205,6 +265,21 @@ class Main {
 | `#flag [CC] [OS] flags` | 编译器+平台过滤 | 仅匹配时追加到命令行 | 按标志串去重 |
 
 `#flag` 过滤规则：不写 = 全平台+全编译器。`MacOS` 映射到 `Darwin`。
+
+#### `#flag` / `#include` / `#import` 安全模型
+
+为防止注入攻击，所有预处理指令受以下安全约束：
+
+| 指令 | 机制 | 说明 |
+|------|------|------|
+| `#flag` | **Shell 元字符阻断** | `` ` `` `$` `\|` `;` `&` `>` `<` `\n` `\\` 直接报错 |
+| | **Flag 前缀白名单** | 仅 `-I` `-L` `-l` `-D` `-U` `-O` `-W` `-std` `-m` `-f` `-g` `-pthread` `-static` `-shared` `-B` |
+| | **路径规范化** | `-I`/`-L` 路径经 `realpath()` 消解 `../` |
+| `#include` | **realpath + 边界校验** | 路径经 `realpath()` 解析后验证在项目根目录内 |
+| `#import` | **扩展名白名单** | 正则 `\w[\w\-]*` 仅接受字母/数字/下划线/连字符 |
+| | **工作区边界校验** | `realpath()` 后验证路径在 `ext/` 目录内 |
+
+> 对标 Vlang 的 `@DIR` 变量，TinyPHP 的 `__DIR__` 魔术常量在编译时展开，可在 `#include` 中用于跨目录引用。
 
 ### 基础类型桥接
 
@@ -297,14 +372,45 @@ C->fold_dbl($data, $len, phpc_thunk('fold_cb', $fn));  // 按签名生成 thunk
 | `phpc_new_fn(func)` → `t_callback` | C 函数指针 → t_callback |
 | `phpc_new_fn_env(func, env)` | 带环境版本 |
 
-### 内存安全
+### 所有权与内存安全
+
+所有 PHPC 函数按所有权分三类，**搞错会导致 double-free 或内存泄漏**。
+
+#### PHP → C（调用方负责释放）
+
+| 函数 | 返回类型 | 所有权 |
+|------|---------|--------|
+| `c_int($x)` | `int32_t` | 值拷贝，无所有权 |
+| `c_float($x)` | `double` | 值拷贝，无所有权 |
+| `c_str($s)` | `const char*` | **借用指针** ❌ 不可 `free` |
+| `phpc_arr_int($arr)` | `int32_t*` | **malloc** ⚠ 必须 `phpc_free()` |
+| `phpc_arr_dbl($arr)` | `double*` | **malloc** ⚠ 必须 `phpc_free()` |
+| `phpc_arr_str($arr)` | `char**` | **malloc** ⚠ 必须 `phpc_free_str_arr()` |
+| `phpc_obj($obj)` | `void*` | **借用指针** ❌ 不可 `free` |
+| `phpc_fn($cb)` / `phpc_env($cb)` | `void*` | 借用，无所有权 |
+| `phpc_fn_i32/i64/f64($cb)` | 函数指针 | 借用，无所有权 |
+
+#### C → PHP（TinyPHP 自动管理）
+
+| 函数 | 返回类型 | 所有权 |
+|------|---------|--------|
+| `php_int(v)` | `t_int` | 值拷贝 |
+| `php_float(v)` | `t_float` | 值拷贝 |
+| `php_str(s)` | `t_string` | **深拷贝**，字符串池自动释放 |
+| `phpc_new_arr_*(src, n)` | `t_array*` | 引用计数，自动 GC |
+| `phpc_new_arr()` | `t_array*` | 引用计数，自动 GC |
+| `phpc_new_obj(ptr, cls)` | `void*` | TinyPHP 析构链管理 |
+| `phpc_new_fn(func)` | `t_callback` | 值拷贝 |
+| `phpc_new_fn_env(fn, env)` | `t_callback` | 值拷贝 |
+
+#### 释放函数
 
 | 函数 | 说明 |
 |------|------|
-| `phpc_free(ptr)` | `free(ptr)`（NULL 安全） |
+| `phpc_free(ptr)` | `free(ptr)`，NULL 安全 |
 | `phpc_free_str_arr(strs, len)` | 先 `free` 每个字符串，再 `free` 指针数组 |
 
-**关键规则**：`phpc_arr_*` 返回的指针必须通过 `phpc_free` 释放。`phpc_new_arr_*` 返回的 `t_array*` 由 TinyPHP 引用计数自动管理。
+> ⚠ **记忆口诀**：`phpc_arr_*`（提取）→ malloc → **你必须 phpc_free**。`phpc_new_*`（创建）→ TinyPHP GC → **你别管**。`c_str` / `phpc_obj` → 借用 → **别 free**。
 
 ## 性能
 
@@ -336,7 +442,18 @@ PHP → Lexer → Token[] → Parser → AST → CodeGenerator → .c → 编译
 |---|---|
 | [FUNCTIONS.md](FUNCTIONS.md) | 每个函数的实现细节与 PHP 差异 |
 | [GRAMMAR.md](GRAMMAR.md) | 完整语法参考（基于 PHP 8.5 parser，标注支持程度） |
+| [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) | 性能基准数据 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 架构、扩展指南、安全规范 |
+| [QUICK_START.md](QUICK_START.md) | 5 分钟快速上手：加函数、跑测试、提 PR |
+
+### 运行基准
+
+```bash
+php bench/run_bench.php         # 默认 TCC
+php bench/run_bench.php gcc     # GCC -O2
+php bench/run_bench.php clang   # Clang -O2
+php bench/run_bench.php gcc php # 同时对比原生 PHP
+```
 
 ## 许可证
 

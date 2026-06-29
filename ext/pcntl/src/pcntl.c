@@ -1,4 +1,4 @@
-#include "../pcntl.h"
+#include "pcntl.h"
 #include <string.h>
 #include <runtime.h>
 
