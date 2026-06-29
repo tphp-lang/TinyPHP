@@ -9,6 +9,9 @@ set -o pipefail
 OS="$(uname -s)"
 
 echo "=== 1. 克隆 TCC 源码 ==="
+# 记下项目根目录绝对路径 — TCC 的 --prefix 必须用绝对路径
+# 否则 TCC 初始化时从 CWD 解析相对路径，会找错 libtcc1.a 的位置
+PROJECT_ROOT="$(pwd)"
 rm -rf tcc-src tcc
 # 最多重试 3 次（repo.or.cz 网络不稳定）
 for i in 1 2 3; do
@@ -25,13 +28,12 @@ fi
 cd tcc-src
 
 echo "=== 2. 配置 TCC ==="
-# 注意：TCC 把 --prefix 编译进二进制，运行时从 CWD 解析相对路径
-# 所以 prefix 用相对路径保持可移植，但调用 TCC 时必须从正确的 CWD 执行
+echo "       prefix = $PROJECT_ROOT/tcc"
 if [ "$OS" = "Darwin" ]; then
     SDK=$(xcrun --show-sdk-path)
     ./configure \
-        --prefix=../tcc \
-        --bindir=../tcc \
+        --prefix="$PROJECT_ROOT/tcc" \
+        --bindir="$PROJECT_ROOT/tcc" \
         --crtprefix="../tcc/lib/tcc:$SDK/usr/lib" \
         --libpaths="../tcc/lib/tcc:$SDK/usr/lib:/usr/lib:/usr/local/lib" \
         --sysincludepaths="../tcc/lib/tcc/include:$SDK/usr/include:/usr/local/include" \
@@ -45,8 +47,8 @@ if [ "$OS" = "Darwin" ]; then
 else
     ARCH=$(gcc -dumpmachine)
     ./configure \
-        --prefix=../tcc \
-        --bindir=../tcc \
+        --prefix="$PROJECT_ROOT/tcc" \
+        --bindir="$PROJECT_ROOT/tcc" \
         --crtprefix="../lib/tcc:/usr/lib/$ARCH:/usr/lib64:/usr/lib:/lib/$ARCH:/lib" \
         --libpaths="../lib/tcc:/usr/lib/$ARCH:/usr/lib64:/usr/lib:/lib/$ARCH:/lib:/usr/local/lib/$ARCH:/usr/local/lib" \
         --extra-cflags=-O3 \
@@ -84,25 +86,15 @@ fi
 echo "=== 6. 验证 ==="
 cd ..
 echo 'int main(){return 0;}' > _test_tcc.c
-echo "=== libtcc1.a 位置 ==="
-find tcc -name libtcc1.a
-echo "=== TCC 二进制中嵌入的路径 ==="
-strings tcc/tcc | grep -E '(/tcc|/lib/tcc)' | sort -u
-echo "=== 验证编译(方式1: 显式传入 libtcc1.a) ==="
-if ./tcc/tcc -B"$(pwd)/tcc/lib/tcc" tcc/lib/tcc/libtcc1.a -o _test_tcc _test_tcc.c 2>&1; then
-    echo "TCC OK (explicit libtcc1.a)"
-    rm -f _test_tcc
-elif (cd tcc && ./tcc -B"$(pwd)/lib/tcc" -o ../_test_tcc ../_test_tcc.c) 2>&1; then
-    echo "TCC OK (chdir to tcc/)"
+# 使用绝对prefix后，TCC 无需特殊CWD也能找到 libtcc1.a
+if ./tcc/tcc -B"$PROJECT_ROOT/tcc/lib/tcc" -o _test_tcc _test_tcc.c; then
+    echo "TCC standalone OK"
     rm -f _test_tcc
 else
-    echo "=== strace 诊断 ==="
-    strace -f -e openat,open -o /tmp/tcc_strace.log ./tcc/tcc -B"$(pwd)/tcc/lib/tcc" -o _test_tcc _test_tcc.c 2>/dev/null; true
-    grep -i libtcc1 /tmp/tcc_strace.log | head -5
-    echo "FATAL: TCC broken"
+    echo "TCC FAILED"
     exit 1
 fi
-rm -f _test_tcc.c _test_tcc
+rm -f _test_tcc.c
 
 echo "=== 7. 清理 ==="
 rm -rf tcc-src
