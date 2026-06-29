@@ -40,9 +40,7 @@ include/                         C 运行时头文件（全 static inline）
   └── os/
       ├── times.h                时间（time/date/sleep/hrtime/microtime/strtotime/mktime）
       ├── json.h                 JSON 编解码（位图转义 + 批量安全字符写入）
-      ├── file.h                 文件 I/O（file_get/put_contents）
-      ├── pcntl.h                进程控制（POSIX）
-      └── posix.h                系统函数（POSIX）
+      └── file.h                 文件 I/O（file_get/put_contents）
 ```
 
 > TCC 不在仓库中——通过 `build.sh`/`build.cmd` 从 `https://repo.or.cz/tinycc.git` (mob 分支) clone 并编译。
@@ -356,7 +354,7 @@ ext/
 
 ```c
 // ext/pcntl/pcntl.h
-#include <types.h>
+#include "types.h"
 t_int tphp_fn_pcntl_fork(void);
 t_string tphp_fn_pcntl_strerror(t_int no);
 ```
