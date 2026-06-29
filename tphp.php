@@ -360,6 +360,23 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $f = is_array($inc) ? $inc['file'] : $inc;
         if (isset($seenFiles[$f])) return false;
         $seenFiles[$f] = true;
+
+        // Platform/compiler filtering (#include Linux "x.h" / #include Windows "y.h")
+        if (is_array($inc) && !empty($inc['ctx'])) {
+            $ctx = $inc['ctx'];
+            $platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin'];
+            $currentOS = PHP_OS_FAMILY;
+            // OS filter
+            if (isset($platformMap[$ctx]) && $platformMap[$ctx] !== $currentOS) return false;
+            // Compiler filter (TCC/GCC/Clang)
+            if (!isset($platformMap[$ctx])) {
+                $ccLower = strtolower($GLOBALS['cc'] ?? 'tcc');
+                $ccClass = 'TCC';
+                if (str_contains($ccLower, 'gcc')) $ccClass = 'GCC';
+                elseif (str_contains($ccLower, 'clang')) $ccClass = 'Clang';
+                if ($ctx !== $ccClass) return false;
+            }
+        }
         return true;
     }));
     $seenFlags = [];

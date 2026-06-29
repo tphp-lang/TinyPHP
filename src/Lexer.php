@@ -176,13 +176,23 @@ class Lexer
         // #include / #flag → 特殊预处理器指令
         if ($ch === '#') {
             $rest = substr($this->source, $this->pos);
-            if (preg_match('/^#include\s+"(.+?)"/', $rest, $m)) {
-                $this->addToken(TokenType::HASH_INCLUDE, $m[1], ['file' => $m[1], 'quoted' => true]);
+            // #include [OS/CC] "path" or <path> — optional platform/compiler filter
+            if (preg_match('/^#include\s+(?:(\w+)\s+)?(")(.+?)\2/', $rest, $m)) {
+                $ctx = $m[1] ?: '';
+                $file = $m[3];
+                $quoted = ($m[2] === '"');
+                $this->addToken(TokenType::HASH_INCLUDE, $file, [
+                    'file' => $file, 'quoted' => $quoted, 'ctx' => $ctx,
+                ]);
                 $this->advance(strlen($m[0]));
                 return;
             }
-            if (preg_match('/^#include\s+<(.+?)>/', $rest, $m)) {
-                $this->addToken(TokenType::HASH_INCLUDE, $m[1], ['file' => $m[1], 'quoted' => false]);
+            if (preg_match('/^#include\s+(?:(\w+)\s+)?<(.+?)>/', $rest, $m)) {
+                $ctx = $m[1] ?: '';
+                $file = $m[2];
+                $this->addToken(TokenType::HASH_INCLUDE, $file, [
+                    'file' => $file, 'quoted' => false, 'ctx' => $ctx,
+                ]);
                 $this->advance(strlen($m[0]));
                 return;
             }

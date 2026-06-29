@@ -237,6 +237,8 @@ class Main {
 
 ```php
 #include "include/demo.h"                      // 项目头文件 → #include "include/demo.h"
+#include Linux "linux_only.h"                  // 仅 Linux 引入
+#include Windows <windows.h>                   // 仅 Windows 引入
 #include __DIR__ . "/../demo.h"                // 相对源文件目录向上
 #include __EXT__ . "/demo/src/demo.h"          // ext/ 目录引用
 #include __INC__ . "/common.h"                 // include/ 目录引用
@@ -262,11 +264,11 @@ class Main {
 
 | 指令 | 语法 | 编译器输出 | 去重 |
 |------|------|-----------|------|
-| `#include "path"` | 项目相对路径 | `#include "path"` | 按文件名去重 |
-| `#include <name>` | 系统头文件 | `#include <name>` | 同上 |
+| `#include [OS] "path"` | 项目相对路径，可选 OS 过滤 | `#include "path"` | 按文件名去重 |
+| `#include [OS] <name>` | 系统头文件，可选 OS 过滤 | `#include <name>` | 同上 |
 | `#flag [CC] [OS] flags` | 编译器+平台过滤 | 仅匹配时追加到命令行 | 按标志串去重 |
 
-`#flag` 过滤规则：不写 = 全平台+全编译器。`MacOS` 映射到 `Darwin`。
+> `[OS]` 可选：`Windows`/`Linux`/`MacOS`。不写 = 全平台。`#include` 和 `#flag` 共用同一过滤规则，`MacOS` 映射到 `Darwin`。
 
 #### `#flag` / `#include` / `#import` 安全模型
 
