@@ -86,11 +86,15 @@ fi
 echo "=== 6. 验证 ==="
 cd ..
 echo 'int main(){return 0;}' > _test_tcc.c
-# TCC mob 分支的 bug: 初始化时直接用相对文件名 "libtcc1.a" 去 open(),
-# 不拼接 CONFIG_TCCDIR。临时 symlink 到 CWD 绕过去。
+echo "=== TCC search paths ==="
+./tcc/tcc -v -v 2>&1 || true
+echo "=== strace: TCC's open() calls for libtcc1 ==="
+strace -f -e openat -o /tmp/tcc_strace.log ./tcc/tcc -B"$PROJECT_ROOT/tcc/lib/tcc" -o _test_tcc _test_tcc.c 2>&1; true
+grep -i 'libtcc1' /tmp/tcc_strace.log || echo "(no libtcc1 in strace)"
+echo "=== verify with symlink workaround ==="
 ln -sf "$PROJECT_ROOT/tcc/lib/tcc/libtcc1.a" ./libtcc1.a
-if ./tcc/tcc -B"$PROJECT_ROOT/tcc/lib/tcc" -o _test_tcc _test_tcc.c; then
-    echo "TCC standalone OK"
+if ./tcc/tcc -B"$PROJECT_ROOT/tcc/lib/tcc" -o _test_tcc _test_tcc.c 2>&1; then
+    echo "TCC OK"
     rm -f _test_tcc
 else
     echo "TCC FAILED"
