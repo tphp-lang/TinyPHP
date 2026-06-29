@@ -1080,6 +1080,8 @@ class CodeGenerator implements ASTVisitor
             if ($expr->name === 'phpc_new_fn' || $expr->name === 'phpc_new_fn_env') return 't_callback';
             if ($expr->name === 'phpc_free' || $expr->name === 'phpc_free_str_arr') return 'void';
             // 字符串函数返回类型
+            // ctype functions → bool
+            if (str_starts_with($expr->name, 'ctype_')) return 't_bool';
             if ($expr->name === 'strlen')       return 't_int';
             if ($expr->name === 'trim' || $expr->name === 'ltrim' || $expr->name === 'rtrim') return 't_string';
             if ($expr->name === 'substr')       return 't_string';
@@ -1101,7 +1103,8 @@ class CodeGenerator implements ASTVisitor
             if ($expr->name === 'floatval') return 't_float';
             if ($expr->name === 'strval')   return 't_string';
             if ($expr->name === 'boolval')  return 't_bool';
-            if ($expr->name === 'rand' || $expr->name === 'mt_rand') return 't_int';
+            if ($expr->name === 'rand' || $expr->name === 'mt_rand' || $expr->name === 'random_int') return 't_int';
+            if ($expr->name === 'random_bytes') return 't_string';
             // ── 第一梯队新增 ──
             if ($expr->name === 'pi')              return 't_float';
             if ($expr->name === 'deg2rad' || $expr->name === 'rad2deg') return 't_float';
@@ -2061,11 +2064,16 @@ class CodeGenerator implements ASTVisitor
             return 'tphp_fn_' . $node->name . '(' . $valCode . ')';
         }
 
-        // rand($min, $max) / mt_rand($min, $max)
-        if ($node->callee === null && ($node->name === 'rand' || $node->name === 'mt_rand')) {
+        // rand($min, $max) / mt_rand($min, $max) / random_int($min, $max)
+        if ($node->callee === null && in_array($node->name, ['rand', 'mt_rand', 'random_int'], true)) {
             $min = $node->args[0]->accept($this);
             $max = $node->args[1]->accept($this);
             return 'tphp_fn_' . $node->name . '(' . $min . ', ' . $max . ')';
+        }
+
+        // random_bytes($length)
+        if ($node->callee === null && $node->name === 'random_bytes') {
+            return 'tphp_fn_random_bytes(' . $node->args[0]->accept($this) . ')';
         }
 
         // sort($arr) / rsort($arr) — in-place sort
@@ -2253,6 +2261,11 @@ class CodeGenerator implements ASTVisitor
             if (empty($node->args)) return 'false';
             $argCode = $node->args[0]->accept($this);
             return 'tphp_fn_is_numeric_str(' . $argCode . ')';
+        }
+
+        // ctype_* functions (string → bool, direct C mapping)
+        if ($node->callee === null && str_starts_with($node->name, 'ctype_')) {
+            return 'tphp_fn_' . $node->name . '(' . $node->args[0]->accept($this) . ')';
         }
 
         // is_int / is_string / is_float / is_bool / is_array / is_object / is_null / is_callable
@@ -2686,7 +2699,7 @@ class CodeGenerator implements ASTVisitor
             if ($retType === 't_int' && $expr->callee === null) {
                 // inferType 回退到 t_int，手动补查内置函数
                 if ($expr->name === 'date') $retType = 't_string';
-                elseif (str_starts_with($expr->name, 'is_')) $retType = 't_bool';
+                elseif (str_starts_with($expr->name, 'is_') || str_starts_with($expr->name, 'ctype_')) $retType = 't_bool';
             }
             return match ($retType) {
                 't_string'   => "VAR_STRING({$code})",

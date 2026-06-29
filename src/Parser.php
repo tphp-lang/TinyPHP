@@ -1479,10 +1479,11 @@ class Parser
                     'array_product','array_fill','sort','rsort',
                     'intval','floatval','strval','boolval',
                     'max','min','range','rand','mt_rand',
+                    'random_int','random_bytes',
                     'abs','round','ceil','floor','sqrt',
                     'strtolower','strtoupper','shuffle','array_search','microtime',
                     'json_encode','json_decode'];
-                if (!in_array($name, $globalFns, true) && !str_starts_with($name, 'is_')) {
+                if (!in_array($name, $globalFns, true) && !str_starts_with($name, 'is_') && !str_starts_with($name, 'ctype_')) {
                     $name = $this->resolveFunctionName($name);
                 }
                 return $this->setPos(new CallExpr(null, $name, $args), $line, $col);

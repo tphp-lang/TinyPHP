@@ -175,7 +175,7 @@ use MyApp\Models\User;
 
 ### 🔢 内置函数
 
-已实现 **180 个**（约 PHP 标准库的 70%），覆盖数组/字符串/数学/时间/JSON/哈希/进程控制等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+已实现 **193 个**（约 PHP 标准库的 70%），覆盖数组/字符串/数学/时间/JSON/哈希/进程控制/CSPRNG/ctype 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ## 独有特性
 

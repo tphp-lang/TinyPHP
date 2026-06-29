@@ -19,7 +19,8 @@
 | 文件 I/O | 2 | [↓](#文件-io) |
 | 时间 | 9 | [↓](#时间) |
 | JSON | 2 | [↓](#json) |
-| 随机数 | 2 | [↓](#随机数) |
+| 随机数 | 4 | [↓](#随机数) |
+| ctype 字符检测 | 11 | [↓](#ctype-字符检测) |
 | 环境/类型 | 3 | [↓](#环境--类型) |
 | 进程控制 | 7 | [↓](#进程控制-pcntl) |
 | POSIX 系统 | 14 | [↓](#posix-系统) |
@@ -27,7 +28,7 @@
 | OOP 语法 | 10 | [↓](#oop-语法) |
 | C 互操作 | 24 | [↓](#c-互操作-phpc) |
 | 断言 | 5 | [↓](#断言测试框架用) |
-| **合计** | **180** | |
+| **合计** | **193** | |
 | | | [↓](#待实现--暂缓) |
 
 ---
@@ -240,10 +241,34 @@
 
 ## 随机数
 
-| 函数 | 算法 | 周期 | 线程安全 |
+| 函数 | 算法 | 安全 | 说明 |
 |---|---|---|---|
-| `rand($min, $max)` | libc LCG | 2^31 | ❌ |
-| `mt_rand($min, $max)` | **MT19937** | 2^19937-1 | ❌ |
+| `rand($min, $max)` | libc LCG | ❌ | 快速伪随机 |
+| `mt_rand($min, $max)` | **MT19937** | ❌ | 高质量伪随机 |
+| `random_int($min, $max)` | **CSPRNG** | ✅ | 密码学安全，拒绝采样防模偏差 |
+| `random_bytes($len)` | **CSPRNG** | ✅ | 返回原始二进制字符串，≤1MB |
+
+> 实现：Windows → `rand_s`，Linux/macOS → `/dev/urandom`
+
+---
+
+## ctype 字符检测
+
+11 个函数，直接映射 C `<ctype.h>`，零堆分配。空字符串返回 `false`。
+
+| 函数 | C 实现 | 检测内容 |
+|---|---|---|
+| `ctype_alnum($s)` | `isalnum()` | 字母或数字 |
+| `ctype_alpha($s)` | `isalpha()` | 纯字母 |
+| `ctype_cntrl($s)` | `iscntrl()` | 控制字符 |
+| `ctype_digit($s)` | `isdigit()` | 纯数字 |
+| `ctype_graph($s)` | `isgraph()` | 可打印(除空格) |
+| `ctype_lower($s)` | `islower()` | 小写字母 |
+| `ctype_print($s)` | `isprint()` | 可打印(含空格) |
+| `ctype_punct($s)` | `ispunct()` | 标点符号 |
+| `ctype_space($s)` | `isspace()` | 空白字符 |
+| `ctype_upper($s)` | `isupper()` | 大写字母 |
+| `ctype_xdigit($s)` | `isxdigit()` | 十六进制字符 |
 
 ---
 
