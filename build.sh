@@ -70,15 +70,17 @@ if [ "$OS" = "Darwin" ]; then
     # macOS: link libc for Big Sur+
     ln -sf /usr/lib/libSystem.B.dylib ../tcc/lib/tcc/libc.dylib 2>/dev/null || true
 else
-    echo "=== 5. 补充系统 CRT 文件（Linux） ==="
+    echo "=== 5. 补充系统 CRT + 链接库（Linux） ==="
     CRT_TARGET=../tcc/lib/tcc
     # 来自多个可能的 CRT 路径
     for crtdir in /usr/lib/$ARCH /usr/lib64 /usr/lib /lib/$ARCH /lib; do
         [ -f "$crtdir/crt1.o" ] || continue
         cp -v "$crtdir/crt1.o" "$crtdir/crti.o" "$crtdir/crtn.o" "$CRT_TARGET/" 2>/dev/null || true
-        # 也复制 libc.so（用于动态链接）
-        cp -v "$crtdir/libc.so"* "$CRT_TARGET/" 2>/dev/null || true
-        cp -v "$crtdir/libc.a"   "$CRT_TARGET/" 2>/dev/null || true
+        # 复制链接器 .so 文件（Docker 只有 .so.6 运行时，无 .so 链接器）
+        for lib in libc libm libpthread libdl; do
+            cp -v "$crtdir/${lib}.so"* "$CRT_TARGET/" 2>/dev/null || true
+            cp -v "$crtdir/${lib}.a"   "$CRT_TARGET/" 2>/dev/null || true
+        done
         break
     done
 fi
