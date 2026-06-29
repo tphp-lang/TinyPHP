@@ -2593,12 +2593,18 @@ class CodeGenerator implements ASTVisitor
             // 用 getPropType 查类型（含 enum 属性）
             $propType = $this->getPropType($expr);
             if ($propType === '') $propType = 't_int';
+            // Object type → VAR_OBJ
+            if (str_contains($propType, '_class_') || str_ends_with($propType, '*')) {
+                return "VAR_OBJ({$code})";
+            }
             return match ($propType) {
-                't_int'    => "VAR_INT({$code})",
-                't_float'  => "VAR_FLOAT({$code})",
-                't_string' => "VAR_STRING({$code})",
-                't_bool'   => "VAR_BOOL({$code})",
-                default    => "VAR_INT({$code})",
+                't_int'      => "VAR_INT({$code})",
+                't_float'    => "VAR_FLOAT({$code})",
+                't_string'   => "VAR_STRING({$code})",
+                't_bool'     => "VAR_BOOL({$code})",
+                't_array*'   => "VAR_ARRAY({$code})",
+                't_callback' => "VAR_CALLBACK({$code})",
+                default      => "VAR_INT({$code})",
             };
         }
         if ($expr instanceof EnumAccessExpr) {

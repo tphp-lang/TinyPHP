@@ -446,6 +446,11 @@ class Parser
                 $properties[] = $this->parsePropertyDecl();
             } elseif ($this->isClassConstStart()) {
                 $classConsts[] = $this->parseClassConstDecl($name);
+            } elseif ($this->check(TokenType::CONST_KW)) {
+                $this->error("Class constants must have an explicit type declaration (e.g., 'public const string MAX = 100')");
+            } elseif (($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW) || $this->check(TokenType::STATIC_KW))
+                       && $this->peek(1)->type === TokenType::IDENTIFIER && str_starts_with($this->peek(1)->lexeme, '$')) {
+                $this->error("Properties must have an explicit type declaration (e.g., 'public int \$count')");
             } else {
                 $m = $this->parseMethod();
                 // Collect promoted properties from constructor
@@ -508,21 +513,18 @@ class Parser
         $i = $isVis ? 1 : 0;
         if ($this->peek($i)->type !== TokenType::CONST_KW) return false;
         if ($isVis && $this->peek(1)->type !== TokenType::CONST_KW) return false;
-        // peek(i+1) should be type or name; peek(i+2) should be name or =
+        // Class constants require explicit type: visibility const TYPE name =
         $t2 = $this->peek($i + 1);
         $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
-                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY];
+                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED, TokenType::IDENTIFIER];
         if (in_array($t2->type, $typeTokens, true)) {
-            // typed: visibility const TYPE name =
             $t3 = $this->peek($i + 2);
             return $t3->type === TokenType::IDENTIFIER;
         }
-        // untyped: visibility const name =
-        $t3 = $this->peek($i + 2);
-        return $t2->type === TokenType::IDENTIFIER && $t3->type === TokenType::EQUALS;
+        return false;
     }
 
-    /** 类常量声明: [visibility] const [type] name = expr ; */
+    /** Class constant: [visibility] const TYPE name = expr ; (type required) */
     private function parseClassConstDecl(string $className): ConstNode
     {
         // visibility
@@ -532,13 +534,8 @@ class Parser
         }
         $this->consume(TokenType::CONST_KW, 'Expected const');
 
-        // type (optional)
-        $type = null;
-        $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
-                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY];
-        if (in_array($this->peek()->type, $typeTokens, true)) {
-            $type = $this->parseType();
-        }
+        // type (required for class constants — no auto-deduction)
+        $type = $this->parseType();
 
         // name
         $cName = $this->consume(TokenType::IDENTIFIER, 'Expected constant name')->lexeme;

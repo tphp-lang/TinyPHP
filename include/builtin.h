@@ -68,6 +68,15 @@ static void tphp_fn_var_dump_rec(t_var v, int depth) {
         fputc('"', stdout);
         break;
     }
+    case TYPE_OBJECT: {
+        const t_object* obj = (const t_object*)v.value._object;
+        if (obj == NULL || obj->cls == NULL) {
+            fputs("NULL", stdout);
+        } else {
+            fprintf(stdout, "object(%s)", obj->cls->name ? obj->cls->name : "?");
+        }
+        break;
+    }
     case TYPE_CALLBACK:
         fputs("callable", stdout);
         break;

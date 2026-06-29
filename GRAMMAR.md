@@ -143,9 +143,10 @@ member:
 
 ```
 property_decl:
-    type? IDENTIFIER '=' expr ';'                         ✅ (默认值有限)
-  | visibility 'static'? 'readonly'? type IDENTIFIER ';'  ✅
-  | visibility 'static'? 'readonly'? type IDENTIFIER '=' expr ';'  ✅
+    visibility 'static'? 'readonly'? type IDENTIFIER ';'            ✅ (type required)
+  | visibility 'static'? 'readonly'? type IDENTIFIER '=' expr ';'  ✅ (type required)
+
+> 属性和构造器属性提升**必须**写类型声明，`public $x` 会被拒绝。
 
 visibility:
     'public'    ✅
@@ -186,9 +187,15 @@ return_type:
 ### 3.3 类常量
 
 ```
-const_decl:
-    'const' IDENTIFIER '=' expr ';'       ✅ (int/float/string/bool/array)
-  | visibility 'const' type IDENTIFIER '=' expr ';'  ⬜ (typed constants)
+class_const_decl:
+    visibility 'const' type IDENTIFIER '=' expr ';'  ✅ (type required, no auto-deduction)
+
+> 类常量必须写类型声明，`const X = 1` 会被拒绝。全局/命名空间常量自动推导类型：
+>
+> ```
+> global_const_decl:
+>     'const' IDENTIFIER '=' expr ';'       ✅ (int/float/string/bool, type auto-deduced)
+> ```
 ```
 
 ---
