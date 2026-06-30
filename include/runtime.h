@@ -397,6 +397,7 @@ static inline void tphp_rt_free_all(void) {
 
 static inline void tphp_fn_error(t_string msg, const char *php_file, int php_line) {
     tphp_rt_free_all();
+    fflush(stdout);  // 管道模式 stdout 全缓冲, 确保 error 前的输出可见
     fprintf(stderr, "\nFatal error: %.*s\n  in %s on line %d\n\n",
             msg.length > 0 ? msg.length : 0, STR_PTR(msg) ? STR_PTR(msg) : "", php_file, php_line);
     exit(1);
