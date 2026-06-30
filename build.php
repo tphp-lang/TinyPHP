@@ -35,6 +35,7 @@ if (is_dir($base . '/ext')) {
     );
     $count = 0;
     foreach ($iter as $file) {
+        if (!$file->isFile()) continue;
         $local = str_replace('\\', '/', substr($file->getPathname(), strlen($base) + 1));
         $phar->addFile($file->getPathname(), $local);
         $count++;
@@ -48,6 +49,7 @@ if (is_dir($base . '/tcc')) {
         new RecursiveDirectoryIterator($base . '/tcc', FilesystemIterator::SKIP_DOTS)
     );
     foreach ($iter as $file) {
+        if (!$file->isFile()) continue;  // 跳过目录（Linux TCC 构建会产生 clang/ 子目录）
         $local = str_replace('\\', '/', substr($file->getPathname(), strlen($base) + 1));
         $phar->addFile($file->getPathname(), $local);
     }
