@@ -74,11 +74,14 @@ foreach ($testFiles as $i => $f) {
                 $tail = array_reverse(array_slice($tail, 0, 8));
                 $errLines = $tail;
             }
-        } elseif (file_exists($out)) {
-            // 编译成功但运行时崩溃（无输出）
-            $errLines[] = '(binary ran but produced no output — possible crash/segfault)';
         } else {
-            $errLines[] = '(compilation failed, no binary produced)';
+            // TCC 静默崩溃 — log 为空, 无法定位原因
+            // 直接重跑命令捕获原始 stderr
+            $cmd2 = escapeshellarg($phpExe) . ' ' . escapeshellarg($tphp) . ' '
+                  . escapeshellarg($f) . ' --debug ' . $ccFlag
+                  . ' -o ' . escapeshellarg($out) . ' 2>&1';
+            unset($tccOut); exec($cmd2, $tccOut, $ret2);
+            $errLines = !empty($tccOut) ? $tccOut : ['(compilation failed, NO error output captured — TCC silent crash)'];
         }
         $failed[$rel] = $errLines;
         @unlink($log);
