@@ -57,16 +57,9 @@ else
 fi
 
 echo "=== 3. 编译 & 安装 ==="
-# bcheck.c uses __malloc_hook/__realloc_hook/__free_hook
-# — all three removed in glibc 2.34+, add stubs
-cat > lib/bcheck_patched.c << 'STUB'
-#include <stdlib.h>
-static void *__malloc_hook(size_t s, const void *c) { return malloc(s); }
-static void *__realloc_hook(void *p, size_t s, const void *c) { return realloc(p,s); }
-static void  __free_hook(void *p, const void *c) { free(p); }
-STUB
-cat lib/bcheck.c >> lib/bcheck_patched.c
-mv lib/bcheck_patched.c lib/bcheck.c
+# bcheck.c uses glibc malloc hooks (__malloc_hook/__realloc_hook/__free_hook/__memalign_hook)
+# ALL removed in glibc 2.34+. Skip bcheck entirely.
+echo '// bcheck disabled: glibc 2.34+ removed malloc hooks' > lib/bcheck.c
 make
 make install
 
