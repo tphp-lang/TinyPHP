@@ -163,7 +163,8 @@ static inline void _sha256_init(_sha256_ctx *c) {
 }
 
 static void _sha256_transform(uint32_t *h, const uint8_t *data) {
-    uint32_t w[64],a=h[0],b=h[1],c2=h[2],d=h[3],e=h[4],f=h[5],g=h[6],h0=h[7];
+    static uint32_t w[64];
+    uint32_t a=h[0],b=h[1],c2=h[2],d=h[3],e=h[4],f=h[5],g=h[6],h0=h[7];
     for(int i=0;i<16;i++) w[i]=((uint32_t)data[i*4]<<24)|((uint32_t)data[i*4+1]<<16)|((uint32_t)data[i*4+2]<<8)|(uint32_t)data[i*4+3];
     for(int i=16;i<64;i++) w[i]=_SSIG1(w[i-2])+w[i-7]+_SSIG0(w[i-15])+w[i-16];
     for(int i=0;i<64;i++){uint32_t t1=h0+_BSIG1(e)+_CH(e,f,g)+_sha256_k[i]+w[i],t2=_BSIG0(a)+_MAJ(a,b,c2);h0=g;g=f;f=e;e=d+t1;d=c2;c2=b;b=a;a=t1+t2;}
@@ -237,7 +238,8 @@ static inline void _sha512_init(_sha512_ctx *c) {
 }
 
 static void _sha512_transform(uint64_t *h, const uint8_t *data) {
-    uint64_t w[80],a=h[0],b=h[1],c2=h[2],d=h[3],e=h[4],f=h[5],g=h[6],h0=h[7];
+    static uint64_t w[80];
+    uint64_t a=h[0],b=h[1],c2=h[2],d=h[3],e=h[4],f=h[5],g=h[6],h0=h[7];
     for(int i=0;i<16;i++) w[i]=((uint64_t)data[i*8]<<56)|((uint64_t)data[i*8+1]<<48)|((uint64_t)data[i*8+2]<<40)|((uint64_t)data[i*8+3]<<32)|((uint64_t)data[i*8+4]<<24)|((uint64_t)data[i*8+5]<<16)|((uint64_t)data[i*8+6]<<8)|(uint64_t)data[i*8+7];
     for(int i=16;i<80;i++) w[i]=_SSIG1_64(w[i-2])+w[i-7]+_SSIG0_64(w[i-15])+w[i-16];
     for(int i=0;i<80;i++){uint64_t t1=h0+_BSIG1_64(e)+_CH(e,f,g)+_sha512_k[i]+w[i],t2=_BSIG0_64(a)+_MAJ(a,b,c2);h0=g;g=f;f=e;e=d+t1;d=c2;c2=b;b=a;a=t1+t2;}

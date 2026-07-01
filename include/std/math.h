@@ -31,24 +31,23 @@ static t_string tphp_fn_base_convert(t_string num, t_int from, t_int to) {
     static const char dc[]="0123456789abcdefghijklmnopqrstuvwxyz";
     const char *p=STR_PTR(num);int nlen=num.length;
     if(nlen<=0)return tphp_rt_str_dup(STR_LIT("0"));
-    // 转十进制大整数 (char数组存储)
-    char dec[256]={0};int dpos=0,neg=0,start=0;
+    // 转十进制大整数 (静态区存储, 免栈溢出)
+    static char dec[128]={0};
+    {int k=0;while(k<128)dec[k++]=0;} // 清零
+    int dpos=0,neg=0,start=0;
     if(p[0]=='-'){neg=1;start=1;}
     for(int i=start;i<nlen;i++){
         int v=-1;char c=p[i]|32;
         if(c>='0'&&c<='9')v=c-'0';else if(c>='a'&&c<='z')v=c-'a'+10;
         if(v<0||v>=(int)from)return tphp_rt_str_dup(STR_LIT(""));
         int carry=v;
-        for(int j=0;j<=dpos;j++){carry+=dec[j]*(int)from;dec[j]=(char)(carry%10);carry/=10;}
+        int lastJ=0;
+        for(int j=0;j<=dpos;j++){carry+=dec[j]*(int)from;dec[j]=(char)(carry%10);carry/=10;lastJ=j;}
+        dpos=lastJ+1;
         while(carry>0){dec[dpos++]=(char)(carry%10);carry/=10;}
-        // 修正 dpos：扫描最高非零位 (carry=0时不改变dpos但数据已更新)
-        if(carry==0&&dpos==0&&dec[0]!=0)dpos=1;
     }
-    // 修正 dpos 为实际最高非零位+1
-    int realDpos=0;for(int k=0;k<256;k++){if(dec[k]!=0)realDpos=k+1;}
-    dpos=realDpos>0?realDpos:1;
     // 十进制 → 目标进制
-    char out[256];int opos=0;
+    static char out[128];int opos=0;
     while(1){int rem=0,allZero=1;
         for(int i=dpos-1;i>=0;i--){int cur=rem*10+dec[i];dec[i]=(char)(cur/(int)to);rem=cur%(int)to;if(dec[i])allZero=0;}
         out[opos++]=dc[rem];while(dpos>1&&dec[dpos-1]==0)dpos--;
