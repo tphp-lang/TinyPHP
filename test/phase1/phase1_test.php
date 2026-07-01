@@ -24,8 +24,8 @@
 #debug string(0) ""
 #debug
 #debug ===== base64 roundtrip =====
-#debug string(2) "ok"
-#debug string(2) "ok"
+#debug ok
+#debug ok
 #debug
 #debug === phase1 tests done ===
 

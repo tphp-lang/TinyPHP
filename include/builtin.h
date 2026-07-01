@@ -15,6 +15,7 @@
 #include "std/type.h"
 #include "std/string.h"
 #include "std/html.h"
+#include "std/array_core.h"
 #include "std/array_extra.h"
 #include "std/math.h"
 #include "std/utf8.h"

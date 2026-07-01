@@ -1989,8 +1989,8 @@ class CodeGenerator implements ASTVisitor
         }
 
         // Phase 2 array functions — map to tphp_fn_arr_* convention
-        if ($node->callee === null && in_array($node->name, ['array_chunk','array_combine','array_count_values','array_rand'], true)) {
-            $fnMap = ['array_chunk'=>'tphp_fn_arr_chunk','array_combine'=>'tphp_fn_arr_combine','array_count_values'=>'tphp_fn_arr_count_values','array_rand'=>'tphp_fn_arr_rand'];
+        if ($node->callee === null && in_array($node->name, ['array_chunk','array_combine','array_count_values'], true)) {
+            $fnMap = ['array_chunk'=>'tphp_fn_arr_chunk','array_combine'=>'tphp_fn_arr_combine','array_count_values'=>'tphp_fn_arr_count_values'];
             $args = array_map(fn($a) => $a->accept($this), $node->args);
             return $fnMap[$node->name] . '(' . implode(', ', $args) . ')';
         }

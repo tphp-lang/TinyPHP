@@ -98,16 +98,4 @@ static t_array* tphp_fn_arr_count_values(t_array *a) {
     return r;
 }
 
-// ── array_rand ──────────────────────────────────────────────
-static t_var tphp_fn_arr_rand(t_array *a, t_int n) {
-    if(!a||a->length<1||n<1)return VAR_NULL();
-    if(n==1){unsigned char rb[4];_tphp_random_bytes(rb,4);int i=(int)((((unsigned)rb[0]|((unsigned)rb[1]<<8))%(unsigned)a->length));return a->entries[i].key;}
-    if(n>(t_int)a->length)n=(t_int)a->length;
-    t_array *r=tphp_fn_arr_create((int)n);if(!r)return VAR_NULL();tphp_rt_register((void*)r,1);
-    int *ix=(int*)calloc((size_t)a->length,sizeof(int));if(!ix)return VAR_NULL();
-    for(int i=0;i<a->length;i++)ix[i]=i;
-    unsigned char rb[4];
-    for(int i=a->length-1;i>0;i--){_tphp_random_bytes(rb,4);int j=(int)(((unsigned)rb[0]|((unsigned)rb[1]<<8))%(unsigned)(i+1));int t=ix[i];ix[i]=ix[j];ix[j]=t;}
-    for(int i=0;i<(int)n;i++)r=tphp_fn_arr_push(r,a->entries[ix[i]].key);
-    free(ix);return VAR_ARRAY(r);
-}
+// array_rand: 已在 array.h 中定义 (tphp_fn_array_rand, 返回 t_int)
