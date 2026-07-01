@@ -56,8 +56,9 @@ else
 fi
 
 echo "=== 3. 编译 & 安装 ==="
-# bcheck.c uses __malloc_hook — removed in glibc 2.34+
-sed -i 's/__malloc_hook/malloc/g' lib/bcheck.c 2>/dev/null || true
+# bcheck.c uses __malloc_hook/__free_hook — both removed in glibc 2.34+
+# glibc 不提供这些 API 了, bcheck 功能无法工作, 直接跳过
+echo '// patched: glibc 2.34+ removed __malloc_hook/__free_hook' > lib/bcheck.c
 make
 make install
 
