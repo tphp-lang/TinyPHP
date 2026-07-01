@@ -70,6 +70,8 @@ void __bound_local_new(void *p) {}
 void __bound_local_delete(void *p) {}
 void __bound_sigjb(int sig, void *jb) {}
 BCHECK_STUBS
+# TCC mob branch ELF symbol limit too low (65535) for 230+ inline funcs → double it
+sed -i 's/#define ELF_MAX_SYM_INDEX 65535/#define ELF_MAX_SYM_INDEX 131070/' tccelf.c 2>/dev/null || true
 make
 make install
 
