@@ -34,8 +34,8 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri $env:TCC_URL -OutFile tcc.zip
-          Expand-Archive -Path tcc.zip -DestinationPath tcc
-          .\tcc\win32\tcc.exe -v
+          Expand-Archive -Path tcc.zip -DestinationPath .
+          .\tcc\tcc.exe -v
 
       - name: Download PHP
         shell: pwsh
@@ -96,7 +96,7 @@ jobs:
       - name: Add TCC
         run: |
           curl -fsSL -o tcc.zip "$TCC_URL"
-          unzip -q tcc.zip -d tcc
+          unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
 
@@ -168,7 +168,7 @@ jobs:
       - name: Add TCC
         run: |
           curl -fsSL -o tcc.zip "$TCC_URL"
-          unzip -q tcc.zip -d tcc
+          unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
 
@@ -229,7 +229,7 @@ jobs:
       - name: Add TCC
         run: |
           curl -fsSL -o tcc.zip "$TCC_URL"
-          unzip -q tcc.zip -d tcc
+          unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
 
