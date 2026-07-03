@@ -288,21 +288,6 @@ jobs:
           chmod +x tphp
           ls -la tphp
 
-      - name: Code Sign (macOS)
-        run: |
-          SIGN_ID="${{ secrets.MACOS_SIGNING_IDENTITY || '' }}"
-          if [ -n "$SIGN_ID" ]; then
-            echo "[*] Signing with Developer ID: $SIGN_ID"
-            codesign --sign "$SIGN_ID" \
-              --force --options runtime --timestamp --deep ./tphp
-          else
-            echo "[*] Ad-hoc signing (set MACOS_SIGNING_IDENTITY secret for Developer ID)"
-            codesign --sign - --force ./tphp
-          fi
-          echo "  Signature info:"
-          codesign -dvvv ./tphp 2>&1 || true
-          xattr -d com.apple.quarantine ./tphp 2>/dev/null || true
-
       - name: Test
         run: |
           ./tphp test/main/min.php
