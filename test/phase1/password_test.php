@@ -6,7 +6,7 @@
 #debug
 #debug -- hash --
 #debug int(60)
-#debug string(60) "~"
+#debug ~ string(60) "$2b$10$..."
 #debug
 #debug -- verify --
 #debug bool(true)
