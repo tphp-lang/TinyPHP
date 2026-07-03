@@ -14,3 +14,4 @@ tcc
 tcc-src/
 *.phar
 php
+*.txt

@@ -38,9 +38,9 @@
 #debug
 #debug -- Switch tests --
 #debug [4a] int switch:
-#debug   two
+#debug  two
 #debug [4b] string switch:
-#debug   green
+#debug  green
 #debug
 #debug -- Combined: for + foreach --
 #debug [5] for with foreach inside:
