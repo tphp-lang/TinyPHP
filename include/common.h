@@ -18,8 +18,10 @@
 #include "hash.h"
 #include "object/exception.h"
 #include "object/try.h"
+#include "object/resource.h"     // Resource 基类（资源对象化根）
 #include "os/times.h"
 #include "os/json.h"
 #include "os/file.h"
+#include "os/file_obj.h"         // File 类（Resource 子类，替代 fopen resource）
 #include "os/password.h"        // password_hash / password_verify
 #include "phpc.h"
