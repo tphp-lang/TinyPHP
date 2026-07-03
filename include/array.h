@@ -7,6 +7,11 @@
 //   • 键: int | string，值: 任意 t_var
 //   • 引用计数 + 嵌套数组自动 retain/free
 //   • 数组对象池：空闲数组回收复用，减少 malloc/free 抖动
+//
+//   优化路径 (klib):
+//     tphp_hash.h → O(1) string-key 查找 (khash)
+//     ksort.h     → 整数基数排序 (radix sort)
+//     kvec.h      → 泛型 vector (内部数据管理)
 // ============================================================
 
 #include <stdlib.h>

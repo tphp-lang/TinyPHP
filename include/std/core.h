@@ -1152,13 +1152,7 @@ static inline t_bool tphp_fn_ctype_xdigit(t_string s) { _TPHP_CTYPE_CHECK(isxdig
 // random_int / random_bytes — CSPRNG 安全随机（委托 rand.h）
 // ============================================================
 
-// 前向声明（定义在 rand.h）
-static inline int _tphp_random_bytes(unsigned char* buf, size_t n);
-
-static inline t_int tphp_fn_random_int(t_int min, t_int max) {
-    if (min > max) { tphp_fn_error(STR_LIT("random_int(): min must be <= max"), "<php>", 0); return 0; }
-    return tphp_fn_rand_int(min, max);
-}
+// tphp_fn_random_int 定义在 rand.h (CSPRNG 驱动)
 
 static inline t_string tphp_fn_random_bytes(t_int length) {
     if (length <= 0) return (t_string){NULL, 0};
