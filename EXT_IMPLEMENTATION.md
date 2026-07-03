@@ -9,7 +9,7 @@
 
 | # | 扩展 | 复杂度 | 依赖 | 函数数 |
 |---|------|--------|------|--------|
-| 1 | [bcrypt / password](#1-bcrypt--password) | ⭐⭐ | 无 | 2 |
+| 1 | [bcrypt / password](#1-bcrypt--password) | ⭐⭐ ✅ 已实现 | 无 | 2 |
 | 2 | [filter_var](#2-filter_var) | ⭐⭐ | 无 | 2 |
 | 3 | [calendar](#3-calendar) | ⭐⭐⭐ | 无 | 18 |
 | 4 | [zlib (gzip)](#4-zlib-gzip) | ⭐⭐⭐ | zlib | 6 |
@@ -27,7 +27,12 @@
 
 ---
 
-## 1. bcrypt / password
+## 1. bcrypt / password　✅ 已实现
+
+> **状态**: 已完成。实现文件: `include/os/password.h`（大约 350 行）。基于 PHP 原生 `crypt_blowfish.c` 的 EksBlowfish 算法。  
+> 测试: `test/phase1/password_test.php`  
+> 函数: `password_hash()`, `password_verify()`  
+> 常量: `PASSWORD_BCRYPT` (1), `PASSWORD_BCRYPT_DEFAULT_COST` (10)
 
 ### 推荐参考库
 
@@ -2431,7 +2436,7 @@ void tphp_fn_imagejpeg(gdImagePtr im, t_string path, t_int quality) {
 
 | # | 扩展 | 行数 | 难度 | 依赖 | 函数数 | 典型耗时 |
 |---|------|------|------|------|--------|---------|
-| 1 | bcrypt | ~800 | ⭐⭐ | 无 | 2-4 | 1-2 天 |
+| 1 | bcrypt | ~350 | ⭐⭐ ✅ 已完成 | 无 | 2 | ✅ 已完成 |
 | 2 | filter_var | ~400 | ⭐⭐ | 无 | 4 | 1 天 |
 | 3 | calendar | ~1000 | ⭐⭐⭐ | 无 | 18 | 2-3 天 |
 | 4 | zlib | ~200 | ⭐⭐⭐ | zlib | 6 | 半天 |

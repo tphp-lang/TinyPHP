@@ -1,14 +1,5 @@
 #pragma once
-// ============================================================
-// rand.h — TinyPHP 随机数（线程安全，CSPRNG 驱动，零全局状态）
-//   rand / mt_rand / rand_int / _tphp_random_bytes 统一定义在此
-//   builtin.h 的 random_int/random_bytes 依赖此文件
-//
-//   跨平台 / 跨编译器:
-//     Windows MSVC/TCC/MinGW-GCC → rand_s (CRT 安全随机)
-//     Windows Clang               → rand() fallback (Clang 不声明 rand_s)
-//     Linux/macOS                 → /dev/urandom
-// ============================================================
+// rand.h — TinyPHP 随机数 (CSPRNG)
 
 #include <stdlib.h>
 #include <stdint.h>

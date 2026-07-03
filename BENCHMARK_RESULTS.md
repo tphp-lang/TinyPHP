@@ -180,10 +180,11 @@ json_write_to(v, buf);                // 第2趟: 直接 memcpy 写入
 | 数学 (含三角函数) | 30 | ✅ |
 | JSON (含 validate) | 3 | ✅ |
 | 哈希 (MD5/SHA1/SHA256/SHA512/CRC32) | 5 | ✅ |
+| password (bcrypt) | 2 | ✅ |
 | mbstring (UTF-8) | 3 | ✅ |
 | 进制转换 (含 base_convert) | 8 | ✅ |
 | 其他 (echo/var_dump/type/ctype/random/date 等) | 87+ | ✅ |
-| **合计** | **230+** | ✅ |
+| **合计** | **232+** | ✅ |
 
 ### include/ 重构
 
@@ -199,4 +200,14 @@ include/std/
 ├── math.h       — abs, round, trig, exp, log, base_convert
 ├── utf8.h       — mb_strlen, mb_substr, mb_strpos
 └── ctrl.h       — assert, random, ctype
+```
+
+### include/os/ 系统层
+
+```
+include/os/
+├── times.h      — time, date, sleep, hrtime, microtime, strtotime, mktime
+├── json.h       — json_encode, json_decode, json_validate
+├── file.h       — file_get_contents, file_put_contents
+└── password.h   — password_hash, password_verify (EksBlowfish bcrypt)
 ```

@@ -23,9 +23,10 @@
 | `ext/mbstring` (UTF-8) | `std/utf8.h` | 3 |
 | `ext/pcntl` | `ext/pcntl/` | 7 |
 | `ext/posix` | `ext/posix/` | 14 |
+| `ext/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 | `object/` | 14 |
 | C 互操作 (PHPC) | `phpc.h` | 24 |
-| **合计** | | **230+** |
+| **合计** | | **232+** |
 
 ---
 
@@ -297,6 +298,27 @@
 
 ---
 
+## ext/password — 密码哈希
+
+> 文件: `os/password.h`
+
+基于 bcrypt 算法的 `password_hash` / `password_verify` 实现，参考 PHP 原生 `crypt_blowfish.c`（EksBlowfish 算法）。纯 C 静态实现，零外部依赖，兼容 AOT 编译。
+
+| 函数 | C 实现 | 说明 |
+|------|--------|------|
+| `password_hash($pw, PASSWORD_BCRYPT)` | `BF_crypt()` → 60 字符 `$2b$10$...` | cost=10，CSPRNG 盐值 |
+| `password_verify($pw, $hash)` | `BF_crypt()` + 常量时间比较 | 防时序攻击 |
+
+**实现细节**：
+- 算法：EksBlowfish（bcrypt），与 PHP 原生 `password_hash` 完全兼容
+- 盐值：优先使用 CSPRNG（`_tphp_random_bytes`），回退到基于时间的伪随机
+- 常量：`PASSWORD_BCRYPT = 1`，`PASSWORD_BCRYPT_DEFAULT_COST = 10`
+- 输出格式：`$2b$10$<22-char-base64-salt><31-char-base64-hash>`，共 60 字符
+- 安全：`password_verify` 使用常量时间比较，防止时序攻击
+- bcrypt 前缀支持：`$2a$`、`$2b$`、`$2x$`、`$2y$`（兼容所有 PHP bcrypt 变体）
+
+---
+
 ## ext/ctype — 字符检测
 
 > 文件: `std/ctrl.h`
@@ -509,7 +531,6 @@
 | `usort / uasort / uksort` | 需闭包回调 |
 | `array_filter / array_map / array_reduce` | 需闭包回调 |
 | `filter_var` 完整版 | ~600行，延后 |
-| `password_hash` bcrypt | ~800行，延后 |
 | `calendar` 全套 | ~1000行 sdncal，延后 |
 
 ---

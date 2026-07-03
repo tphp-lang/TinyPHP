@@ -21,4 +21,5 @@
 #include "os/times.h"
 #include "os/json.h"
 #include "os/file.h"
+#include "os/password.h"        // password_hash / password_verify
 #include "phpc.h"

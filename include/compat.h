@@ -1,11 +1,11 @@
 #pragma once
-// ============================================================
 // compat.h — 编译器兼容层
-// 确保所有编译器 (TCC/GCC/Clang) 都能正确编译
-// ============================================================
 
 #ifndef _USE_MATH_DEFINES
 #define _USE_MATH_DEFINES
+#endif
+#ifndef _CRT_RAND_S
+#define _CRT_RAND_S  // 启用 rand_s() (Windows CRT)
 #endif
 
 #include <stdlib.h>

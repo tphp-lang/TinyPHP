@@ -40,7 +40,8 @@ include/                         C 运行时头文件（全 static inline）
   └── os/
       ├── times.h                时间（time/date/sleep/hrtime/microtime/strtotime/mktime）
       ├── json.h                 JSON 编解码（位图转义 + 批量安全字符写入）
-      └── file.h                 文件 I/O（file_get/put_contents）
+      ├── file.h                 文件 I/O（file_get/put_contents）
+      └── password.h             bcrypt 密码哈希（password_hash/password_verify，EksBlowfish）
 ```
 
 > TCC 不在仓库中——通过 `build.sh`/`build.cmd` 从 `https://repo.or.cz/tinycc.git` (mob 分支) clone 并编译。
@@ -174,7 +175,7 @@ ExprNode（抽象，含 line/column）
 | `conv.h` | `tphp_fn_` | 进制转换 |
 | `hash.h` | `tphp_fn_` | MD5/SHA1/CRC32 |
 | `rand.h` | `tphp_fn_` | CSPRNG 随机数 (Win→rand_s, Unix→/dev/urandom) |
-| `os/*.h` | `tphp_fn_` | 系统函数（时间/JSON/文件/进程/POSIX） |
+| `os/*.h` | `tphp_fn_` | 系统函数（时间/JSON/文件/password/进程/POSIX） |
 
 ### 3.2 内存管理层次
 
@@ -486,6 +487,7 @@ class Main {
 | `include/object/try.h` | ~92 | setjmp/longjmp 异常 |
 | `include/os/json.h` | ~385 | JSON 编解码（位图转义+批量安全字符写入） |
 | `include/os/times.h` | ~215 | 时间函数 |
+| `include/os/password.h` | ~350 | bcrypt 密码哈希（EksBlowfish） |
 | `include/hash.h` | ~134 | MD5/SHA1/CRC32 |
 | `include/conv.h` | ~125 | 进制转换 |
 | `include/tphp_math.h` | ~55 | 扩展数学 |
