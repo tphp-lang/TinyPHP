@@ -48,7 +48,7 @@ class Main
 | `void` | `void` | 仅返回类型 |
 | `never` | `void` | 永不返回（exit/throw） |
 | `mixed` | `t_var` | 标签联合体，有运行时开销 |
-| 类类型 | `tphp_class_X*` | COS 对象指针 |
+| 类类型 | `tphp_class_X*` 或 `tphp_na_Ns_tphp_class_X*` | COS 对象指针（命名空间类带 `tphp_na_` 前缀） |
 
 > ⚠️ **`===` 和 `==` 等价**：类型固定意味着编译期已知类型，"同时类型不同"的情况不存在。
 

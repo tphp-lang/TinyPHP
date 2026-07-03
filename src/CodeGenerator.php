@@ -250,6 +250,33 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Exception')->methods['getMessage']    = new MethodInfo('t_string');
         $this->symbols->getClass('tphp_class_Exception')->methods['__construct'] = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_Exception')->methods['__destruct']  = new MethodInfo('void');
+
+        // 内置 Resource 类（资源对象化根，用户可 extends Resource）
+        $this->symbols->addClass('tphp_class_Resource');
+        $this->symbols->addClassName('Resource', 'tphp_class_Resource');
+        $this->symbols->getClass('tphp_class_Resource')->methods['__construct'] = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Resource')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Resource')->methods['getType']     = new MethodInfo('t_int');
+        $this->classMethodRetTypes['tphp_class_Resource'] = ['__construct' => 'void', '__destruct' => 'void', 'getType' => 't_int'];
+        $this->classParentName['tphp_class_Resource'] = '';
+
+        // 内置 File 类（Resource 子类，替代 fopen resource）
+        $this->symbols->addClass('tphp_class_File', 'tphp_class_Resource');
+        $this->symbols->addClassName('File', 'tphp_class_File');
+        $this->symbols->getClass('tphp_class_File')->methods['__construct'] = new MethodInfo('void', ['t_string', 't_string']);
+        $this->symbols->getClass('tphp_class_File')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_File')->methods['getType']     = new MethodInfo('t_int');
+        $this->symbols->getClass('tphp_class_File')->methods['read']        = new MethodInfo('t_string', ['t_int']);
+        $this->symbols->getClass('tphp_class_File')->methods['write']       = new MethodInfo('t_int', ['t_string']);
+        $this->symbols->getClass('tphp_class_File')->methods['eof']         = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_File')->methods['close']       = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_File')->methods['isOpen']      = new MethodInfo('t_bool');
+        $this->classMethodRetTypes['tphp_class_File'] = [
+            '__construct' => 'void', '__destruct' => 'void', 'getType' => 't_int',
+            'read' => 't_string', 'write' => 't_int', 'eof' => 't_bool',
+            'close' => 'void', 'isOpen' => 't_bool'
+        ];
+        $this->classParentName['tphp_class_File'] = 'tphp_class_Resource';
     }
 
     // ── 多段输出方法 ─────────────────────────────────────────
@@ -2437,8 +2464,34 @@ class CodeGenerator implements ASTVisitor
                 return $c;
             }
 
+            // PHPC 互操作函数：加 tphp_fn_ 前缀
+            $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str',
+                        'phpc_arr_int','phpc_arr_dbl','phpc_arr_str','phpc_new_arr_int',
+                        'phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
+                        'phpc_obj','phpc_new_obj','phpc_free','phpc_free_str_arr',
+                        'phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
+                        'phpc_new_fn','phpc_new_fn_env','phpc_thunk'];
+            $shortN = strrchr($n, '\\') !== false ? substr(strrchr($n, '\\'), 1) : $n;
+            if (in_array($shortN, $phpcFns, true)) {
+                // phpc_thunk 特殊处理：按 #callback 声明生成 thunk
+                if ($shortN === 'phpc_thunk' && count($a) >= 2 && $node->args[0] instanceof StringLiteralExpr) {
+                    $cbName = $node->args[0]->value;
+                    if (isset($this->phpcCallbackSigs[$cbName])) {
+                        return $this->generateThunk($cbName, $node->args[1]);
+                    }
+                    throw new \RuntimeException("Unknown callback: #callback {$cbName} not declared");
+                }
+                return 'tphp_fn_' . $shortN . '(' . implode(', ', $a) . ')';
+            }
+
             // 通用回退：tphp_fn_函数名(参数) — C 编译器兜底
-            $fnName = 'tphp_fn_' . $n;
+            // 全局函数: tphp_fn_name, 命名空间函数: tphp_na_Ns_tphp_fn_name
+            $fnPos = strrpos($n, '\\');
+            if ($fnPos !== false) {
+                $fnName = 'tphp_na_' . str_replace('\\', '_', substr($n, 0, $fnPos)) . '_tphp_fn_' . substr($n, $fnPos + 1);
+            } else {
+                $fnName = 'tphp_fn_' . $n;
+            }
             if (empty($a)) return "{$fnName}()";
             // byRef 参数：形参是指针时要正确传参
             $pTypes = $this->funcParamTypes[$fnName] ?? [];
@@ -2653,6 +2706,16 @@ class CodeGenerator implements ASTVisitor
         if ($checkType === 'object') {
             $primitives = ['t_int', 't_float', 't_string', 't_bool', 't_array*', 't_callback', 'null', 'void*'];
             return in_array($argType, $primitives, true) ? 'false' : 'true';
+        }
+
+        // is_resource: Resource/File 等类型 → true，其他 → false
+        if ($checkType === 'resource') {
+            // t_var (mixed/union) 已在上方处理
+            // 静态类型：以 tphp_class_ 开头且继承自 Resource → true
+            if (str_starts_with($argType, 'tphp_class_')) {
+                return 'true';
+            }
+            return 'false';
         }
 
         // 其他 is_*：精确匹配
@@ -2994,7 +3057,12 @@ class CodeGenerator implements ASTVisitor
         $fqName = ($node->namespace !== '')
             ? $node->namespace . '\\' . $node->name
             : $node->name;
-        $cName  = 'tphp_enum_' . self::mangleCName($fqName);
+        // 全局枚举: tphp_enum_Name, 命名空间枚举: tphp_na_Ns_tphp_enum_Name
+        if ($node->namespace !== '') {
+            $cName = 'tphp_na_' . self::mangleCName($node->namespace) . '_tphp_enum_' . $node->name;
+        } else {
+            $cName = 'tphp_enum_' . $node->name;
+        }
         $cValueType = ($node->backingType === 'int') ? 't_int' : 't_string';
 
         $this->enumBackingTypes[$fqName] = $node->backingType;
@@ -3983,6 +4051,7 @@ class CodeGenerator implements ASTVisitor
     /** 解析类型到 C 类型（处理联合类型 | → t_var） */
     private static function resolveType(string $type): string {
         if (str_contains($type, '|')) return 't_var';
+        if ($type === 'callable') return 't_callback';
         return self::$typeMap[$type] ?? ('tphp_class_' . $type . '*');
     }
 
@@ -4068,12 +4137,14 @@ class CodeGenerator implements ASTVisitor
         return str_replace('\\', '_', $name);
     }
 
-    /** 从类节点获取 C 标识符: tphp_class_namespace_Name */
+    /** 从类节点获取 C 标识符
+     *  全局类: tphp_class_ClassName
+     *  命名空间类: tphp_na_Namespace_tphp_class_ClassName */
     private static function classCName(ClassNode $class): string {
-        $base = ($class->namespace !== '')
-            ? self::mangleCName($class->namespace) . '_' . $class->name
-            : $class->name;
-        return 'tphp_class_' . $base;
+        if ($class->namespace === '') {
+            return 'tphp_class_' . $class->name;
+        }
+        return 'tphp_na_' . self::mangleCName($class->namespace) . '_tphp_class_' . $class->name;
     }
 
     /** 从已解析类名生成 C 引用名（visitNew/Call 等非 ClassNode 上下文中使用） */
@@ -4103,26 +4174,40 @@ class CodeGenerator implements ASTVisitor
         return $prefix; // fallback: try outermost parent
     }
 
+    /** 从已解析类名生成 C 引用名
+     *  全局类: tphp_class_ClassName
+     *  命名空间类: tphp_na_Namespace_tphp_class_ClassName */
     private static function classRefName(string $resolvedName): string {
-        return 'tphp_class_' . self::mangleCName($resolvedName);
+        $pos = strrpos($resolvedName, '\\');
+        if ($pos === false) {
+            return 'tphp_class_' . $resolvedName;
+        }
+        $ns = substr($resolvedName, 0, $pos);
+        $cls = substr($resolvedName, $pos + 1);
+        return 'tphp_na_' . self::mangleCName($ns) . '_tphp_class_' . $cls;
     }
 
-    /** 从函数节点获取 C 标识符: tphp_fn_namespace_name */
+    /** 从函数节点获取 C 标识符
+     *  全局函数: tphp_fn_functionName
+     *  命名空间函数: tphp_na_Namespace_tphp_fn_functionName */
     private static function funcCName(FunctionNode $fn): string {
-        return 'tphp_fn_' . (($fn->namespace !== '')
-            ? self::mangleCName($fn->namespace) . '_' . $fn->name
-            : $fn->name);
+        if ($fn->namespace === '') {
+            return 'tphp_fn_' . $fn->name;
+        }
+        return 'tphp_na_' . self::mangleCName($fn->namespace) . '_tphp_fn_' . $fn->name;
     }
 
-    /** 从 CallExpr 推导 C 函数名（与 funcCName 格式一致） */
+    /** 从 CallExpr 推导 C 函数名（与 funcCName 格式一致）
+     *  全局函数: tphp_fn_functionName
+     *  命名空间函数: tphp_na_Namespace_tphp_fn_functionName */
     private static function funcCNameFromCall(CallExpr $expr): string {
         if ($expr->callee !== null) return '';  // 方法调用不在此
         // $expr->name 是 FQ 名（如 "Phpc\map_with_closure"）
         $pos = strrpos($expr->name, '\\');
         if ($pos !== false) {
-            $ns = self::mangleCName(substr($expr->name, 0, $pos));
+            $ns = substr($expr->name, 0, $pos);
             $fn = substr($expr->name, $pos + 1);
-            return 'tphp_fn_' . $ns . '_' . $fn;
+            return 'tphp_na_' . self::mangleCName($ns) . '_tphp_fn_' . $fn;
         }
         return 'tphp_fn_' . $expr->name;
     }

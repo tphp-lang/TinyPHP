@@ -143,10 +143,12 @@ ExprNode（抽象，含 line/column）
 | PHP | C | 前缀 |
 |-----|---|------|
 | `class Main` | `tphp_class_Main` | `tphp_class_` |
-| `namespace Demo; class Demo` | `tphp_class_Demo_Demo` | `tphp_class_` |
+| `namespace Demo; class MyClass` | `tphp_na_Demo_tphp_class_MyClass` | `tphp_na_` + `tphp_class_` |
 | `new Demo()` | `new_tphp_class_Demo()` | `new_` |
 | `function foo()` | `tphp_fn_foo` | `tphp_fn_` |
+| `namespace Demo; function bar()` | `tphp_na_Demo_tphp_fn_bar` | `tphp_na_` + `tphp_fn_` |
 | `enum Color: string` | `tphp_enum_Color` | `tphp_enum_` |
+| `namespace Demo; enum Status` | `tphp_na_Demo_tphp_enum_Status` | `tphp_na_` + `tphp_enum_` |
 | `Color::RED` | `&_e_Color_RED` | `_e_` |
 | `$a . $b` | `tphp_rt_str_concat(a, b)` | `tphp_rt_` |
 | `const APP_NAME` | `#define TPHP_CONST_APP_NAME` | `TPHP_CONST_` |
@@ -442,17 +444,20 @@ class Main {
 
 | 前缀 | 用途 |
 |------|------|
-| `tphp_fn_` | **所有公开内置函数强制前缀** |
+| `tphp_fn_` | **全局公开内置函数** |
 | `tphp_fn_arr_` | 数组操作函数 |
-| `tphp_class_` | 用户类 |
-| `tphp_enum_` | 枚举 struct |
+| `tphp_class_` | 全局用户类 |
+| `tphp_enum_` | 全局枚举 struct |
+| `tphp_na_` | **命名空间前缀**（后接 `tphp_fn_`/`tphp_class_`/`tphp_enum_`） |
 | `_e_` | 枚举 static 实例 |
 | `tphp_rt_` | 运行时内部 |
 | `tp_` | 对象系统 |
 | `TPHP_CONST_` | 常量宏 |
-| `phpc_` / `c_` / `php_` | C 互操作 |
+| `phpc_` / `c_` / `php_` | C 互操作（带 `tphp_fn_` 前缀） |
 | `_arr_` / `_tmp_` | CodeGen 临时变量 |
 | `str_pool_` / `arr_pool_` / `_obj_pool_` | 池内部 |
+
+命名空间标识符格式：`tphp_na_NamespacePath_tphp_fn/name/enum_ClassOrFunction`
 
 ### TCC 兼容
 

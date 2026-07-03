@@ -5,6 +5,16 @@
 #include <stdio.h>
 #include <stdint.h>
 
+/** unlink — 删除文件 */
+static inline t_bool tphp_fn_unlink(t_string path) {
+    if (STR_PTR(path) == NULL || path.length <= 0) return false;
+    char pbuf[4096];
+    int plen = path.length < (int)sizeof(pbuf) - 1 ? path.length : (int)sizeof(pbuf) - 1;
+    memcpy(pbuf, STR_PTR(path), (size_t)plen);
+    pbuf[plen] = '\0';
+    return remove(pbuf) == 0;
+}
+
 /** file_get_contents — 读入整个文件到 t_string */
 static inline t_string tphp_fn_file_get_contents(const char *path) {
     if (path == NULL || *path == '\0') return (t_string){.data = NULL, .length = 0, .is_local = false};

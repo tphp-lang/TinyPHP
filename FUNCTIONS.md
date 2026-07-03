@@ -24,9 +24,23 @@
 | `ext/pcntl` | `ext/pcntl/` | 7 |
 | `ext/posix` | `ext/posix/` | 14 |
 | `ext/password` (bcrypt) | `os/password.h` | 2 |
-| OOP / 异常 | `object/` | 14 |
+| OOP / 异常 / Resource | `object/` | 14 |
 | C 互操作 (PHPC) | `phpc.h` | 24 |
 | **合计** | | **232+** |
+
+---
+
+## C 标识符命名规范
+
+| 场景 | 格式 | 示例 |
+|------|------|------|
+| 全局类 | `tphp_class_Name` | `tphp_class_Main` |
+| 全局函数 | `tphp_fn_name` | `tphp_fn_hello` |
+| 全局枚举 | `tphp_enum_Name` | `tphp_enum_Color` |
+| 命名空间类 | `tphp_na_Ns_tphp_class_Name` | `tphp_na_Demo_Hello_tphp_class_MyClass` |
+| 命名空间函数 | `tphp_na_Ns_tphp_fn_name` | `tphp_na_Demo_Hello_tphp_fn_greet` |
+| 命名空间枚举 | `tphp_na_Ns_tphp_enum_Name` | `tphp_na_Colors_tphp_enum_Status` |
+| 常量 | `TPHP_CONST_NAME` | `TPHP_CONST_PI` |
 
 ---
 
@@ -54,6 +68,7 @@
 |------|---------|
 | `is_int / is_float / is_string / is_bool` | 编译期静态类型 → 直接字面量 `true`/`false` |
 | `is_array / is_null / is_object / is_callable` | 同上 |
+| `is_resource($v)` | 编译期检查 `tphp_class_` 类型 → `true`；运行时 `tp_obj_is_a` 检查继承链 |
 | `is_numeric($s)` | null-terminated 副本 + `strtoll`/`strtod` 扫描 |
 | `gettype($v)` | type switch → 字符串常量 (`"int"`/`"float"`...) |
 
@@ -394,6 +409,7 @@
 |------|--------|------|
 | `file_get_contents($path)` | `fopen("rb")` → 测大小 → 单次 `fread` → `fclose` | 不存在返回空 |
 | `file_put_contents($path,$d)` | `fopen("wb")` → `fwrite` → `fclose` | 覆盖写入 |
+| `unlink($path)` | `remove()` | 删除文件，成功返回 `true` |
 
 ---
 
@@ -473,6 +489,22 @@
 | `parent::method()` | `&self->_parent` + 父类函数名 | — |
 | `__CLASS__ / __METHOD__` | 编译期字符串常量 | — |
 | `__destruct` | 作用域结束自动 `tp_obj_release` | 池回收 |
+
+### Resource 类型
+
+> 文件: `object/resource.h`
+
+| 特性 | 实现 | 说明 |
+|------|------|------|
+| `Resource` 基类 | `tphp_class_Resource` | 模拟 PHP `zend_resource`，含 `handle`/`type`/`ptr` 字段 |
+| `File` 子类 | `tphp_class_File extends Resource` | 替代 PHP `fopen()` resource，含 `FILE* fp` |
+| `is_resource($v)` | `tp_obj_is_a` 检查继承链 | 编译期静态类型直接返回 `true`/`false` |
+| `$f->getType()` | 返回资源类型 ID | `RSRC_TYPE_FILE=0` 等 |
+| `$f->isOpen()` | 检查文件是否打开 | `fp != NULL` |
+| `$f->close()` | 幂等关闭 | 重复调用安全 |
+| 资源列表 | LIFO 空闲槽复用池 | O(1) 插入/删除，最多 2048 活跃资源 |
+| RAII 自动释放 | `tp_obj_release` → `__destruct` → `fclose` | 作用域结束自动关闭 |
+| `tphp_rt_free_all_resources()` | 异常路径释放所有资源 | 防内存泄漏 |
 
 ---
 

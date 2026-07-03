@@ -411,6 +411,9 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $fsProjectRoot = $inPhar ? str_replace('\\', '/', $pharDir) : $projectRoot;
         foreach ($allIncludes as $inc) {
             $fileName = is_array($inc) ? $inc['file'] : $inc;
+            $isQuoted = is_array($inc) ? ($inc['quoted'] ?? true) : true;
+            // System headers (#include <math.h>) skip resolution — pass through directly
+            if (!$isQuoted) continue;
             // Security: resolve via realpath, verify within project root (or PHAR fs root)
             $resolvedInclude = null;
             // Absolute path (from __INC__/__EXT__/__CMD__ expansion): resolve directly

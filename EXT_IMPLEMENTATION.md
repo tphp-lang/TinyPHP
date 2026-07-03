@@ -3,6 +3,22 @@
 > 待实现的 15 个扩展。每个列出：全部函数签名 / 常量 / 参数说明 / 返回值 / 推荐参考库 / 实现步骤。
 > 优先级见底部表格，建议按 bcrypt → filter → calendar 顺序逐步实现。
 
+### C 标识符命名规范
+
+| 场景 | 格式 | 示例 |
+|------|------|------|
+| 全局类 | `tphp_class_Name` | `tphp_class_Main` |
+| 全局函数 | `tphp_fn_name` | `tphp_fn_hello` |
+| 命名空间类 | `tphp_na_Ns_tphp_class_Name` | `tphp_na_Demo_tphp_class_MyClass` |
+| 命名空间函数 | `tphp_na_Ns_tphp_fn_name` | `tphp_na_Demo_tphp_fn_greet` |
+| 常量 | `TPHP_CONST_NAME` | `TPHP_CONST_PI` |
+
+### 资源类型设计说明
+
+> TinyPHP 使用**资源对象化**替代 PHP 的弱类型 resource。
+> 函数签名中的 `resource` 类型对应具体的对象类（如 `File`、`Socket`、`Db`），
+> 而非 PHP 的运行期类型擦除句柄。详见 `object/resource.h`。
+
 ---
 
 ## 目录

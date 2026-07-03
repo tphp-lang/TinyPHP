@@ -2,10 +2,10 @@
 // ============================================================
 // phpc.h — PHP ↔ C 互操作（原名 p2c，已统一命名为 phpc）
 //
-//   基础类型：c_int / c_float / c_str / php_int / php_float / php_str
-//   数组：    phpc_arr_*   — 严格 C 风格，类型不匹配即 error() 退出
-//   对象：    phpc_obj / phpc_new_obj   — PHP 对象 ↔ C 结构体指针
-//   回调：    phpc_fn / phpc_new_fn     — PHP 闭包 ↔ C 函数指针
+//   基础类型：tphp_fn_c_int / tphp_fn_c_float / tphp_fn_c_str / tphp_fn_php_int / tphp_fn_php_float / tphp_fn_php_str
+//   数组：    tphp_fn_phpc_arr_*   — 严格 C 风格，类型不匹配即 error() 退出
+//   对象：    tphp_fn_phpc_obj / tphp_fn_phpc_new_obj   — PHP 对象 ↔ C 结构体指针
+//   回调：    tphp_fn_phpc_fn / tphp_fn_phpc_new_fn     — PHP 闭包 ↔ C 函数指针
 // ============================================================
 
 #include <stdint.h>
@@ -13,15 +13,15 @@
 
 // ── 1. 基础类型：PHP → C ──────────────────────────────────
 
-static inline int32_t  c_int(t_int v)     { return (int32_t)v; }
-static inline double   c_float(t_float v) { return (double)v; }
-static inline const char* c_str(t_string v) { return STR_PTR(v); }
+static inline int32_t  tphp_fn_c_int(t_int v)     { return (int32_t)v; }
+static inline double   tphp_fn_c_float(t_float v) { return (double)v; }
+static inline const char* tphp_fn_c_str(t_string v) { return STR_PTR(v); }
 
 // ── 2. 基础类型：C → PHP ──────────────────────────────────
 
-static inline t_int   php_int(int32_t v)   { return (t_int)v; }
-static inline t_float php_float(double v)  { return (t_float)v; }
-static inline t_string php_str(const char* s) {
+static inline t_int   tphp_fn_php_int(int32_t v)   { return (t_int)v; }
+static inline t_float tphp_fn_php_float(double v)  { return (t_float)v; }
+static inline t_string tphp_fn_php_str(const char* s) {
     return s ? tphp_rt_str_dup((t_string){(char*)s, (int)strlen(s)}) : (t_string){.data = NULL, .length = 0, .is_local = false};
 }
 
@@ -30,7 +30,7 @@ static inline t_string php_str(const char* s) {
 //   调用方负责 free()
 
 // 提取为 int32_t 数组 — 所有元素必须为 TYPE_INT
-static inline int32_t* phpc_arr_int(t_array* a) {
+static inline int32_t* tphp_fn_phpc_arr_int(t_array* a) {
     if (!a || a->length == 0) return NULL;
     int32_t* out = (int32_t*)malloc((size_t)a->length * sizeof(int32_t));
     if (!out) return NULL;
@@ -47,7 +47,7 @@ static inline int32_t* phpc_arr_int(t_array* a) {
 }
 
 // 提取为 double 数组 — 元素必须为 TYPE_INT 或 TYPE_FLOAT
-static inline double* phpc_arr_dbl(t_array* a) {
+static inline double* tphp_fn_phpc_arr_dbl(t_array* a) {
     if (!a || a->length == 0) return NULL;
     double* out = (double*)malloc((size_t)a->length * sizeof(double));
     if (!out) return NULL;
@@ -67,7 +67,7 @@ static inline double* phpc_arr_dbl(t_array* a) {
 }
 
 // 提取为 C 字符串数组 — 所有元素必须为 TYPE_STRING
-static inline char** phpc_arr_str(t_array* a) {
+static inline char** tphp_fn_phpc_arr_str(t_array* a) {
     if (!a || a->length == 0) return NULL;
     char** out = (char**)malloc((size_t)a->length * sizeof(char*));
     if (!out) return NULL;
@@ -91,7 +91,7 @@ static inline char** phpc_arr_str(t_array* a) {
 
 // ── 4. 数组：C → PHP（深拷贝数据）────────────────────────
 
-static inline t_array* phpc_new_arr_int(const int32_t* src, int len) {
+static inline t_array* tphp_fn_phpc_new_arr_int(const int32_t* src, int len) {
     t_array* a = tphp_fn_arr_create(len > 0 ? len : 4);
     if (!a || !src) return a;
     for (int i = 0; i < len; i++) {
@@ -100,7 +100,7 @@ static inline t_array* phpc_new_arr_int(const int32_t* src, int len) {
     return a;
 }
 
-static inline t_array* phpc_new_arr_dbl(const double* src, int len) {
+static inline t_array* tphp_fn_phpc_new_arr_dbl(const double* src, int len) {
     t_array* a = tphp_fn_arr_create(len > 0 ? len : 4);
     if (!a || !src) return a;
     for (int i = 0; i < len; i++) {
@@ -109,7 +109,7 @@ static inline t_array* phpc_new_arr_dbl(const double* src, int len) {
     return a;
 }
 
-static inline t_array* phpc_new_arr_str(const char* const* src, int len) {
+static inline t_array* tphp_fn_phpc_new_arr_str(const char* const* src, int len) {
     t_array* a = tphp_fn_arr_create(len > 0 ? len : 4);
     if (!a || !src) return a;
     for (int i = 0; i < len; i++) {
@@ -119,7 +119,7 @@ static inline t_array* phpc_new_arr_str(const char* const* src, int len) {
     return a;
 }
 
-static inline t_array* phpc_new_arr(void) {
+static inline t_array* tphp_fn_phpc_new_arr(void) {
     return tphp_fn_arr_create(4);
 }
 
@@ -127,12 +127,12 @@ static inline t_array* phpc_new_arr(void) {
 //   TinyPHP 对象 = t_object 头部 + 用户字段，结构体指针即对象首地址
 
 // PHP 对象 → 底层 C 结构体指针（类型安全由调用方保证）
-static inline void* phpc_obj(void* obj) {
+static inline void* tphp_fn_phpc_obj(void* obj) {
     return obj;
 }
 
 // C 结构体指针 → PHP 对象（class descriptor 控制析构生命周期）
-static inline void* phpc_new_obj(void* ptr, const t_class* cls) {
+static inline void* tphp_fn_phpc_new_obj(void* ptr, const t_class* cls) {
     if (!ptr || !cls) return NULL;
     t_object* obj = (t_object*)ptr;
     obj->cls      = cls;
@@ -143,13 +143,13 @@ static inline void* phpc_new_obj(void* ptr, const t_class* cls) {
 
 // ── 6. 回调：PHP ↔ C 函数指针 ────────────────────────────
 
-static inline void* phpc_fn(t_callback cb)   { return cb.func; }
-static inline void* phpc_env(t_callback cb)  { return cb.env; }
+static inline void* tphp_fn_phpc_fn(t_callback cb)   { return cb.func; }
+static inline void* tphp_fn_phpc_env(t_callback cb)  { return cb.env; }
 
-static inline t_callback phpc_new_fn(void* func) {
+static inline t_callback tphp_fn_phpc_new_fn(void* func) {
     return (t_callback){ .func = func, .env = NULL };
 }
-static inline t_callback phpc_new_fn_env(void* func, void* env) {
+static inline t_callback tphp_fn_phpc_new_fn_env(void* func, void* env) {
     return (t_callback){ .func = func, .env = env };
 }
 
@@ -161,9 +161,9 @@ typedef int32_t (*phpc_fn_i32_t)(int32_t, void*);
 typedef int64_t (*phpc_fn_i64_t)(int64_t, void*);
 typedef double  (*phpc_fn_f64_t)(double,  void*);
 
-static inline phpc_fn_i32_t phpc_fn_i32(t_callback cb) { return (phpc_fn_i32_t)cb.func; }
-static inline phpc_fn_i64_t phpc_fn_i64(t_callback cb) { return (phpc_fn_i64_t)cb.func; }
-static inline phpc_fn_f64_t phpc_fn_f64(t_callback cb) { return (phpc_fn_f64_t)cb.func; }
+static inline phpc_fn_i32_t tphp_fn_phpc_fn_i32(t_callback cb) { return (phpc_fn_i32_t)cb.func; }
+static inline phpc_fn_i64_t tphp_fn_phpc_fn_i64(t_callback cb) { return (phpc_fn_i64_t)cb.func; }
+static inline phpc_fn_f64_t tphp_fn_phpc_fn_f64(t_callback cb) { return (phpc_fn_f64_t)cb.func; }
 
 // ── 6c. 无 env 回调 thunk ───────────────────────────────
 //   用法：phpc_thunk('cb_name', $fn)  按 #callback 签名生成 thunk
@@ -178,12 +178,12 @@ static inline phpc_fn_f64_t phpc_fn_f64(t_callback cb) { return (phpc_fn_f64_t)c
 // ── 7. 内存释放 ───────────────────────────────────────────
 //   phpc_arr_* 返回的 malloc 指针必须通过以下函数释放
 
-static inline void phpc_free(void* ptr) {
+static inline void tphp_fn_phpc_free(void* ptr) {
     if (ptr) free(ptr);
 }
 
 // 释放 phpc_arr_str 返回的字符串数组（先释放每个字符串，再释放指针数组）
-static inline void phpc_free_str_arr(char** strs, int len) {
+static inline void tphp_fn_phpc_free_str_arr(char** strs, int len) {
     if (!strs) return;
     for (int i = 0; i < len; i++) free(strs[i]);
     free(strs);
