@@ -34,7 +34,7 @@ jobs:
         run: |
           Invoke-WebRequest -Uri $env:TCC_URL -OutFile tcc.zip
           Expand-Archive -Path tcc.zip -DestinationPath .
-          .\tcc\tcc.exe -v
+          .\tcc\win32\tcc.exe -v
 
       - name: Download PHP
         shell: pwsh
