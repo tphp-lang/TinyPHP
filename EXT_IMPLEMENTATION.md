@@ -9,7 +9,6 @@
 
 | # | 扩展 | 复杂度 | 依赖 | 函数数 |
 |---|------|--------|------|--------|
-| 1 | [bcrypt / password](#1-bcrypt--password) | ⭐⭐ ✅ 已实现 | 无 | 2 |
 | 2 | [filter_var](#2-filter_var) | ⭐⭐ | 无 | 2 |
 | 3 | [calendar](#3-calendar) | ⭐⭐⭐ | 无 | 18 |
 | 4 | [zlib (gzip)](#4-zlib-gzip) | ⭐⭐⭐ | zlib | 6 |
@@ -24,91 +23,6 @@
 | 13 | [MySQL](#13-mysql) | ⭐⭐⭐⭐⭐ | libmysqlclient | 16 |
 | 14 | [PDO](#14-pdo) | ⭐⭐⭐⭐⭐ | 每驱动各异 | 10 |
 | 15 | [GD](#15-gd) | ⭐⭐⭐⭐⭐ | libgd+png+jpeg | 20 |
-
----
-
-## 1. bcrypt / password　✅ 已实现
-
-> **状态**: 已完成。实现文件: `include/os/password.h`（大约 350 行）。基于 PHP 原生 `crypt_blowfish.c` 的 EksBlowfish 算法。  
-> 测试: `test/phase1/password_test.php`  
-> 函数: `password_hash()`, `password_verify()`  
-> 常量: `PASSWORD_BCRYPT` (1), `PASSWORD_BCRYPT_DEFAULT_COST` (10)
-
-### 推荐参考库
-
-| 库 | 说明 | 链接 |
-|----|------|------|
-| **PHP 源码 `crypt_blowfish.c`** | 最直接的参考，PHP password_hash 的底层实现 | `ext/standard/crypt_blowfish.c` (PHP 8.5) |
-| **OpenBSD `bcrypt.c`** | 原始实现，Niels Provos 1997 | `src/lib/libc/crypt/bcrypt.c` |
-| **`libbcrypt`** | 独立 C 库，API 简洁 | github.com/trusch/libbcrypt |
-| **`bcrypt.h` (wolfSSL)** | 嵌入式友好的 bcrypt 实现 | github.com/wolfSSL/wolfssl |
-
-### 完整 API
-
-```c
-// ================================================================
-// 常量 — 定义在 include/std/password.h
-// ================================================================
-
-#define PASSWORD_BCRYPT        1    // 使用 CRYPT_BLOWFISH 算法
-#define PASSWORD_BCRYPT_DEFAULT_COST 10  // 默认 cost 值
-
-// ================================================================
-// 函数
-// ================================================================
-
-/**
- * password_hash(string $password, int $algo, array $options = []) → string
- *
- * 创建密码哈希。当前仅支持 PASSWORD_BCRYPT。
- *
- * @param password  明文密码 (t_string), 最大 72 字节 (bcrypt 限制)
- * @param algo      算法常量 (t_int), 仅 PASSWORD_BCRYPT (1)
- * @param options   关联数组 (t_array*), 可选键:
- *                  "cost" → int (4-31, 默认 10) — 迭代轮数 = 2^cost
- * @return          bcrypt 哈希字符串 "$2y$10$...", 60 字符, heap allocated
- *                  失败返回空字符串 (len=0)
- *
- * 输出格式: $2y${cost}${22-char-base64-salt}${31-char-base64-hash}
- *
- * PHP 参考: ext/standard/password.c:147
- */
-t_string tphp_fn_password_hash(t_string password, t_int algo, t_array *options);
-
-/**
- * password_verify(string $password, string $hash) → bool
- *
- * 验证密码是否匹配哈希。使用 timing-safe 比较防时序攻击。
- *
- * @param password  明文密码 (t_string)
- * @param hash      之前由 password_hash() 生成的哈希 (t_string)
- * @return          true 匹配 / false 不匹配
- *
- * PHP 参考: ext/standard/password.c:281
- */
-bool tphp_fn_password_verify(t_string password, t_string hash);
-
-/**
- * password_needs_rehash(string $hash, int $algo, array $options = []) → bool
- *
- * 检查哈希是否需要根据新选项重新生成。
- * (建议实现，非必须)
- *
- * @param hash  现有哈希
- * @param algo  期望算法
- * @param options 期望选项
- * @return      true 需要重新哈希
- */
-bool tphp_fn_password_needs_rehash(t_string hash, t_int algo, t_array *options);
-
-/**
- * password_get_info(string $hash) → array
- *
- * 返回哈希信息: ["algo" => int, "algoName" => string, "options" => array]
- * (可选实现)
- */
-t_array* tphp_fn_password_get_info(t_string hash);
-```
 
 ---
 

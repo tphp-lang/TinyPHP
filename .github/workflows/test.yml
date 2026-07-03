@@ -11,6 +11,7 @@ jobs:
     runs-on: windows-latest
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-win-x86_64.zip
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
@@ -27,11 +28,13 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-clang
             mingw-w64-x86_64-make
-            git
 
-      - name: Build TCC
+      - name: Add TCC
         shell: pwsh
-        run: .\build.cmd
+        run: |
+          Invoke-WebRequest -Uri $env:TCC_URL -OutFile tcc.zip
+          Expand-Archive -Path tcc.zip -DestinationPath tcc
+          .\tcc\win32\tcc.exe -v
 
       - name: Download PHP
         shell: pwsh
@@ -55,6 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-x86_64.zip
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
@@ -64,11 +68,15 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev git
+          sudo apt install -y gcc make libc6-dev
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
-      - name: Build TCC
-        run: bash build.sh
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip -d tcc
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
 
       - name: Download PHP
         run: |
@@ -89,6 +97,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-aarch64-glibc.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-aarch64.zip
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
@@ -98,11 +107,15 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev git
+          sudo apt install -y gcc make libc6-dev
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
-      - name: Build TCC
-        run: bash build.sh
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip -d tcc
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
 
       - name: Download PHP
         run: |
@@ -123,52 +136,19 @@ jobs:
     runs-on: macos-latest
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-macos-aarch64.zip
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build TCC
+      - name: Add TCC
         run: |
-          set -e
-          export LANG=C
-          SDK=$(xcrun --show-sdk-path)
-          for i in 1 2 3; do
-            echo "[*] Clone attempt $i..."
-            git clone --depth 1 --branch mob https://repo.or.cz/tinycc.git tinycc-src 2>/dev/null && break
-            if [ "$i" -lt 3 ]; then sleep 10; fi
-          done
-          test -d tinycc-src || { echo "TCC clone failed"; exit 1; }
-          cd tinycc-src
-          for i in include/*.h; do test -f $i && ln -sf $i $(basename $i); done
-          ./configure \
-            --prefix=../tcc \
-            --bindir=../tcc \
-            --crtprefix="../tcc:/usr/lib" \
-            --libpaths="../tcc:/usr/local/lib:/usr/lib:/lib" \
-            --sysincludepaths="../tcc/include:/usr/local/include:$SDK/usr/include" \
-            --extra-cflags="-I$SDK/usr/include -O3" \
-            --cc=cc \
-            --config-new_macho=yes \
-            --config-codesign=yes \
-            --config-bcheck=yes \
-            --config-backtrace=yes \
-            --enable-static
-          make
-          make install
-          cd ..
-          find tcc -name libtcc1.a -exec cp {} tcc/libtcc1.a \; -quit
-          test -f tcc/libtcc1.a || { echo "ERROR: libtcc1.a not found"; exit 1; }
-          ln -sf /usr/lib/libSystem.B.dylib tcc/libc.dylib 2>/dev/null || true
-          # Copy macOS SDK headers into tcc/include/ for standalone compilation
-          mkdir -p tcc/include
-          cp -rn "$SDK/usr/include/"* tcc/include/ 2>/dev/null || true
-          echo "  SDK headers: $(find tcc/include -type f 2>/dev/null | wc -l) files"
-          echo 'int main(){return 0;}' > _test_tcc.c
-          ./tcc/tcc -o _test_tcc _test_tcc.c
-          rm -f _test_tcc.c _test_tcc
-          rm -f tcc/libc.dylib
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip -d tcc
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
 
       - name: Download PHP
         run: |
