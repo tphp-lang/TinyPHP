@@ -252,6 +252,12 @@ jobs:
           test -f tcc/libtcc1.a || { echo "ERROR: libtcc1.a not found"; exit 1; }
           # Link libc.dylib for Big Sur+ compatibility (build only, not packed into PHAR)
           ln -sf /usr/lib/libSystem.B.dylib tcc/libc.dylib 2>/dev/null || true
+          # Copy macOS SDK headers into tcc/include/ for standalone compilation
+          # (TCC's sysincludepaths hardcodes the CI machine's SDK path;
+          #  bundling the headers ensures they're available on user machines)
+          mkdir -p tcc/include
+          cp -rn "$SDK/usr/include/"* tcc/include/ 2>/dev/null || true
+          echo "  SDK headers: $(find tcc/include -type f 2>/dev/null | wc -l) files"
           # Verify standalone build
           ls -la tcc/tcc tcc/libtcc1.a
           echo 'int main(){return 0;}' > _test_tcc.c
@@ -281,6 +287,21 @@ jobs:
           cat micro.sfx tphp.phar > tphp
           chmod +x tphp
           ls -la tphp
+
+      - name: Code Sign (macOS)
+        run: |
+          SIGN_ID="${{ secrets.MACOS_SIGNING_IDENTITY || '' }}"
+          if [ -n "$SIGN_ID" ]; then
+            echo "[*] Signing with Developer ID: $SIGN_ID"
+            codesign --sign "$SIGN_ID" \
+              --force --options runtime --timestamp --deep ./tphp
+          else
+            echo "[*] Ad-hoc signing (set MACOS_SIGNING_IDENTITY secret for Developer ID)"
+            codesign --sign - --force ./tphp
+          fi
+          echo "  Signature info:"
+          codesign -dvvv ./tphp 2>&1 || true
+          xattr -d com.apple.quarantine ./tphp 2>/dev/null || true
 
       - name: Test
         run: |

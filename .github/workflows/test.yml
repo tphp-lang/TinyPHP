@@ -161,6 +161,10 @@ jobs:
           find tcc -name libtcc1.a -exec cp {} tcc/libtcc1.a \; -quit
           test -f tcc/libtcc1.a || { echo "ERROR: libtcc1.a not found"; exit 1; }
           ln -sf /usr/lib/libSystem.B.dylib tcc/libc.dylib 2>/dev/null || true
+          # Copy macOS SDK headers into tcc/include/ for standalone compilation
+          mkdir -p tcc/include
+          cp -rn "$SDK/usr/include/"* tcc/include/ 2>/dev/null || true
+          echo "  SDK headers: $(find tcc/include -type f 2>/dev/null | wc -l) files"
           echo 'int main(){return 0;}' > _test_tcc.c
           ./tcc/tcc -o _test_tcc _test_tcc.c
           rm -f _test_tcc.c _test_tcc

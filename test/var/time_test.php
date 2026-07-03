@@ -185,7 +185,7 @@ class Main
         var_dump($e3 >= $s3);
 
         // 变量参数
-        $delay = 100000;  // 0.1 秒
+        $delay = 100000; // 0.1 秒
         $s4 = time();
         usleep($delay);
         $e4 = time();
@@ -207,7 +207,7 @@ class Main
 
         // 跨 sleep 后显著变大
         $b1 = hrtime();
-        usleep(10000);  // 10ms
+        usleep(10000); // 10ms
         $a1 = hrtime();
         $diff = $a1 - $b1;
         echo "hrtime across 10ms > 1000000: ";
@@ -245,7 +245,7 @@ class Main
         $iter = 0;
         while ($iter < 2) {
             $iter = $iter + 1;
-            echo "  iter {$iter} at " . date("H:i:s") . "\n";
+            echo " iter {$iter} at " . date("H:i:s") . "\n";
         }
 
         // 错误条件：传入无效时间戳 date 应不崩溃

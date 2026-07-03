@@ -62,14 +62,14 @@ class Main {
         for ($i = 0; $i < 5; $i++) {
             // just counting
         }
-        var_dump($i);  // expected: int(5) — 循环后仍可访问
+        var_dump($i); // expected: int(5) — 循环后仍可访问
 
         // Test 1b: for with float counter
         echo "[1b] for with float counter:\n";
         for ($f = 0.0; $f < 3.0; $f = $f + 1.0) {
             // just counting
         }
-        var_dump($f);  // expected: float(3.0)
+        var_dump($f); // expected: float(3.0)
 
         // Test 1c: nested for loops with different variables
         echo "[1c] nested for loops:\n";
@@ -78,8 +78,8 @@ class Main {
                 // nested loop
             }
         }
-        var_dump($row);  // expected: int(2)
-        var_dump($col);  // expected: int(3)
+        var_dump($row); // expected: int(2)
+        var_dump($col); // expected: int(3)
 
         // Test 1d: for loop with string init (already declared var)
         echo "[1d] for with pre-declared var:\n";
@@ -87,7 +87,7 @@ class Main {
         for ($counter = 1; $counter < 4; $counter = $counter + 1) {
             // reuse declared var
         }
-        var_dump($counter);  // expected: int(4)
+        var_dump($counter); // expected: int(4)
 
         // Test 1e: for loop used for array iteration
         echo "[1e] for loop array iteration:\n";
@@ -96,8 +96,8 @@ class Main {
         for ($idx = 0; $idx < count($arr); $idx = $idx + 1) {
             $sum = $sum + $arr[$idx];
         }
-        var_dump($sum);    // expected: int(60)
-        var_dump($idx);    // expected: int(3)
+        var_dump($sum); // expected: int(60)
+        var_dump($idx); // expected: int(3)
 
         // ═══════════════════════════════════════════
         // Fix 2: foreach string key support
@@ -109,26 +109,26 @@ class Main {
         $map = ["name" => "Alice", "city" => "Beijing"];
         foreach ($map as $k => $v) {
             if ($k == "name") {
-                var_dump($v);  // expected: string("Alice")
+                var_dump($v); // expected: string("Alice")
             }
             if ($k == "city") {
-                var_dump($v);  // expected: string("Beijing")
+                var_dump($v); // expected: string("Beijing")
             }
         }
 
         // Test 2b: foreach nested array with string keys
         echo "[2b] foreach nested str keys:\n";
         $catalog = [
-            "a" => [1, 2],
-            "b" => [3, 4],
+        "a" => [1, 2],
+        "b" => [3, 4],
         ];
         $found = 0;
         foreach ($catalog as $section => $items) {
             if ($section == "b") {
-                $found = $items[1];  // 4
+                $found = $items[1]; // 4
             }
         }
-        var_dump($found);  // expected: int(4)
+        var_dump($found); // expected: int(4)
 
         // Test 2c: foreach value-only (int-keyed array, should still work)
         echo "[2c] foreach value-only:\n";
@@ -137,7 +137,7 @@ class Main {
         foreach ($nums as $item) {
             $total = $total + $item;
         }
-        var_dump($total);  // expected: int(600)
+        var_dump($total); // expected: int(600)
 
         // Test 2d: foreach int-keyed with key access
         echo "[2d] foreach int keys:\n";
@@ -146,7 +146,7 @@ class Main {
         foreach ($items as $idx => $val) {
             $keySum = $keySum + $idx;
         }
-        var_dump($keySum);  // expected: int(3)  (0+1+2)
+        var_dump($keySum); // expected: int(3) (0+1+2)
 
         // ═══════════════════════════════════════════
         // Fix 3: match without default
@@ -160,7 +160,7 @@ class Main {
             2 => "two",
             default => "other",
         };
-        var_dump($mval);  // expected: string("two")
+        var_dump($mval); // expected: string("two")
 
         // Test 3b: match without default (all cases covered)
         echo "[3b] match no default, covered:\n";
@@ -170,7 +170,7 @@ class Main {
             2 => "second",
             3 => "third",
         };
-        var_dump($label);  // expected: string("first")
+        var_dump($label); // expected: string("first")
 
         // Test 3c: match with int result no default
         echo "[3c] match int result, no default:\n";
@@ -181,7 +181,7 @@ class Main {
             $grade >= 70 => 3,
             $grade >= 60 => 4,
         };
-        var_dump($level);  // expected: int(2)
+        var_dump($level); // expected: int(2)
 
         // Test 3d: match with bool result
         echo "[3d] match bool result:\n";
@@ -190,7 +190,7 @@ class Main {
             0 => false,
             1 => true,
         };
-        var_dump($ok);  // expected: bool(true)
+        var_dump($ok); // expected: bool(true)
 
         // ═══════════════════════════════════════════
         // Switch testing
@@ -201,18 +201,18 @@ class Main {
         echo "[4a] int switch:\n";
         $x = 2;
         switch ($x) {
-            case 1: echo "  one\n"; break;
-            case 2: echo "  two\n"; break;
-            default: echo "  other\n"; break;
+            case 1: echo " one\n"; break;
+            case 2: echo " two\n"; break;
+            default: echo " other\n"; break;
         }
 
         // Test 4b: switch with string
         echo "[4b] string switch:\n";
         $color = "green";
         switch ($color) {
-            case "red": echo "  red\n"; break;
-            case "green": echo "  green\n"; break;
-            default: echo "  unknown\n"; break;
+            case "red": echo " red\n"; break;
+            case "green": echo " green\n"; break;
+            default: echo " unknown\n"; break;
         }
 
         // ═══════════════════════════════════════════
@@ -229,7 +229,7 @@ class Main {
                 $grandTotal = $grandTotal + $cell;
             }
         }
-        var_dump($grandTotal);  // expected: int(21)
+        var_dump($grandTotal); // expected: int(21)
 
         echo "\n=== All control flow tests passed! ===\n";
     }
