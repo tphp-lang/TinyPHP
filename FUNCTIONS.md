@@ -23,10 +23,11 @@
 | `ext/mbstring` (UTF-8) | `std/utf8.h` | 3 |
 | `ext/pcntl` | `ext/pcntl/` | 7 |
 | `ext/posix` | `ext/posix/` | 14 |
+| `ext/pcre` | `ext/pcre/` | 8 |
 | `ext/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | C 互操作 (PHPC) | `phpc.h` | 24 |
-| **合计** | | **232+** |
+| **合计** | | **240+** |
 
 ---
 
@@ -458,6 +459,54 @@
 | `posix_ttyname($fd)` | `ttyname()` |
 | `posix_uname()` | ⬜ 未实现 |
 | `posix_times()` | ⬜ 未实现 |
+
+---
+
+## ext/pcre — 正则表达式
+
+> 文件: `ext/pcre/`，NFA VM 引擎（移植自 vlang `vlib/regex/pcre/regex.v`），按需引入 `#import pcre`
+
+纯 C NFA VM 正则引擎（Russ Cox 模型，12 条指令），不依赖外部 PCRE2 库。128 位 bitset ASCII 字符类、Boyer-Moore 前缀跳过、32 槽 LRU 编译缓存。
+
+**与 PHP 差异**：`preg_match` / `preg_match_all` 返回匹配数组（空=无匹配）而非 `int + byRef $matches`；所有参数必须显式传入（AOT 不支持默认参数值 / byRef 输出参数）；不支持 `preg_replace_callback`；`\a`=`[a-z]`（PHP 为 BEL 0x07）、`\A`=`[A-Z]`（PHP 为字符串起始）；`i` 标志仅 ASCII 大小写折叠；不支持 lookahead / lookbehind / 原子组 `(?>)` / 占有量词 `*+` / Unicode 属性类 `\p{}`。
+
+| 函数 | C 实现 | 说明 |
+|------|--------|------|
+| `preg_match($pat, $subj)` | NFA VM → t_array* | 空=无匹配 |
+| `preg_match_all($pat, $subj)` | 循环匹配 → 二维数组 | 固定 `PREG_PATTERN_ORDER` |
+| `preg_replace($pat, $repl, $subj, $limit)` | 两趟法：计长→写入 | `$0`-`$9` 反向引用 |
+| `preg_split($pat, $subj, $limit, $flags)` | 循环分割 → t_array* | `PREG_SPLIT_NO_EMPTY` |
+| `preg_grep($pat, $arr, $flags)` | 遍历匹配 → t_array* | `PREG_GREP_INVERT` |
+| `preg_quote($str, $delim)` | 两趟法转义元字符 | `$delim` 传空串则只转义元字符 |
+| `preg_last_error()` | 全局错误码 | `PREG_NO_ERROR`=0 |
+| `preg_last_error_msg()` | 错误码 → 字符串 | — |
+
+### 支持的正则语法
+
+| 类别 | 语法 |
+|------|------|
+| 预定义类 | `\d \D \w \W \s \S \b \B` |
+| 字母类 | `\a`(=[a-z]) `\A`(=[A-Z]) |
+| 字符类 | `[...]` `[^...]` 范围 `a-z` |
+| 量词 | `* + ? {n} {n,} {n,m}` + 懒惰 `?` |
+| 分组 | `(...)` `(?:...)` `(?P<name>...)` |
+| 标志 | `i m s`（分隔符后或内联 `(?i)`） |
+| 锚点 / 选项 | `^ $` / `\|` |
+| 转义 | `\n \r \t \v \f \0 \xHH` |
+
+### 常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `PREG_PATTERN_ORDER` | 1 | `preg_match_all` 默认顺序 |
+| `PREG_SET_ORDER` | 2 | 定义但未实现（固定 PATTERN_ORDER） |
+| `PREG_SPLIT_NO_EMPTY` | 1 | `preg_split` 去空片段 |
+| `PREG_SPLIT_DELIM_CAPTURE` | 2 | `preg_split` 保留分隔符捕获组 |
+| `PREG_GREP_INVERT` | 1 | `preg_grep` 反转结果 |
+| `PREG_NO_ERROR` | 0 | 无错误 |
+| `PREG_INTERNAL_ERROR` | 1 | 内部错误 |
+| `PREG_BACKTRACK_LIMIT_ERROR` | 2 | 回溯限制（未启用） |
+| `PREG_RECURSION_LIMIT_ERROR` | 3 | 递归限制（未启用） |
 
 ---
 

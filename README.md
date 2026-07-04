@@ -175,7 +175,7 @@ use MyApp\Models\User;
 
 ### 🔢 内置函数
 
-已实现 **232+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+已实现 **240+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ## 独有特性
 
