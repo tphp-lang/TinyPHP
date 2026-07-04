@@ -42,6 +42,7 @@ class CodeGenerator implements ASTVisitor
     private array $methodParamTypes = [];
     private array $funcRetTypes = [];
     private array $funcParamTypes = [];
+    private array $funcDefaultCounts = [];  // 函数默认值参数数量
     private array $closureSigs = [];
     private array $varClosureMap = [];
 
@@ -205,11 +206,33 @@ class CodeGenerator implements ASTVisitor
         // ── SEC_FUNCFWDS: 独立函数前置声明 ──
         foreach ($node->functions as $fn) {
             $ret = self::mapType($fn->returnType);
-            $this->funcRetTypes[self::funcCName($fn)] = $ret;
-            $this->funcParamTypes[self::funcCName($fn)] = array_map(fn($p) => self::paramCType($p), $fn->params);
+            $fnCName = self::funcCName($fn);
+            $this->funcRetTypes[$fnCName] = $ret;
+            $this->funcParamTypes[$fnCName] = array_map(fn($p) => self::paramCType($p), $fn->params);
+            // 计算默认值参数数量
+            $defaultCount = 0;
+            $totalParams = count($fn->params);
+            for ($i = $totalParams - 1; $i >= 0; $i--) {
+                if ($fn->params[$i]->default !== null) {
+                    $defaultCount++;
+                } else {
+                    break;
+                }
+            }
+            $this->funcDefaultCounts[$fnCName] = $defaultCount;
             $params = array_map(fn($p) => $this->visitParam($p), $fn->params);
             $this->sectionLine(self::SEC_FUNCFWDS,
-                'static ' . $ret . ' ' . self::funcCName($fn) . '(' . implode(', ', $params) . ');');
+                'static ' . $ret . ' ' . $fnCName . '(' . implode(', ', $params) . ');');
+            // 为有默认值的函数生成重载函数前置声明
+            if ($defaultCount > 0) {
+                for ($cutIdx = $totalParams - $defaultCount; $cutIdx < $totalParams; $cutIdx++) {
+                    $overloadName = $fnCName . '_' . ($totalParams - $cutIdx);
+                    $cutParams = array_slice($fn->params, 0, $cutIdx);
+                    $overloadParams = array_map(fn($p) => $this->visitParam($p), $cutParams);
+                    $this->sectionLine(self::SEC_FUNCFWDS,
+                        'static ' . $ret . ' ' . $overloadName . '(' . implode(', ', $overloadParams) . ');');
+                }
+            }
         }
 
         // ── SEC_CLSIMPL: Phase 2 — 所有类的方法实现 + allocator ──
@@ -243,6 +266,7 @@ class CodeGenerator implements ASTVisitor
         $this->capTypeCounter = 0;
         $this->thunkCounter = 0;
         $this->sections = [];
+        $this->funcDefaultCounts = [];
         $this->symbols = new SymbolTable();
         // 内置 Exception 类
         $this->symbols->addClass('tphp_class_Exception');
@@ -641,16 +665,43 @@ class CodeGenerator implements ASTVisitor
         $this->declaredVars = [];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
+        $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
         $ret = self::mapType($node->returnType);
         $this->currentRetType = $ret;
         // 注册返回类型，供 inferCallReturnType 使用
         $this->funcRetTypes[self::funcCName($node)] = $ret;
+
+        // 检查是否有默认值参数
+        $hasDefaults = false;
+        foreach ($node->params as $p) {
+            if ($p->default !== null) {
+                $hasDefaults = true;
+                break;
+            }
+        }
+
+        $parts = [];
+
+        // 生成重载函数（如果有默认值参数）
+        if ($hasDefaults) {
+            $parts[] = $this->generateFunctionOverloads($node, $ret);
+        }
+
+        // 生成主函数（完整参数版本）
+        $this->declaredVars = [];
+        $this->varTypes = [];
+        $this->symbols->clearScopeObjects();
+        $this->symbols->clearScopeVars();
+        $this->funcScopeDecls = [];
+
         $params = array_map(fn($p) => self::paramDecl($p), $node->params);
+        $paramVars = [];
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);
             $this->declaredVars[$vn] = true;
             $this->varTypes[$vn] = self::paramCType($p);
+            $paramVars[$vn] = true;
         }
         $header = [];
         $header[] = 'static ' . $ret . ' ' . self::funcCName($node) . '(' . implode(', ', $params) . ') {';
@@ -664,12 +715,63 @@ class CodeGenerator implements ASTVisitor
             $declLines[] = $this->ind("{$ct} {$vn};");
         }
 
+        // 自动生成作用域结束时的释放代码
         $tail = [];
+        $tail = array_merge($tail, $this->generateScopeCleanup($paramVars));
         foreach ($this->symbols->scopeObjects() as $ov) {
             $tail[] = $this->ind("tp_obj_release({$ov});");
         }
         $tail[] = '}';
-        return implode("\n", array_merge($header, $declLines, $bodyLines, $tail));
+        $parts[] = implode("\n", array_merge($header, $declLines, $bodyLines, $tail));
+
+        return implode("\n\n", $parts);
+    }
+
+    /**
+     * 为有默认值的函数生成重载版本
+     * 例如: function foo(int $a, int $b = 10, int $c = 20)
+     * 生成: foo_2($a) → foo($a, 10, 20)
+     *        foo_1($a, $b) → foo($a, $b, 20)
+     */
+    private function generateFunctionOverloads(FunctionNode $node, string $ret): string
+    {
+        $parts = [];
+        $funcName = self::funcCName($node);
+
+        // 找到第一个有默认值的参数位置
+        $firstDefaultIdx = count($node->params);
+        for ($i = 0; $i < count($node->params); $i++) {
+            if ($node->params[$i]->default !== null) {
+                $firstDefaultIdx = $i;
+                break;
+            }
+        }
+
+        // 生成从 firstDefaultIdx 到 count-1 的重载版本
+        for ($cutIdx = $firstDefaultIdx; $cutIdx < count($node->params); $cutIdx++) {
+            $overloadName = $funcName . '_' . (count($node->params) - $cutIdx);
+            $cutParams = array_slice($node->params, 0, $cutIdx);
+
+            // 重载函数参数列表
+            $overloadParams = array_map(fn($p) => self::paramDecl($p), $cutParams);
+
+            // 调用完整参数版本时传递的参数
+            $callArgs = [];
+            for ($i = 0; $i < count($node->params); $i++) {
+                if ($i < $cutIdx) {
+                    // 直接传递参数
+                    $callArgs[] = self::varName($node->params[$i]->name);
+                } else {
+                    // 使用默认值
+                    $callArgs[] = $node->params[$i]->default->accept($this);
+                }
+            }
+
+            $overloadBody = "    return {$funcName}(" . implode(', ', $callArgs) . ");";
+            $parts[] = "static {$ret} {$overloadName}(" . implode(', ', $overloadParams) . ") {\n{$overloadBody}\n}";
+        }
+
+        return implode("\n\n", $parts);
     }
 
     /** 根据 C 返回类型生成零值 return（兼容 GCC/Clang -Wreturn-mismatch） */
@@ -697,12 +799,41 @@ class CodeGenerator implements ASTVisitor
         $this->declaredVars = ['self' => true];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
+        $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
         $this->currentRetType = $this->mapType($node->returnType);
+
+        // 检查是否有默认值参数
+        $hasDefaults = false;
+        foreach ($node->params as $p) {
+            if ($p->default !== null) {
+                $hasDefaults = true;
+                break;
+            }
+        }
+
+        $parts = [];
+
+        // 生成重载函数（如果有默认值参数）
+        if ($hasDefaults) {
+            $parts[] = $this->generateMethodOverloads($node);
+        }
+
+        // 生成主方法（完整参数版本）
+        $this->currentMethodName = $node->name;
+        $this->declaredVars = ['self' => true];
+        $this->varTypes = [];
+        $this->symbols->clearScopeObjects();
+        $this->symbols->clearScopeVars();
+        $this->funcScopeDecls = [];
+        $this->currentRetType = $this->mapType($node->returnType);
+
+        $paramVars = ['self' => true];
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);
             $this->declaredVars[$vn] = true;
             $this->varTypes[$vn] = self::paramCType($p);
+            $paramVars[$vn] = true;
         }
         // Phase 1: header
         $header = [];
@@ -727,20 +858,99 @@ class CodeGenerator implements ASTVisitor
             $declLines[] = $this->ind("{$ct} {$vn};");
         }
 
-        // 自动析构本作用域内的对象变量
+        // 自动生成作用域结束时的释放代码
         $tail = [];
+        $tail = array_merge($tail, $this->generateScopeCleanup($paramVars));
         foreach ($this->symbols->scopeObjects() as $ov) {
             $tail[] = $this->ind("tp_obj_release({$ov});");
         }
         $tail[] = '}';
 
-        return implode("\n", array_merge($header, $declLines, $bodyLines, $tail));
+        $parts[] = implode("\n", array_merge($header, $declLines, $bodyLines, $tail));
+
+        return implode("\n\n", $parts);
+    }
+
+    /**
+     * 为有默认值的方法生成重载版本
+     */
+    private function generateMethodOverloads(MethodNode $node): string
+    {
+        $parts = [];
+        $ret = $this->mapType($node->returnType);
+        $methodImpl = $this->methodImpl($node);
+        // 获取类名（从 methodImpl 中提取）
+        $cn = $this->className;
+
+        // 找到第一个有默认值的参数位置
+        $firstDefaultIdx = count($node->params);
+        for ($i = 0; $i < count($node->params); $i++) {
+            if ($node->params[$i]->default !== null) {
+                $firstDefaultIdx = $i;
+                break;
+            }
+        }
+
+        // 生成从 firstDefaultIdx 到 count-1 的重载版本
+        for ($cutIdx = $firstDefaultIdx; $cutIdx < count($node->params); $cutIdx++) {
+            $overloadName = $cn . '_' . $node->name . '_' . (count($node->params) - $cutIdx);
+            $cutParams = array_slice($node->params, 0, $cutIdx);
+
+            // 重载函数参数列表（包含 self）
+            $overloadParams = ['tphp_class_' . $cn . '* self'];
+            foreach ($cutParams as $p) {
+                $overloadParams[] = self::paramDecl($p);
+            }
+
+            // 调用完整参数版本时传递的参数
+            $callArgs = ['self'];
+            for ($i = 0; $i < count($node->params); $i++) {
+                if ($i < $cutIdx) {
+                    $callArgs[] = self::varName($node->params[$i]->name);
+                } else {
+                    $callArgs[] = $node->params[$i]->default->accept($this);
+                }
+            }
+
+            $overloadBody = "    return {$cn}_{$node->name}(" . implode(', ', $callArgs) . ");";
+            $parts[] = "static {$ret} {$overloadName}(" . implode(', ', $overloadParams) . ") {\n{$overloadBody}\n}";
+        }
+
+        return implode("\n\n", $parts);
     }
 
     public function visitParam(ParamNode $node): string
     {
         $ct = self::mapType($node->type);
         return $node->byRef ? "{$ct} *" . self::varName($node->name) : "{$ct} " . self::varName($node->name);
+    }
+
+    /**
+     * 生成作用域结束时的自动释放代码
+     * @param array $paramVars 参数变量名集合（排除在自动释放之外）
+     * @return string[] 释放代码行
+     */
+    private function generateScopeCleanup(array $paramVars): array
+    {
+        $lines = [];
+        $released = [];
+        $returnedVars = $this->symbols->returnedVars();
+
+        // 释放字符串变量
+        foreach ($this->symbols->scopeStrings() as $vn => $ct) {
+            if (isset($paramVars[$vn]) || isset($released[$vn]) || isset($returnedVars[$vn])) continue;
+            $lines[] = $this->ind("tphp_fn_unset_str(&{$vn});");
+            $released[$vn] = true;
+        }
+
+        // 释放数组变量
+        foreach ($this->symbols->scopeArrays() as $vn => $ct) {
+            if (isset($paramVars[$vn]) || isset($released[$vn]) || isset($returnedVars[$vn])) continue;
+            $lines[] = $this->ind("tphp_fn_unset_arr(&{$vn});");
+            $released[$vn] = true;
+        }
+
+        return $lines;
     }
 
     // ============================================================
@@ -808,6 +1018,11 @@ class CodeGenerator implements ASTVisitor
     public function visitReturnStmt(ReturnStmtNode $node): string
     {
         if ($node->expr) {
+            // 追踪返回的变量名（用于排除自动释放）
+            if ($node->expr instanceof VariableExpr) {
+                $vn = self::varName($node->expr->name);
+                $this->symbols->addReturnedVar($vn);
+            }
             $code = $node->expr->accept($this);
             if ($this->currentRetType === 't_var') {
                 $code = $this->wrapTvarAssign($node->expr, $code);
@@ -887,6 +1102,12 @@ class CodeGenerator implements ASTVisitor
             $this->varTypes[$var] = $cType;
             $declType = ($cType === 'null') ? 'void*' : $cType;
             $w = $this->varWrite($var, $cType);
+            // 追踪需要自动释放的局部变量（仅在函数/方法作用域内）
+            if ($this->indent >= 1 && $cType === 't_string') {
+                $this->symbols->addScopeString($var);
+            } elseif ($this->indent >= 1 && $cType === 't_array*') {
+                $this->symbols->addScopeArray($var);
+            }
             if ($this->scopeDepth > 0) {
                 $this->funcScopeDecls[$var] = $declType;
                 $code = "{$w} = {$expr};";
@@ -2526,9 +2747,26 @@ class CodeGenerator implements ASTVisitor
             } else {
                 $fnName = 'tphp_fn_' . $n;
             }
+            // 检查是否有默认值参数，选择正确的重载版本
+            $argCount = count($node->args);
+            $defaultCount = $this->funcDefaultCounts[$fnName] ?? 0;
+            if ($defaultCount > 0) {
+                // 获取总参数数量
+                $totalParams = count($this->funcParamTypes[$fnName] ?? []);
+                if ($totalParams > 0 && $argCount < $totalParams) {
+                    // 使用重载版本：fnName_缺失参数数量
+                    $missingCount = $totalParams - $argCount;
+                    $fnName = $fnName . '_' . $missingCount;
+                    // 更新参数类型列表（重载版本只有前 argCount 个参数）
+                    $pTypes = array_slice($this->funcParamTypes[$fnName] ?? [], 0, $argCount);
+                } else {
+                    $pTypes = $this->funcParamTypes[$fnName] ?? [];
+                }
+            } else {
+                $pTypes = $this->funcParamTypes[$fnName] ?? [];
+            }
             if (empty($a)) return "{$fnName}()";
             // byRef 参数：形参是指针时要正确传参
-            $pTypes = $this->funcParamTypes[$fnName] ?? [];
             $callArgs = [];
             foreach ($node->args as $i => $arg) {
                 $ct = $pTypes[$i] ?? '';

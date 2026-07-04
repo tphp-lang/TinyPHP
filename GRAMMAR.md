@@ -240,13 +240,17 @@ params:
     param (',' param)* ','?   ✅ (尾部逗号支持)
 
 param:
-    type IDENTIFIER '=' expr  ⬌ (默认值仅部分类型支持)
+    type IDENTIFIER '=' expr  ✅ (默认值，必须在参数列表末尾)
   | type '&' IDENTIFIER        ✅ (引用传参，支持所有类型)
   | type IDENTIFIER            ✅
   | IDENTIFIER                 ✅ (无类型，箭头函数)
   | 'public' type '$' IDENTIFIER   ✅ (构造器属性提升)
   | 'private' type '$' IDENTIFIER  ✅ (构造器属性提升)
 ```
+
+> 默认值参数规则：有默认值的参数必须放在参数列表末尾，与 PHP 原生一致。
+> 编译器会为每个默认值参数生成重载函数，调用时自动选择正确版本。
+> 支持类型：`int`、`float`、`string`、`bool`。不支持 `callable` 类型作为默认值。
 
 ---
 

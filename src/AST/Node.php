@@ -144,6 +144,7 @@ class ParamNode extends ASTNode
         public readonly string $type,
         public readonly string $name,
         public readonly bool $byRef = false,
+        public readonly ?ExprNode $default = null,  // 默认值表达式
     ) {}
 
     public function accept(ASTVisitor $visitor): string

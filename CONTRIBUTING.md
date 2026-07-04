@@ -300,8 +300,10 @@ return "tphp_fn_{$n}(" . implode(', ', $a) . ")";
 | 情况 | 示例 | 说明 |
 |------|------|------|
 | 类型转换 | `deg2rad` `number_format` | 参数需要 `(t_float)` cast |
-| 默认参数 | `str_split($s, $chunk=1)` `str_pad` | PHP 默认值不能直接传给 C |
+| 默认参数 | `str_split($s, $chunk=1)` `str_pad` | 内置函数需在 visitCall 中处理默认值 |
 | 非标准 C 名 | `crc32`→`crc32_str` `array_is_list`→`array_is_list_int` | C 函数名与 PHP 名不同 |
+
+> **用户定义函数的默认值**：编译器自动处理，无需手动编写 if 分支。编译器会生成重载函数，调用时自动选择正确版本。
 
 **错误做法（禁止）：**
 ```php
@@ -428,7 +430,7 @@ class Main {
 | `pcntl_fork` | 缺少 `tphp_fn_` | `tphp_fn_pcntl_fork` |
 | `tphp_arr_item_int` | 缺少 `fn_` | `tphp_fn_arr_item_int` |
 
-**CodeGenerator 端**：`visitCall()` 末尾有通用回退 `"tphp_fn_{$n}($args)" — C 编译器兜底`，大多数函数无需手写 if 分支。仅类型转换/默认参数/非标准 C 名三种情况需特殊处理。
+**CodeGenerator 端**：`visitCall()` 末尾有通用回退 `"tphp_fn_{$n}($args)" — C 编译器兜底`，大多数函数无需手写 if 分支。仅类型转换/内置函数默认参数/非标准 C 名三种情况需特殊处理。用户定义函数的默认值由编译器自动生成重载函数处理。
 
 ---
 

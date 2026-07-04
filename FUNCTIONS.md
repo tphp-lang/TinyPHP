@@ -8,23 +8,23 @@
 
 | PHP 扩展 | 对应 TinyPHP 文件 | 函数数 |
 |----------|------------------|--------|
-| `ext/standard` 输出 | `std/output.h` | 15 |
-| `ext/standard` 类型 | `std/type.h` | 20 |
-| `ext/standard` 字符串 | `std/string.h` | 32 |
-| `ext/standard` HTML/Base64/URL | `std/html.h` | 6 |
-| `ext/standard` 数组 | `array.h` + `std/array_extra.h` | 38 |
-| `ext/standard` 数学 | `std/math.h` + `tphp_math.h` | 21 |
-| `ext/standard` 进制转换 | `conv.h` | 8 |
-| `ext/standard` 断言/随机 | `std/ctrl.h` | 5 |
-| `ext/json` | `os/json.h` | 3 |
-| `ext/hash` | `hash.h` | 5 |
-| `ext/date` | `os/times.h` | 9 |
-| `ext/ctype` | `std/ctrl.h` | 11 |
-| `ext/mbstring` (UTF-8) | `std/utf8.h` | 3 |
+| `include/standard` 输出 | `std/output.h` | 15 |
+| `include/standard` 类型 | `std/type.h` | 20 |
+| `include/standard` 字符串 | `std/string.h` | 32 |
+| `include/standard` HTML/Base64/URL | `std/html.h` | 6 |
+| `include/standard` 数组 | `array.h` + `std/array_extra.h` | 38 |
+| `include/standard` 数学 | `std/math.h` + `tphp_math.h` | 21 |
+| `include/standard` 进制转换 | `conv.h` | 8 |
+| `include/standard` 断言/随机 | `std/ctrl.h` | 5 |
+| `include/json` | `os/json.h` | 3 |
+| `include/hash` | `hash.h` | 5 |
+| `include/date` | `os/times.h` | 9 |
+| `include/ctype` | `std/ctrl.h` | 11 |
+| `include/mbstring` (UTF-8) | `std/utf8.h` | 3 |
 | `ext/pcntl` | `ext/pcntl/` | 7 |
 | `ext/posix` | `ext/posix/` | 14 |
 | `ext/pcre` | `ext/pcre/` | 8 |
-| `ext/password` (bcrypt) | `os/password.h` | 2 |
+| `include/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | C 互操作 (PHPC) | `phpc.h` | 24 |
 | **合计** | | **240+** |
@@ -42,6 +42,78 @@
 | 命名空间函数 | `tphp_na_Ns_tphp_fn_name` | `tphp_na_Demo_Hello_tphp_fn_greet` |
 | 命名空间枚举 | `tphp_na_Ns_tphp_enum_Name` | `tphp_na_Colors_tphp_enum_Status` |
 | 常量 | `TPHP_CONST_NAME` | `TPHP_CONST_PI` |
+| 重载函数 | `tphp_fn_name_N` | `tphp_fn_add_1` (缺少 1 个默认值参数) |
+
+---
+
+## 函数默认值参数
+
+> TinyPHP 支持函数参数默认值，采用**编译时重载**策略，零运行时开销。
+
+### 语法
+
+```php
+function add(int $a, int $b = 10): int {
+    return $a + $b;
+}
+```
+
+### 规则
+
+- 有默认值的参数必须放在参数列表末尾（与 PHP 原生一致）
+- 默认值支持所有基本类型：`int`、`float`、`string`、`bool`
+- 支持负数和表达式作为默认值
+- **不支持** `callable` 类型作为默认值（编译时无法将字符串函数名转换为函数指针）
+
+### 编译策略
+
+编译器为每个有默认值的函数生成重载版本：
+
+```php
+// PHP 源码
+function add(int $a, int $b = 10): int {
+    return $a + $b;
+}
+echo add(5);     // 使用默认值
+echo add(5, 20); // 覆盖默认值
+```
+
+生成的 C 代码：
+
+```c
+// 重载版本：缺少 1 个参数
+static t_int tphp_fn_add_1(t_int a) {
+    return tphp_fn_add(a, 10);
+}
+
+// 完整版本
+static t_int tphp_fn_add(t_int a, t_int b) {
+    return (a + b);
+}
+
+// 调用时自动选择
+tphp_fn_add_1(5);      // add(5)
+tphp_fn_add(5, 20);    // add(5, 20)
+```
+
+### 示例
+
+```php
+// 单个默认值
+function greet(string $name, string $greeting = "hello"): string {
+    return $greeting . " " . $name;
+}
+greet("world");          // "hello world"
+greet("world", "hi");   // "hi world"
+
+// 多个默认值
+function calc(int $a, int $b = 5, int $c = 10): int {
+    return $a + $b + $c;
+}
+calc(100);       // 115 (100 + 5 + 10)
+calc(100, 20);   // 130 (100 + 20 + 10)
+calc(100, 20, 30); // 150 (100 + 20 + 30)
+```
 
 ---
 

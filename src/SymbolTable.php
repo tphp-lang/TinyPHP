@@ -42,6 +42,10 @@ class FunctionInfo
         public readonly string $retType,
         /** @var string[] C type per param index */
         public readonly array  $paramTypes = [],
+        /** @var int 默认值参数数量（从最后一个非默认值参数之后开始计数） */
+        public readonly int $defaultCount = 0,
+        /** @var int 总参数数量 */
+        public readonly int $totalParams = 0,
     ) {}
 }
 
@@ -76,6 +80,14 @@ class SymbolTable
     // ═══ 作用域对象追踪 ═══
     /** @var string[] 当前作用域内的对象变量名 */
     private array $scopeObjects = [];
+
+    // ═══ 作用域字符串/数组追踪（用于自动释放） ═══
+    /** @var array<string,string> varName => cType ('t_string' 或 't_array*') */
+    private array $scopeStrings = [];
+    /** @var array<string,string> varName => cType */
+    private array $scopeArrays = [];
+    /** @var array<string,bool> 返回语句中使用的变量名（排除在自动释放之外） */
+    private array $returnedVars = [];
 
     // ──────────────────────────────────────────────────────────
     // Class
@@ -252,6 +264,57 @@ class SymbolTable
     public function clearScopeObjects(): void
     {
         $this->scopeObjects = [];
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Scope strings/arrays (for auto-free)
+    // ──────────────────────────────────────────────────────────
+
+    /** @return array<string,string> varName => cType */
+    public function scopeStrings(): array
+    {
+        return $this->scopeStrings;
+    }
+
+    /** @return array<string,string> varName => cType */
+    public function scopeArrays(): array
+    {
+        return $this->scopeArrays;
+    }
+
+    public function addScopeString(string $vn): void
+    {
+        $this->scopeStrings[$vn] = 't_string';
+    }
+
+    public function addScopeArray(string $vn): void
+    {
+        $this->scopeArrays[$vn] = 't_array*';
+    }
+
+    public function removeScopeVars(array $vns): void
+    {
+        foreach ($vns as $vn) {
+            unset($this->scopeStrings[$vn], $this->scopeArrays[$vn]);
+        }
+    }
+
+    public function clearScopeVars(): void
+    {
+        $this->scopeStrings = [];
+        $this->scopeArrays = [];
+        $this->returnedVars = [];
+    }
+
+    public function addReturnedVar(string $vn): void
+    {
+        $this->returnedVars[$vn] = true;
+    }
+
+    /** @return array<string,bool> */
+    public function returnedVars(): array
+    {
+        return $this->returnedVars;
     }
 
     // ──────────────────────────────────────────────────────────

@@ -656,8 +656,17 @@ class Parser
     private function parseParams(): array
     {
         $params = [];
+        $seenDefault = false;
         do {
-            $params[] = $this->parseParam();
+            $param = $this->parseParam();
+            // 检查：默认值参数后面不能有非默认值参数
+            if ($seenDefault && $param->default === null) {
+                $this->error('Default value parameters must be at the end of parameter list');
+            }
+            if ($param->default !== null) {
+                $seenDefault = true;
+            }
+            $params[] = $param;
         } while ($this->match(TokenType::COMMA));
         return $params;
     }
@@ -693,7 +702,12 @@ class Parser
         }
         $this->consume(TokenType::IDENTIFIER, 'Expected parameter name');
         $varName = $this->previous()->lexeme;
-        return new ParamNode($type, $varName, $byRef);
+        // 默认值: = expr
+        $default = null;
+        if ($this->match(TokenType::EQUALS)) {
+            $default = $this->parsePrimary();
+        }
+        return new ParamNode($type, $varName, $byRef, $default);
     }
 
     private function parseStmt(): StmtNode

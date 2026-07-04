@@ -151,7 +151,7 @@ use MyApp\Models\User;
 | 类型 | `int` `float` `string` `bool` `array` `callable` `void` `mixed` `self` 类类型 |
 | 运算符 | 完整 15 级优先级：算术/比较/逻辑/位/三元 `?:`/空合并 `??`/太空船 `<=>`/自增自减/类型转换 |
 | 命名空间 | `namespace A\B`、`use A\{B,C}` 分组导入、`use function` |
-| 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`int &$x` 引用传参（全类型）、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
+| 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
 
 ### ❌ 不支持（AOT 物理不可行）
 
@@ -170,6 +170,7 @@ use MyApp\Models\User;
 |------|------|---------|
 | `?int` 可空类型 | AOT 下 null 分支需要运行时分发 | 用 `mixed` 替代，或拆分为两个重载函数 |
 | `...$args` 可变参数 | 需要动态栈构造 | 传 `array` 替代 |
+| `callable $fn = "func"` 默认值 | 编译时无法将字符串函数名转换为函数指针 | 每次调用时显式传入闭包 |
 
 > `int|string` 联合类型和 `mixed` 已支持。
 
