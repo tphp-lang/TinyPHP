@@ -26,8 +26,6 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-make
             git
 
       - name: Add TCC
@@ -87,11 +85,6 @@ jobs:
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-x86_64.zip
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install GCC & deps
-        run: |
-          sudo apt update
-          sudo apt install -y gcc make libc6-dev
 
       - name: Add TCC
         run: |
@@ -159,11 +152,6 @@ jobs:
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-aarch64.zip
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install GCC & deps
-        run: |
-          sudo apt update
-          sudo apt install -y gcc make libc6-dev
 
       - name: Add TCC
         run: |
