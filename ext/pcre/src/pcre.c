@@ -272,8 +272,13 @@ static tp_node tp_parse_node_impl(tp_parser *p, int terminator, int *out_group_c
                 grp.group_idx = -1;
                 grp.nodes = sequence; grp.nodes_len = seq_len;
                 alternatives[alt_len++] = grp;
+                // Allocate new sequence (old one is now owned by grp)
                 sequence = tp_alloc_nodes(p->len + 1);
                 seq_len = 0;
+            } else if (sequence) {
+                // seq_len == 0 but sequence was allocated, free it
+                free(sequence);
+                sequence = tp_alloc_nodes(p->len + 1);
             }
             continue;
         }
@@ -1209,7 +1214,7 @@ static t_int g_pcre_last_error = 0;
 t_array* tphp_fn_preg_match(t_string pattern, t_string subject) {
     g_pcre_last_error = PREG_NO_ERROR;
     tp_regex *r = tp_get_or_compile(pattern);
-    if (!r) { g_pcre_last_error = PREG_INTERNAL_ERROR; return NULL; }
+    if (!r) { g_pcre_last_error = PREG_INTERNAL_ERROR; return tphp_fn_arr_create(0); }
 
     const char *text = STR_PTR(subject);
     int text_len = subject.length;
@@ -1218,8 +1223,10 @@ t_array* tphp_fn_preg_match(t_string pattern, t_string subject) {
     tp_machine m = {0};
     m.stack_cap = 4096;
     m.stack = (int *)malloc(m.stack_cap * sizeof(int));
+    if (!m.stack) return tphp_fn_arr_create(0);
     m.cap_size = r->total_groups * 2;
     m.captures = (int *)calloc(m.cap_size > 0 ? m.cap_size : 1, sizeof(int));
+    if (!m.captures) { free(m.stack); return tphp_fn_arr_create(0); }
 
     int end = tp_find_from(r, text, text_len, 0, &m);
 
@@ -1227,10 +1234,8 @@ t_array* tphp_fn_preg_match(t_string pattern, t_string subject) {
     if (end >= 0) {
         int start = m.captures[0];
         if (start < 0) start = 0;
-        // result[0] = full match
         t_string full = tp_mk_substr(text, start, end);
         result = tphp_fn_arr_push(result, VAR_STRING(full));
-        // result[1..n] = capture groups
         for (int g = 1; g < r->total_groups; g++) {
             int gs = m.captures[g * 2];
             int ge = m.captures[g * 2 + 1];
@@ -1249,12 +1254,10 @@ t_array* tphp_fn_preg_match(t_string pattern, t_string subject) {
 }
 
 // preg_match_all: 返回 PREG_PATTERN_ORDER 风格二维数组
-//   result[0] = [所有完整匹配]
-//   result[1] = [所有 group1 匹配]
 t_array* tphp_fn_preg_match_all(t_string pattern, t_string subject) {
     g_pcre_last_error = PREG_NO_ERROR;
     tp_regex *r = tp_get_or_compile(pattern);
-    if (!r) { g_pcre_last_error = PREG_INTERNAL_ERROR; return NULL; }
+    if (!r) { g_pcre_last_error = PREG_INTERNAL_ERROR; return tphp_fn_arr_create(0); }
 
     const char *text = STR_PTR(subject);
     int text_len = subject.length;
@@ -1263,11 +1266,11 @@ t_array* tphp_fn_preg_match_all(t_string pattern, t_string subject) {
     tp_machine m = {0};
     m.stack_cap = 4096;
     m.stack = (int *)malloc(m.stack_cap * sizeof(int));
+    if (!m.stack) return tphp_fn_arr_create(0);
     m.cap_size = r->total_groups * 2;
     m.captures = (int *)calloc(m.cap_size > 0 ? m.cap_size : 1, sizeof(int));
+    if (!m.captures) { free(m.stack); return tphp_fn_arr_create(0); }
 
-    // PREG_PATTERN_ORDER: result[g] = array of group-g matches across all matches
-    // Pre-create one sub-array per group
     t_array* result = tphp_fn_arr_create(r->total_groups);
     for (int g = 0; g < r->total_groups; g++) {
         result = tphp_fn_arr_push(result, VAR_ARRAY(tphp_fn_arr_create(4)));
@@ -1281,7 +1284,6 @@ t_array* tphp_fn_preg_match_all(t_string pattern, t_string subject) {
         int start = m.captures[0];
         if (start < 0) start = pos;
 
-        // Append each group's match to its sub-array
         for (int g = 0; g < r->total_groups; g++) {
             int gs = m.captures[g * 2];
             int ge = m.captures[g * 2 + 1];
@@ -1293,7 +1295,6 @@ t_array* tphp_fn_preg_match_all(t_string pattern, t_string subject) {
             } else {
                 grp = (t_string){0};
             }
-            // result[g] is a sub-array; push into it
             t_var *sub = &result->entries[g].val;
             if (sub->type == TYPE_ARRAY && sub->value._array != NULL) {
                 sub->value._array = tphp_fn_arr_push(sub->value._array, VAR_STRING(grp));
@@ -1315,7 +1316,6 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
     g_pcre_last_error = PREG_NO_ERROR;
     tp_regex *r = tp_get_or_compile(pattern);
     if (!r) { g_pcre_last_error = PREG_INTERNAL_ERROR; return subject; }
-    if (!r->prog) { g_pcre_last_error = PREG_INTERNAL_ERROR; return subject; }
 
     const char *text = STR_PTR(subject);
     int text_len = subject.length;
@@ -1328,26 +1328,23 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
     tp_machine m = {0};
     m.stack_cap = 4096;
     m.stack = (int *)malloc(m.stack_cap * sizeof(int));
+    if (!m.stack) return subject;
     m.cap_size = r->total_groups * 2;
     m.captures = (int *)calloc(m.cap_size > 0 ? m.cap_size : 1, sizeof(int));
+    if (!m.captures) { free(m.stack); return subject; }
 
-    // First pass: calculate result length + store match positions
-    int result_len = 0;
     int pos = 0;
-    int match_count = 0;
-    int max_matches = (limit > 0) ? (int)limit : 0x7FFFFFFF;
-
     int *match_starts = NULL;
     int *match_ends = NULL;
+    int match_count = 0;
     int match_cap = 0;
+    int max_matches = (limit > 0) ? (int)limit : 0x7FFFFFFF;
 
     while (pos <= text_len && match_count < max_matches) {
         int end = tp_find_from(r, text, text_len, pos, &m);
         if (end < 0) break;
-
         int start = m.captures[0];
         if (start < 0) start = pos;
-
         if (match_count >= match_cap) {
             match_cap = match_cap > 0 ? match_cap * 2 : 16;
             match_starts = (int *)realloc(match_starts, match_cap * sizeof(int));
@@ -1356,90 +1353,62 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
         match_starts[match_count] = start;
         match_ends[match_count] = end;
         match_count++;
-
-        // text before match
-        result_len += start - pos;
-
-        // replacement with $N expansion
-        for (int i = 0; i < repl_len; i++) {
-            if (repl[i] == '$' && i + 1 < repl_len && repl[i+1] >= '0' && repl[i+1] <= '9') {
-                int g = repl[i+1] - '0';
-                if (g == 0) {
-                    result_len += end - start;
-                } else if (g < r->total_groups) {
-                    int gs = m.captures[g * 2];
-                    int ge = m.captures[g * 2 + 1];
-                    if (gs >= 0 && ge >= gs) result_len += ge - gs;
-                }
-                i++;
-            } else {
-                result_len++;
-            }
-        }
-
-        if (end > pos) pos = end;
-        else pos++;
+        if (end > pos) pos = end; else pos++;
     }
-    result_len += text_len - pos;
 
-    // Second pass: build result string
-    char *result_buf = str_pool_alloc(result_len + 1);
-    if (!result_buf) {
-        free(m.stack); free(m.captures);
-        free(match_starts); free(match_ends);
-        return subject;
+    free(m.stack); free(m.captures);
+
+    if (match_count == 0) return subject;
+
+    int result_len = text_len;
+    for (int i = 0; i < match_count; i++) {
+        result_len += repl_len - (match_ends[i] - match_starts[i]);
     }
-    int wpos = 0;
-    pos = 0;
+    if (result_len < 0) result_len = text_len;
 
+    // Use malloc for result buffer (str_pool_alloc causes issues with tphp_rt_str_free)
+    char *result_buf = (char *)malloc(result_len + 1);
+    if (!result_buf) { free(match_starts); free(match_ends); return subject; }
+
+    // Initialize buffer to avoid garbage
+    memset(result_buf, 0, result_len + 1);
+
+    int wpos = 0, src_pos = 0;
     for (int mi = 0; mi < match_count; mi++) {
-        int start = match_starts[mi];
-        int end = match_ends[mi];
-
-        int before_len = start - pos;
-        if (before_len > 0) {
-            memcpy(result_buf + wpos, text + pos, before_len);
-            wpos += before_len;
-        }
-
-        // Re-run match at this position to get captures
-        tp_find_from(r, text, text_len, start, &m);
-
+        int start = match_starts[mi], end = match_ends[mi];
+        if (start > src_pos) { memcpy(result_buf + wpos, text + src_pos, start - src_pos); wpos += start - src_pos; }
+        // Copy replacement with $N backreference support
         for (int i = 0; i < repl_len; i++) {
-            if (repl[i] == '$' && i + 1 < repl_len && repl[i+1] >= '0' && repl[i+1] <= '9') {
+            if (repl[i] == '$' && i + 1 < repl_len && repl[i+1] >= '1' && repl[i+1] <= '9') {
                 int g = repl[i+1] - '0';
-                if (g == 0) {
-                    int ml = end - start;
-                    memcpy(result_buf + wpos, text + start, ml);
-                    wpos += ml;
-                } else if (g < r->total_groups) {
-                    int gs = m.captures[g * 2];
-                    int ge = m.captures[g * 2 + 1];
+                if (g < r->total_groups) {
+                    // Re-run match to get captures
+                    tp_machine m2 = {0};
+                    m2.stack_cap = 4096;
+                    m2.stack = (int *)malloc(m2.stack_cap * sizeof(int));
+                    m2.cap_size = r->total_groups * 2;
+                    m2.captures = (int *)calloc(m2.cap_size, sizeof(int));
+                    tp_find_from(r, text, text_len, start, &m2);
+                    int gs = m2.captures[g * 2];
+                    int ge = m2.captures[g * 2 + 1];
                     if (gs >= 0 && ge >= gs) {
-                        int gl = ge - gs;
-                        memcpy(result_buf + wpos, text + gs, gl);
-                        wpos += gl;
+                        memcpy(result_buf + wpos, text + gs, ge - gs);
+                        wpos += ge - gs;
                     }
+                    free(m2.stack);
+                    free(m2.captures);
                 }
                 i++;
             } else {
                 result_buf[wpos++] = repl[i];
             }
         }
-
-        pos = end > pos ? end : pos + 1;
+        src_pos = end;
     }
+    if (src_pos < text_len) { memcpy(result_buf + wpos, text + src_pos, text_len - src_pos); wpos += text_len - src_pos; }
+    result_buf[wpos] = '\0';
 
-    int remain = text_len - pos;
-    if (remain > 0) {
-        memcpy(result_buf + wpos, text + pos, remain);
-        wpos += remain;
-    }
-    result_buf[wpos] = 0;
-
-    free(m.stack); free(m.captures);
     free(match_starts); free(match_ends);
-
     return (t_string){.data = result_buf, .length = wpos, .is_local = false};
 }
 
@@ -1470,7 +1439,7 @@ t_string tphp_fn_preg_quote(t_string str, t_string delimiter) {
         }
     }
 
-    char *buf = str_pool_alloc(quoted_len + 1);
+    char *buf = (char *)malloc(quoted_len + 1);
     if (!buf) return (t_string){0};
     int wpos = 0;
     for (int i = 0; i < len; i++) {
@@ -1507,8 +1476,10 @@ t_array* tphp_fn_preg_split(t_string pattern, t_string subject, t_int limit, t_i
     tp_machine m = {0};
     m.stack_cap = 4096;
     m.stack = (int *)malloc(m.stack_cap * sizeof(int));
+    if (!m.stack) return tphp_fn_arr_create(0);
     m.cap_size = r->total_groups * 2;
     m.captures = (int *)calloc(m.cap_size > 0 ? m.cap_size : 1, sizeof(int));
+    if (!m.captures) { free(m.stack); return tphp_fn_arr_create(0); }
 
     t_array* result = tphp_fn_arr_create(8);
     int pos = 0;
@@ -1516,25 +1487,19 @@ t_array* tphp_fn_preg_split(t_string pattern, t_string subject, t_int limit, t_i
 
     while (pos <= text_len) {
         if (limit > 0 && count >= limit - 1) break;
-
         int end = tp_find_from(r, text, text_len, pos, &m);
         if (end < 0) break;
-
         int start = m.captures[0];
         if (start < 0) start = pos;
-
         int piece_len = start - pos;
         if (piece_len > 0 || !no_empty) {
             t_string piece = (piece_len > 0) ? tp_mk_substr(text, pos, start) : (t_string){0};
             result = tphp_fn_arr_push(result, VAR_STRING(piece));
             count++;
         }
-
-        if (end > pos) pos = end;
-        else pos++;
+        if (end > pos) pos = end; else pos++;
     }
 
-    // Push remaining text
     if (pos < text_len) {
         int piece_len = text_len - pos;
         if (piece_len > 0 || !no_empty) {
@@ -1561,8 +1526,10 @@ t_array* tphp_fn_preg_grep(t_string pattern, t_array* input, t_int flags) {
     tp_machine m = {0};
     m.stack_cap = 4096;
     m.stack = (int *)malloc(m.stack_cap * sizeof(int));
+    if (!m.stack) return tphp_fn_arr_create(0);
     m.cap_size = r->total_groups * 2;
     m.captures = (int *)calloc(m.cap_size > 0 ? m.cap_size : 1, sizeof(int));
+    if (!m.captures) { free(m.stack); return tphp_fn_arr_create(0); }
 
     t_array* result = tphp_fn_arr_create(input->length);
 
@@ -1579,8 +1546,7 @@ t_array* tphp_fn_preg_grep(t_string pattern, t_array* input, t_int flags) {
 
         if (matched != invert) {
             if (input->entries[i].key.type == TYPE_INT) {
-                result = tphp_fn_arr_set_int(result,
-                    input->entries[i].key.value._int, *entry);
+                result = tphp_fn_arr_set_int(result, input->entries[i].key.value._int, *entry);
             } else {
                 result = tphp_fn_arr_push(result, *entry);
             }
