@@ -964,6 +964,15 @@ class CodeGenerator implements ASTVisitor
                 case 'array_merge':
                     $this->arrElementTypes[$var] = 't_int';
                     break;
+                case 'preg_match':
+                case 'preg_split':
+                case 'preg_grep':
+                    $this->arrElementTypes[$var] = 't_string';
+                    break;
+                case 'preg_match_all':
+                    $this->arrElementTypes[$var] = 't_array*';
+                    $this->arrNestedTypes[$var] = 't_string';
+                    break;
             }
         }
 
@@ -1261,6 +1270,15 @@ class CodeGenerator implements ASTVisitor
             if ($expr->name === 'parse_url' || $expr->name === 'parse_str') return 't_array*';
             if ($expr->name === 'strtr')          return 't_string';
             if ($expr->name === 'asort' || $expr->name === 'arsort' || $expr->name === 'ksort' || $expr->name === 'krsort') return 'void';
+            // PCRE 正则函数返回类型
+            if ($expr->name === 'preg_match')      return 't_array*';
+            if ($expr->name === 'preg_match_all')  return 't_array*';
+            if ($expr->name === 'preg_replace')   return 't_string';
+            if ($expr->name === 'preg_split')     return 't_array*';
+            if ($expr->name === 'preg_grep')      return 't_array*';
+            if ($expr->name === 'preg_quote')     return 't_string';
+            if ($expr->name === 'preg_last_error')     return 't_int';
+            if ($expr->name === 'preg_last_error_msg') return 't_string';
         }
         // 闭包调用 → 查 closureSigs
         if ($expr->name === '__invoke' && $expr->callee instanceof VariableExpr) {
@@ -1482,10 +1500,26 @@ class CodeGenerator implements ASTVisitor
         $val = str_replace("\n", '\\n', $val);    // LF → \n
         $val = str_replace("\r", '\\r', $val);    // CR → \r
         $val = str_replace("\t", '\\t', $val);    // TAB → \t
-        // \ is only escaped if followed by ', ?, a, b, e, f, r, n, t, v, x, 0-7
-        // (PHP escape sequences already in the literal should pass through to C)
-        // Only escape standalone \ that would break C strings
-        return "STR_LIT(\"{$val}\")";
+        // Escape backslashes not part of recognized C escape sequences
+        // (e.g. \w, \d, \s in regex patterns → \\w, \\d, \\s to survive C compilation)
+        $result = '';
+        $len = strlen($val);
+        for ($i = 0; $i < $len; $i++) {
+            if ($val[$i] === '\\' && $i + 1 < $len) {
+                $next = $val[$i + 1];
+                if (strpos('"\\ntrabefvx?\'01234567', $next) !== false) {
+                    $result .= '\\' . $next;
+                } else {
+                    $result .= '\\\\' . $next;
+                }
+                $i++;
+            } elseif ($val[$i] === '\\') {
+                $result .= '\\\\';
+            } else {
+                $result .= $val[$i];
+            }
+        }
+        return "STR_LIT(\"{$result}\")";
     }
 
     public function visitIntLiteral(IntLiteralExpr $node): string    { return (string)$node->value; }

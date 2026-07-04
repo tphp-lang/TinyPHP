@@ -111,7 +111,7 @@ static inline t_array* tphp_fn_arr_retain(t_array *a) {
     return a;
 }
 
-void tphp_fn_arr_free(t_array *a);  // forward decl, implemented below
+static inline void tphp_fn_arr_free(t_array *a);  // forward decl, implemented below
 
 // === Internal: grow (1.5x factor, yyjson-style) ===
 
@@ -312,7 +312,7 @@ static inline t_array* tphp_fn_arr_get_str_arr(t_array *a, t_string key) {
 
 // === Free (释放 entries + 回收到复用池) ===
 
-void tphp_fn_arr_free(t_array *a) {
+static inline void tphp_fn_arr_free(t_array *a) {
     if (unlikely(a == NULL)) return;
     if (--a->refcount > 0) return;
     for (int i = 0; i < a->length; i++) {

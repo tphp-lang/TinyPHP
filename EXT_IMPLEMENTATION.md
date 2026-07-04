@@ -419,88 +419,102 @@ t_string tphp_fn_gzinflate(t_string data, t_int max_length);
 | **`sregex` (OpenResty)** | 流式正则引擎，C 源码 ~8000 行 | github.com/openresty/sregex |
 | **RE2 (Google)** | 线性时间正则，C++ | github.com/google/re2 |
 
+### 实现策略
+
+| 方案 | 体积影响 | 兼容度 | 实施难度 | 推荐度 |
+|------|---------|--------|---------|--------|
+| 内嵌 PCRE2 源码（像 PHP） | +数 MB | 100% | 高（需移植 sljit） | 不推荐 |
+| 链接系统 libpcre2-8 | 零（依赖系统库） | 100% | 低 | 可选 |
+| **移植 vlang NFA VM** | **+~1500 行 C** | **90%** | **中** | **推荐（已实施）** |
+| sregex（OpenResty） | +~8000 行 | 80% | 中 | 可选 |
+
+推荐方案：移植 vlang NFA VM（参考 `vlib/regex/pcre/regex.v`）。在 `ext/pcre/` 中实现纯 C 的 NFA 虚拟机正则引擎，不依赖外部库，跨平台一致行为。
+
+核心设计（Russ Cox NFA VM 模型）：递归下降解析器 → AST → 字节码发射器 → 12 种指令的 NFA VM 解释执行（match/char/string/any/class/split/jmp/save/assert_*）。
+
+性能优化（全部 AOT 友好）：128 位 bitset ASCII 字符类 O(1) 查表、连续 char 合并为 string 指令、Boyer-Moore 前缀跳过、`^` 锚定优化、Fast ASCII path、Zero-allocation 搜索、编译缓存。
+
 ### 完整 API
+
+> TinyPHP 适配说明：因 AOT 单 TU 编译模型下 byRef 参数需要 PHP 侧声明才能正确分发，
+> 本扩展对所有 `tphp_fn_` 前缀的 C 函数**取消 byRef 输出参数**，改为直接返回结果数组。
+> `preg_match` / `preg_match_all` 返回 `t_array*`（空数组 = 无匹配，NULL = 编译错误），
+> 替代 PHP 的 `int + array &$matches` 双输出模式。`preg_replace` 去掉 `&$count` 参数。
+> 与 PHP 的差异：返回值语义不同，调用方用 `count($result)` 判断是否匹配。
 
 ```c
 // ================================================================
 // 常量
 // ================================================================
-#define PREG_PATTERN_ORDER         1   // preg_match_all: $matches[0]=全匹配, [1]=group1, ...
-#define PREG_SET_ORDER             2   // preg_match_all: $matches[0]=第1个匹配组, [1]=第2个, ...
-#define PREG_OFFSET_CAPTURE      256   // 同时返回偏移量
-#define PREG_UNMATCHED_AS_NULL   512   // 未匹配的子组设为 NULL 而非 ""
+#define PREG_PATTERN_ORDER         1   // preg_match_all 默认顺序
+#define PREG_SET_ORDER             2   // preg_match_all 按匹配次序
 #define PREG_SPLIT_NO_EMPTY        1   // preg_split: 去除空片段
 #define PREG_SPLIT_DELIM_CAPTURE   2   // preg_split: 保留分隔符捕获组
-#define PREG_SPLIT_OFFSET_CAPTURE  4   // preg_split: 返回偏移量
 #define PREG_GREP_INVERT           1   // preg_grep: 反转结果
 #define PREG_NO_ERROR              0   // 最后错误码
 #define PREG_INTERNAL_ERROR        1
 #define PREG_BACKTRACK_LIMIT_ERROR 2
 #define PREG_RECURSION_LIMIT_ERROR 3
-#define PREG_BAD_UTF8_ERROR        4
-#define PREG_BAD_UTF8_OFFSET_ERROR 5
-#define PREG_JIT_STACKLIMIT_ERROR  6
 
 // ================================================================
-// 函数
+// 函数 — 全部 tphp_fn_ 前缀，PHP 侧直接调用，无需 phpc 桥接
 // ================================================================
 
 /**
- * preg_match(string $pattern, string $subject, array &$matches = null,
- *            int $flags = 0, int $offset = 0) → int|false
+ * preg_match(string $pattern, string $subject) → array
  *
- * 执行正则匹配，返回匹配次数 (0 或 1)。
+ * 执行正则匹配，返回匹配结果数组。
+ *   返回数组为空 → 无匹配；NULL → 正则编译错误。
+ *   $result[0]   = 完整匹配文本
+ *   $result[1..n] = 子组匹配文本（未匹配的子组为空串）
  *
  * @param pattern  Perl 兼容正则 (t_string), 如 "/^[a-z]+$/i"
  * @param subject  被搜索字符串 (t_string)
- * @param matches  输出: 匹配结果数组 (t_array**)
- *                 $matches[0] = 完整匹配文本
- *                 $matches[1..n] = 子组匹配文本
- * @param flags    PREG_OFFSET_CAPTURE 等组合
- * @param offset   开始搜索的字节偏移 (t_int, 默认 0)
- * @return         1=匹配, 0=不匹配, NULL=错误(正则编译失败)
+ * @return         匹配结果数组 (t_array*)，空数组=无匹配
+ *
+ * 与 PHP 差异：PHP 返回 int(0/1) + byRef $matches；TinyPHP 直接返回 $matches 数组。
+ * 调用方用 count($result) > 0 判断是否匹配。
  *
  * PHP 参考: ext/pcre/php_pcre.c:283
  */
-t_var tphp_fn_preg_match(t_string pattern, t_string subject, t_array **matches,
-                         t_int flags, t_int offset);
+t_array* tphp_fn_preg_match(t_string pattern, t_string subject);
 
 /**
- * preg_match_all(string $pattern, string $subject, array &$matches = null,
- *                int $flags = PREG_PATTERN_ORDER, int $offset = 0) → int|false
+ * preg_match_all(string $pattern, string $subject) → array
  *
- * 执行全局正则匹配，返回匹配次数。
- * $flags: PREG_PATTERN_ORDER → $matches[0]=所有完整匹配, [1]=所有group1匹配, ...
- *         PREG_SET_ORDER      → $matches[0]=第1次匹配的各组, [1]=第2次, ...
+ * 执行全局正则匹配，返回 PREG_PATTERN_ORDER 风格的二维数组。
+ *   $result[0] = 数组：所有完整匹配文本
+ *   $result[1] = 数组：所有 group 1 匹配文本
+ *   ...
+ *   返回空数组（仅含空子数组）→ 无匹配；NULL → 编译错误。
  *
  * PHP 参考: ext/pcre/php_pcre.c:392
  */
-t_var tphp_fn_preg_match_all(t_string pattern, t_string subject, t_array **matches,
-                             t_int flags, t_int offset);
+t_array* tphp_fn_preg_match_all(t_string pattern, t_string subject);
 
 /**
- * preg_replace(string|array $pattern, string|array $replacement,
- *              string|array $subject, int $limit = -1, int &$count = null) → string|array
+ * preg_replace(string $pattern, string $replacement, string $subject,
+ *              int $limit) → string
  *
- * 正则替换。$limit=-1 表示无限制。
+ * 正则替换。$limit=-1 表示无限制。支持 $1/$2 反向引用。
+ * 与 PHP 差异：去掉 &$count byRef 参数。
  *
  * PHP 参考: ext/pcre/php_pcre.c:492
  */
 t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
-                              t_string subject, t_int limit, t_int *count);
+                              t_string subject, t_int limit);
 
 /**
- * preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0) → array
+ * preg_split(string $pattern, string $subject, int $limit, int $flags) → array
  *
- * 用正则分割字符串。
- * $limit=-1 表示无限制。
+ * 用正则分割字符串。$limit=-1 表示无限制。
  *
  * PHP 参考: ext/pcre/php_pcre.c:620
  */
 t_array* tphp_fn_preg_split(t_string pattern, t_string subject, t_int limit, t_int flags);
 
 /**
- * preg_grep(string $pattern, array $input, int $flags = 0) → array
+ * preg_grep(string $pattern, array $input, int $flags) → array
  *
  * 返回数组中匹配 pattern 的元素。
  * $flags: PREG_GREP_INVERT → 返回不匹配的元素。
@@ -510,7 +524,7 @@ t_array* tphp_fn_preg_split(t_string pattern, t_string subject, t_int limit, t_i
 t_array* tphp_fn_preg_grep(t_string pattern, t_array *input, t_int flags);
 
 /**
- * preg_quote(string $str, string $delimiter = null) → string
+ * preg_quote(string $str, string $delimiter) → string
  *
  * 转义正则特殊字符。如 preg_quote("a+b*c") → "a\+b\*c"
  * 纯字符串操作, 不需要 PCRE2。
@@ -532,22 +546,187 @@ t_string tphp_fn_preg_last_error_msg(void);
 ### 测试向量
 
 ```php
-// preg_match
-preg_match('/^Hello (\w+)/', 'Hello World', $m);
+// preg_match — 返回匹配数组（空数组=无匹配）
+$m = preg_match('/^Hello (\w+)/', 'Hello World');
 // $m = ["Hello World", "World"]
+// count($m) > 0 表示匹配成功
 
-// preg_match_all
-preg_match_all('/\d+/', 'a1b2c3', $m);
-// $m = [["1","2","3"]]
+// preg_match_all — 返回二维数组（PREG_PATTERN_ORDER）
+$m = preg_match_all('/\d+/', 'a1b2c3');
+// $m[0] = ["1","2","3"]  (所有完整匹配)
 
-// preg_replace
-preg_replace('/\d/', 'X', 'a1b2');  // "aXbX"
+// preg_replace — $limit=-1 表示无限制
+preg_replace('/\d/', 'X', 'a1b2', -1);  // "aXbX"
 
-// preg_split
-preg_split('/[,;]/', 'a,b;c');  // ["a","b","c"]
+// preg_split — $limit=-1, $flags=0
+preg_split('/[,;]/', 'a,b;c', -1, 0);  // ["a","b","c"]
 
-// preg_quote
-preg_quote('a+b*c');  // "a\+b\*c"
+// preg_quote — 转义特殊字符，$delimiter 传空串
+preg_quote('a+b*c', '');  // "a\+b\*c"
+```
+
+### 与原生 PHP PCRE 的差异
+
+本扩展移植自 vlang 的 NFA VM 正则引擎（参考 `vlib/regex/pcre/regex.v`），实现 PCRE 兼容子集（约 90% 常用语法），不依赖外部 PCRE2 库。下文汇总与原生 PHP（链接系统 libpcre2-8）的关键差异，供迁移参考。
+
+#### API 调用差异
+
+| 函数 | 原生 PHP 签名 | TinyPHP 签名 | 差异说明 |
+|------|--------------|--------------|---------|
+| `preg_match` | `int preg_match(string, string, array &$matches = null, int $flags = 0, int $offset = 0)` | `array preg_match(string, string)` | 返回匹配数组而非 `int`；去掉 byRef `$matches`、`$flags`、`$offset` |
+| `preg_match_all` | `int preg_match_all(string, string, array &$matches = null, int $flags = PREG_PATTERN_ORDER, int $offset = 0)` | `array preg_match_all(string, string)` | 同上；固定 `PREG_PATTERN_ORDER` 顺序，不支持 `PREG_SET_ORDER` |
+| `preg_replace` | `string preg_replace(string, string, string, int $limit = -1, int &$count = null)` | `string preg_replace(string, string, string, int $limit)` | 去掉 `&$count`；`$limit` 无默认值，需显式传 `-1` |
+| `preg_split` | `array preg_split(string, string, int $limit = -1, int $flags = 0)` | `array preg_split(string, string, int, int)` | `$limit`、`$flags` 无默认值 |
+| `preg_grep` | `array preg_grep(string, array, int $flags = 0)` | `array preg_grep(string, array, int)` | `$flags` 无默认值 |
+| `preg_quote` | `string preg_quote(string, string $delimiter = null)` | `string preg_quote(string, string)` | `$delimiter` 无默认值，不传则传空串 `''` |
+| `preg_replace_callback` | `string preg_replace_callback(string, callable, string, int $limit = -1, int &$count = null)` | **不支持** | 用 `preg_match_all` + 循环 + 手动拼接替代 |
+| `preg_replace_callback_array` | `string preg_replace_callback_array(array, string, int $limit = -1, int &$count = null)` | **不支持** | 同上，循环调用 `preg_replace` |
+
+> **AOT 单 TU 约束**：TinyPHP 不支持 PHP 的默认参数值，也不支持 byRef 输出参数
+> （单 TU 模型下 byRef 需在 PHP 侧声明才能正确分发）。因此所有 `preg_*` 函数的参数
+> 都必须显式传入，匹配结果通过返回值取得，调用方用 `count($result) > 0` 判断是否匹配。
+
+#### 支持的正则语法
+
+| 类别 | 语法 | 示例 |
+|------|------|------|
+| 预定义类 | `\d \D \w \W \s \S` | `\d+` 匹配数字 |
+| 单词边界 | `\b \B` | `\bword\b` 匹配完整单词 |
+| 字符类 | `[...]` `[^...]` `a-z` 范围 | `[a-zA-Z0-9_]`、`[^0-9]` |
+| 量词 | `* + ? {n} {n,} {n,m}` | `\d{2,4}` 匹配 2-4 位数字 |
+| 懒惰修饰 | `*? +? ?? {n,m}?` | `<.*?>` 非贪婪匹配 |
+| 捕获组 | `(...)` | `(\d+)-(\d+)` 两组捕获 |
+| 非捕获组 | `(?:...)` | `(?:ab)+` 不捕获 |
+| 命名组 | `(?P<name>...)` | `(?P<year>\d{4})` |
+| 内联标志 | `(?i)` `(?m)` `(?s)` | `(?i)hello` 大小写不敏感 |
+| 分隔符标志 | `i` `m` `s` `x` `u` | `/pattern/is` |
+| 锚点 | `^ $` | `^start`、`end$` |
+| 选项 | `|` | `cat|dog` 匹配两者之一 |
+| 字面转义 | `\n \r \t \v \f \0 \xHH` | `\x41` 即 `A` |
+| 任意字符 | `.`（受 `s` 标志影响） | `a.b` |
+
+> 分隔符标志 `x`（扩展排版）和 `u`（UTF-8 模式）被**静默接受**但不生效：
+> `x` 不会忽略模式中的空白，`u` 始终为 UTF-8 感知（引擎默认行为）。
+
+#### 语法行为差异
+
+以下语法在 PHP 与 TinyPHP 中**均可解析**，但语义不同，迁移时需特别注意：
+
+| 语法 | 原生 PHP 语义 | TinyPHP 语义 | 迁移建议 |
+|------|--------------|--------------|---------|
+| `\a` | BEL 字符（0x07） | **小写字母类 `[a-z]`** | 用 `\x07` 表示 BEL |
+| `\A` | 字符串起始锚点 | **大写字母类 `[A-Z]`** | 用 `^` 替代（非多行模式下等价） |
+| `i` 标志 | Unicode 大小写折叠 | **仅 ASCII** `a-z` ↔ `A-Z` | 非 ASCII 字符不受影响 |
+| 字符类范围 | 按 Unicode 码点排序 | 按**字节序**（含 UTF-8 多字节按字节匹配） | ASCII 范围内行为一致 |
+
+> `\a` 与 `\A` 的行为差异是移植 vlang pcre VM 时保留的设计，与 PHP PCRE2 不兼容。
+> 这是本扩展最显著的语义差异，迁移使用 `\a`（BEL）或 `\A`（字符串起始）的 PHP 模式时**必须改写**。
+
+#### 不支持的正则特性
+
+下表列出 PHP PCRE2 支持但本扩展**尚未实现**的特性。遇到这些语法时，解析器可能跳过或视为普通字符，
+匹配结果与 PHP 不一致：
+
+| 特性 | 语法 | 说明 |
+|------|------|------|
+| Unicode 属性类 | `\p{L}` `\P{N}` `\p{Han}` | 无法按 Unicode 类别匹配 |
+| 原子组 | `(?>...)` | 无法禁用组内回溯 |
+| 占有量词 | `*+` `++` `?+` `{n,m}+` | 无法禁用回溯 |
+| 条件子模式 | `(?(cond)yes|no)` | 不支持 |
+| 前瞻断言 | `(?=...)` `(?!...)` | 不支持 |
+| 后瞻断言 | `(?<=...)` `(?<!...)` | 不支持 |
+| 模式内反向引用 | `\1` `\2` `(?P=name)` | 不支持（替换串 `$1` 仍可用） |
+| 重置匹配起点 | `\K` | 不支持 |
+| 上次匹配终点 | `\G` | 不支持 |
+| 字面逃逸 | `\Q...\E` | 不支持 |
+| 通用换行 | `\R` | 不支持 |
+| 水平/垂直空白 | `\h \H \v \V` | 不支持 |
+| 扩展图素 | `\X` | 不支持 |
+| 单字节匹配 | `\C` | 不支持 |
+| 子模式引用 | `(?&name)` `(?1)` | 不支持 |
+| 偏移捕获标志 | `PREG_OFFSET_CAPTURE` | 不支持，结果不含偏移信息 |
+| `PREG_SET_ORDER` | `preg_match_all` 标志 | 不支持，固定返回 `PREG_PATTERN_ORDER` |
+
+#### 替换串反向引用
+
+`preg_replace` 的 `$replacement` 参数支持以下反向引用：
+
+| 语法 | 含义 |
+|------|------|
+| `$0` | 完整匹配文本 |
+| `$1` - `$9` | 第 1-9 个捕获组 |
+
+> **与 PHP 差异**：PHP 同时支持 `$1` 和 `\1` 两种反向引用语法，还支持 `${1}` 大括号形式
+> 以避免歧义（如 `${1}0`）。本扩展**仅支持 `$N` 单数字形式**，不支持 `\N` 模式内反向引用，
+> 也不支持 `${N}` 大括号形式。若替换串中需输出字面 `$` 后跟数字，当前版本无法转义，
+> 建议改用 `preg_match_all` + 循环拼接实现。
+
+#### 运行时差异
+
+| 项目 | 原生 PHP | TinyPHP |
+|------|---------|---------|
+| 引擎模型 | PCRE2（回溯 + DFA 混合） | NFA VM（Russ Cox 模型，12 条指令） |
+| 编译缓存 | 进程级哈希表（默认 4096 槽） | 32 槽 LRU 缓存 |
+| 回溯限制 | `pcre.backtrack_limit`（默认 1,000,000） | 无限制（动态栈扩容至 1MB） |
+| 递归限制 | `pcre.recursion_limit`（默认 100,000） | 无限制（VM 不递归，显式 backtracking 栈） |
+| 错误码 | `PREG_NO_ERROR` + 7 种错误 | `PREG_NO_ERROR` + 3 种错误（见常量表） |
+| 大小写不敏感 | Unicode-aware（全字符集折叠） | **ASCII-only**（`i` 标志仅对 a-z/A-Z 生效） |
+| 字符类范围 | Unicode 码点排序 | 字节序（ASCII 范围内一致） |
+| JIT 加速 | 可选启用（`pcre.jit`） | 无 JIT，前缀跳过 + 锚定优化 |
+
+#### 迁移示例
+
+```php
+// ── 1. preg_match：去掉 byRef 参数，用返回值判断 ──
+// PHP 原生
+if (preg_match('/(\d+)-(\d+)/', $s, $m)) {
+    echo $m[1];  // 第一个子组
+}
+
+// TinyPHP
+$m = preg_match('/(\d+)-(\d+)/', $s);
+if (count($m) > 0) {
+    echo $m[1];  // 第一个子组
+}
+
+// ── 2. preg_replace：显式传入 $limit ──
+// PHP 原生（$limit 默认 -1）
+$out = preg_replace('/\d+/', 'N', $s);
+
+// TinyPHP（必须显式传 -1）
+$out = preg_replace('/\d+/', 'N', $s, -1);
+
+// ── 3. preg_match_all：仅支持 PREG_PATTERN_ORDER ──
+// PHP 原生可用 PREG_SET_ORDER
+preg_match_all('/(\w)(\d)/', 'a1b2', $m, PREG_SET_ORDER);
+// $m[0] = [["a","1"], ["b","2"]]
+
+// TinyPHP 固定 PREG_PATTERN_ORDER，需手动转置
+$m = preg_match_all('/(\w)(\d)/', 'a1b2');
+// $m[0] = ["a1","b2"]  (所有完整匹配)
+// $m[1] = ["a","b"]    (所有 group 1)
+
+// ── 4. preg_replace_callback：用循环替代 ──
+// PHP 原生
+$out = preg_replace_callback('/\d+/', fn($m) => '[' . $m[0] . ']', $s);
+
+// TinyPHP 等价方案
+$matches = preg_match_all('/\d+/', $s);
+$parts = preg_split('/\d+/', $s, -1, 0);
+$out = '';
+$len = count($parts);
+for ($i = 0; $i < $len; $i++) {
+    $out .= $parts[$i];
+    if ($i + 1 < $len) $out .= '[' . $matches[0][$i] . ']';
+}
+
+// ── 5. \a / \A 必须改写 ──
+// PHP 原生：\a = BEL, \A = 字符串起始
+preg_match('/\A\d+\a/', "\x07");  // 匹配 BEL
+
+// TinyPHP：\a = [a-z], \A = [A-Z]，语义完全不同
+// 需改写为：
+preg_match('/^\d+\x07/', "\x07");
 ```
 
 ---
