@@ -862,7 +862,7 @@ function extractPharDir(string $pharDir, string $destDir): void
 function showHelp(): never
 {
     echo <<<HELP
-TinyPHP — PHP → C transpiler (multi-file support, cross-compile)
+TinyPHP — PHP -> C transpiler (multi-file support, cross-compile)
 
 Usage:
   tphp <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>] [-os <target>] [-arch <arch>]
