@@ -9,6 +9,7 @@
 static inline void tphp_fn_echo(t_string s) {
     if (STR_PTR(s) != NULL && s.length > 0) {
         fwrite(STR_PTR(s), 1, (size_t)s.length, stdout);
+        fflush(stdout);
     }
 }
 

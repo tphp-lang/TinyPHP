@@ -548,7 +548,9 @@ typedef struct {
 static int tp_emit(tp_compiler *c, tp_inst inst) {
     if (c->prog_len >= c->prog_cap) {
         c->prog_cap = c->prog_cap > 0 ? c->prog_cap * 2 : 128;
-        c->prog = (tp_inst *)realloc(c->prog, c->prog_cap * sizeof(tp_inst));
+        tp_inst *new_prog = (tp_inst *)realloc(c->prog, c->prog_cap * sizeof(tp_inst));
+        if (!new_prog) return -1;
+        c->prog = new_prog;
     }
     c->prog[c->prog_len] = inst;
     return c->prog_len++;
@@ -807,12 +809,16 @@ static tp_regex *tp_regex_compile(const char *pattern, int pat_len,
     parser.flags.ignore_case = ignore_case;
     parser.flags.multiline = multiline;
     parser.flags.dot_all = dot_all;
-    parser.group_counter = 1; // group 0 is the full match
+    parser.group_counter = 1; // group 0 is the full match start
 
     int gc = 0;
     tp_node root = tp_parse_node_impl(&parser, -1, &gc);
 
     tp_compiler comp = {0};
+    comp.prog = NULL;
+    comp.prog_len = 0;
+    comp.prog_cap = 0;
+
     // Emit SAVE for group 0 (full match start)
     tp_emit(&comp, ((tp_inst){.typ = TP_SAVE, .group_idx = 0}));
     // Root is a group — emit its children
@@ -830,6 +836,7 @@ static tp_regex *tp_regex_compile(const char *pattern, int pat_len,
     tp_optimize(&comp);
 
     tp_regex *r = (tp_regex *)calloc(1, sizeof(tp_regex));
+    if (!r) return NULL;
     r->prog = comp.prog;
     r->prog_len = comp.prog_len;
     r->total_groups = parser.group_counter;
@@ -1121,8 +1128,15 @@ static tp_regex *tp_get_or_compile(t_string pattern) {
     tp_parsed_pattern pp = tp_parse_delimiters(pattern);
     if (!pp.valid) return NULL;
 
-    tp_regex *r = tp_regex_compile(pp.pattern, pp.pat_len,
+    // Copy pattern to ensure it's valid during compilation
+    char *pat_copy = (char *)malloc(pp.pat_len + 1);
+    if (!pat_copy) return NULL;
+    memcpy(pat_copy, pp.pattern, pp.pat_len);
+    pat_copy[pp.pat_len] = '\0';
+
+    tp_regex *r = tp_regex_compile(pat_copy, pp.pat_len,
                                     pp.ignore_case, pp.multiline, pp.dot_all);
+    free(pat_copy);
     if (!r) return NULL;
 
     // Cache it
@@ -1301,6 +1315,7 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
     g_pcre_last_error = PREG_NO_ERROR;
     tp_regex *r = tp_get_or_compile(pattern);
     if (!r) { g_pcre_last_error = PREG_INTERNAL_ERROR; return subject; }
+    if (!r->prog) { g_pcre_last_error = PREG_INTERNAL_ERROR; return subject; }
 
     const char *text = STR_PTR(subject);
     int text_len = subject.length;

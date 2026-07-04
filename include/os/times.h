@@ -18,15 +18,15 @@ static inline t_int tphp_fn_time(void) {
 }
 
 // === date() — 格式化时间字符串（PHP 格式，非 strftime） ===
-// 手写解析 PHP date 格式字符，零堆分配。
+// 手写解析 PHP date 格式字符，使用 SSO 返回。
 static inline t_string tphp_fn_date(t_string fmt, t_int timestamp) {
-    static char out[256];
+    char buf[256];
     time_t t = (time_t)(timestamp >= 0 ? timestamp : time(NULL));
     struct tm *tm = localtime(&t);
     if (tm == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
 
-    char *d = out;
-    char *end = out + sizeof(out) - 1;
+    char *d = buf;
+    char *end = buf + sizeof(buf) - 1;
     int i = 0;
     while (i < fmt.length && d < end) {
         char c = STR_PTR_V(fmt)[i];
@@ -45,7 +45,12 @@ static inline t_string tphp_fn_date(t_string fmt, t_int timestamp) {
         }
         i++;
     }
-    return (t_string){.data = out, .length = (int)(d - out)};
+    int len = (int)(d - buf);
+    // 使用 SSO 返回（短字符串内联，安全释放）
+    t_string result = {.is_local = true, .length = len};
+    memcpy(result.local, buf, (size_t)len);
+    result.local[len] = '\0';
+    return result;
 }
 
 // === sleep() — 休眠指定秒数 ===
