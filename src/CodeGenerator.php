@@ -43,6 +43,8 @@ class CodeGenerator implements ASTVisitor
     private array $funcRetTypes = [];
     private array $funcParamTypes = [];
     private array $funcDefaultCounts = [];  // 函数默认值参数数量
+    private array $funcIsGenerator = [];    // funcCName → true（生成器函数标记）
+    private bool $inGenerator = false;     // 当前是否在生成器入口函数体内
     private array $closureSigs = [];
     private array $varClosureMap = [];
 
@@ -59,6 +61,7 @@ class CodeGenerator implements ASTVisitor
         'int' => 't_int', 'float' => 't_float', 'string' => 't_string',
         'bool' => 't_bool', 'void' => 'void', 'never' => 'void', 'array' => 't_array*',
         'mixed' => 't_var', 'null' => 'void*',
+        'Generator' => 'tphp_class_Generator*',
     ];
 
     /** 临时变量计数器，用于数组字面量的复合表达式 */
@@ -115,6 +118,7 @@ class CodeGenerator implements ASTVisitor
     {
         $this->indent = 0;
         $this->resetState();
+        $this->preScanGenerators($node);
 
         // 收集 #callback 声明
         foreach ($node->callbacks as $cb) {
@@ -205,8 +209,12 @@ class CodeGenerator implements ASTVisitor
 
         // ── SEC_FUNCFWDS: 独立函数前置声明 ──
         foreach ($node->functions as $fn) {
-            $ret = self::mapType($fn->returnType);
             $fnCName = self::funcCName($fn);
+            if (!empty($this->funcIsGenerator[$fnCName])) {
+                $ret = 'tphp_class_Generator*';
+            } else {
+                $ret = self::mapType($fn->returnType);
+            }
             $this->funcRetTypes[$fnCName] = $ret;
             $this->funcParamTypes[$fnCName] = array_map(fn($p) => self::paramCType($p), $fn->params);
             // 计算默认值参数数量
@@ -256,6 +264,18 @@ class CodeGenerator implements ASTVisitor
         return $this->renderSections();
     }
 
+    /** 预扫描生成器函数：填充 funcIsGenerator + 预填 funcRetTypes */
+    private function preScanGenerators(ProgramNode $node): void
+    {
+        foreach ($node->functions as $fn) {
+            if ($fn->isGenerator) {
+                $cn = self::funcCName($fn);
+                $this->funcIsGenerator[$cn] = true;
+                $this->funcRetTypes[$cn] = 'tphp_class_Generator*';
+            }
+        }
+    }
+
     /** 重置状态（每次 generate 调用时） */
     private function resetState(): void
     {
@@ -267,6 +287,8 @@ class CodeGenerator implements ASTVisitor
         $this->thunkCounter = 0;
         $this->sections = [];
         $this->funcDefaultCounts = [];
+        $this->funcIsGenerator = [];
+        $this->inGenerator = false;
         $this->symbols = new SymbolTable();
         // 内置 Exception 类
         $this->symbols->addClass('tphp_class_Exception');
@@ -274,6 +296,23 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Exception')->methods['getMessage']    = new MethodInfo('t_string');
         $this->symbols->getClass('tphp_class_Exception')->methods['__construct'] = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_Exception')->methods['__destruct']  = new MethodInfo('void');
+
+        // 内置 Generator 类（基于 minicoro 协程）
+        $this->symbols->addClass('tphp_class_Generator');
+        $this->symbols->addClassName('Generator', 'tphp_class_Generator');
+        $this->symbols->getClass('tphp_class_Generator')->methods['current']   = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Generator')->methods['key']       = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Generator')->methods['next']      = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Generator')->methods['send']      = new MethodInfo('t_var', ['t_var']);
+        $this->symbols->getClass('tphp_class_Generator')->methods['valid']    = new MethodInfo('t_int');
+        $this->symbols->getClass('tphp_class_Generator')->methods['getReturn'] = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Generator')->methods['rewind']    = new MethodInfo('void');
+        $this->classMethodRetTypes['tphp_class_Generator'] = [
+            'current' => 't_var', 'key' => 't_var', 'next' => 't_var',
+            'send' => 't_var', 'valid' => 't_int', 'getReturn' => 't_var', 'rewind' => 'void',
+        ];
+        $this->methodParamTypes['tphp_class_Generator'] = ['send' => ['t_var']];
+        $this->classParentName['tphp_class_Generator'] = '';
 
         // 内置 Resource 类（资源对象化根，用户可 extends Resource）
         $this->symbols->addClass('tphp_class_Resource');
@@ -662,6 +701,9 @@ class CodeGenerator implements ASTVisitor
 
     public function visitFunction(FunctionNode $node): string
     {
+        if ($node->isGenerator) {
+            return $this->emitGeneratorFunction($node);
+        }
         $this->declaredVars = [];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
@@ -725,6 +767,123 @@ class CodeGenerator implements ASTVisitor
         $parts[] = implode("\n", array_merge($header, $declLines, $bodyLines, $tail));
 
         return implode("\n\n", $parts);
+    }
+
+    /**
+     * 生成器函数变换：PHP function gen(): Generator { yield ...; }
+     * 编译为两个 C 函数：
+     *   1) 协程入口 static void tphp_gen_<name>_entry(mco_coro* co) { 函数体 }
+     *   2) 包装函数   tphp_class_Generator* tphp_fn_<name>(params) { 创建协程 }
+     */
+    private function emitGeneratorFunction(FunctionNode $node): string
+    {
+        $fnCName = self::funcCName($node);
+        $entryName = 'tphp_gen_' . $fnCName . '_entry';
+        $paramsStruct = '_gen_params_' . $fnCName;
+
+        // 保存状态
+        $savedDeclaredVars = $this->declaredVars;
+        $savedVarTypes = $this->varTypes;
+        $savedCurrentRetType = $this->currentRetType;
+        $savedInGenerator = $this->inGenerator;
+
+        // 重置作用域
+        $this->declaredVars = [];
+        $this->varTypes = [];
+        $this->symbols->clearScopeObjects();
+        $this->symbols->clearScopeVars();
+        $this->funcScopeDecls = [];
+        $this->currentRetType = 't_var';
+        $this->inGenerator = true;
+
+        // 注册参数到局部变量表（与 visitFunction 一致）
+        $paramVars = [];
+        $paramFields = [];
+        $paramLocalDecls = [];
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $ct = self::paramCType($p);
+            $this->declaredVars[$vn] = true;
+            $this->varTypes[$vn] = $ct;
+            $paramVars[$vn] = true;
+            $paramFields[] = "    {$ct} {$vn};";
+            $paramLocalDecls[] = "    {$ct} {$vn};";
+        }
+
+        // 解包参数：从 user_data 复制到局部变量
+        $unpackLines = [];
+        $unpackLines[] = "    {$paramsStruct}* _p = ({$paramsStruct}*)mco_get_user_data(co);";
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $unpackLines[] = "    {$vn} = _p->{$vn};";
+        }
+        $unpackLines[] = '    free(_p);';
+        $unpackLines[] = '    int _auto_key = 0;';
+
+        // 生成函数体（yield→visitYieldExpr, return→visitReturnStmt 生成器分支）
+        $bodyLines = [];
+        foreach ($node->body as $s) {
+            $bodyLines[] = $this->ind($s->accept($this));
+        }
+
+        // for 循环提升声明
+        $declLines = [];
+        foreach ($this->funcScopeDecls as $vn => $ct) {
+            $declLines[] = $this->ind("{$ct} {$vn};");
+        }
+
+        // 末尾释放（局部字符串/数组/对象）
+        $tailLines = [];
+        foreach ($this->generateScopeCleanup($paramVars) as $l) {
+            $tailLines[] = $l;
+        }
+        foreach ($this->symbols->scopeObjects() as $ov) {
+            $tailLines[] = $this->ind("tp_obj_release({$ov});");
+        }
+
+        // 恢复状态
+        $this->declaredVars = $savedDeclaredVars;
+        $this->varTypes = $savedVarTypes;
+        $this->currentRetType = $savedCurrentRetType;
+        $this->inGenerator = $savedInGenerator;
+
+        // 参数结构体 typedef → SEC_FWDDECLS
+        $typedef = "typedef struct {\n" . implode("\n", $paramFields) . "\n} {$paramsStruct};";
+        $this->sectionLine(self::SEC_FWDDECLS, $typedef);
+
+        // 协程入口函数
+        $entryLines = array_merge(
+            ["static void {$entryName}(mco_coro* co) {"],
+            $paramLocalDecls,
+            $unpackLines,
+            $declLines,
+            $bodyLines,
+            $tailLines,
+            ["}"]
+        );
+        $entryFn = implode("\n", $entryLines);
+
+        // 包装函数
+        $paramDecls = array_map(fn($p) => self::paramDecl($p), $node->params);
+        $paramAssigns = [];
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $paramAssigns[] = "    _p->{$vn} = {$vn};";
+        }
+        $wrapperLines = array_merge(
+            ["tphp_class_Generator* {$fnCName}(" . implode(', ', $paramDecls) . ") {"],
+            ["    {$paramsStruct}* _p = ({$paramsStruct}*)calloc(1, sizeof({$paramsStruct}));"],
+            $paramAssigns,
+            ["    mco_desc desc = mco_desc_init({$entryName}, 0);"],
+            ["    desc.user_data = _p;"],
+            ["    mco_coro* co;"],
+            ["    if (mco_create(&co, &desc) != MCO_SUCCESS) { free(_p); return NULL; }"],
+            ["    return new_tphp_class_Generator(co);"],
+            ["}"]
+        );
+        $wrapperFn = implode("\n", $wrapperLines);
+
+        return $entryFn . "\n\n" . $wrapperFn;
     }
 
     /**
@@ -795,6 +954,9 @@ class CodeGenerator implements ASTVisitor
 
     public function visitMethod(MethodNode $node): string
     {
+        if ($node->isGenerator) {
+            throw new \RuntimeException("Generator methods not yet supported (in method {$node->name})");
+        }
         $this->currentMethodName = $node->name;
         $this->declaredVars = ['self' => true];
         $this->varTypes = [];
@@ -1017,6 +1179,19 @@ class CodeGenerator implements ASTVisitor
 
     public function visitReturnStmt(ReturnStmtNode $node): string
     {
+        if ($this->inGenerator) {
+            // 生成器内：push 返回值（t_var），然后裸 return
+            if ($node->expr !== null) {
+                if ($node->expr instanceof VariableExpr) {
+                    $vn = self::varName($node->expr->name);
+                    $this->symbols->addReturnedVar($vn);
+                }
+                $code = $node->expr->accept($this);
+                $valVar = $this->wrapTvarAssign($node->expr, $code);
+                return "{ t_var _gen_ret = {$valVar}; mco_push(mco_running(), &_gen_ret, sizeof(t_var)); return; }";
+            }
+            return "{ t_var _gen_ret = VAR_NULL(); mco_push(mco_running(), &_gen_ret, sizeof(t_var)); return; }";
+        }
         if ($node->expr) {
             // 追踪返回的变量名（用于排除自动释放）
             if ($node->expr instanceof VariableExpr) {
@@ -1030,6 +1205,34 @@ class CodeGenerator implements ASTVisitor
             return 'return ' . $code . ';';
         }
         return 'return;';
+    }
+
+    /**
+     * yield 表达式 → GCC statement expression
+     * 推送 {key, value} 到协程存储，mco_yield 挂起，恢复后弹出 send 值作为表达式结果
+     */
+    public function visitYieldExpr(YieldExpr $node): string
+    {
+        // 计算 value（转 t_var）
+        if ($node->value !== null) {
+            $valCode = $node->value->accept($this);
+            $valVar = $this->wrapTvarAssign($node->value, $valCode);
+        } else {
+            $valVar = 'VAR_NULL()';
+        }
+
+        // 计算 key
+        if ($node->key !== null) {
+            $keyCode = $node->key->accept($this);
+            $keyExpr = $this->wrapTvarAssign($node->key, $keyCode);
+        } else {
+            $keyExpr = '((t_var){.type = TYPE_INT, .value._int = _auto_key++})';
+        }
+
+        // statement expression：push yield pair → yield → pop sent → 返回 t_var
+        return "({ _gen_yield_pair _yp; _yp.key = {$keyExpr}; _yp.value = {$valVar}; " .
+               "mco_push(mco_running(), &_yp, sizeof(_yp)); mco_yield(mco_running()); " .
+               "t_var _sent; if (mco_pop(mco_running(), &_sent, sizeof(t_var)) != MCO_SUCCESS) { _sent = VAR_NULL(); } _sent; })";
     }
 
     public function visitAssignStmt(AssignStmtNode $node): string
@@ -1844,6 +2047,9 @@ class CodeGenerator implements ASTVisitor
 
     public function visitClosure(ClosureExpr $node): string
     {
+        if ($node->isGenerator) {
+            throw new \RuntimeException("Generator closures not yet supported");
+        }
         $id = ++$this->closureCounter;
         $name  = "_closure_{$id}";
         $capName = "_cap_{$id}";
@@ -2944,7 +3150,12 @@ class CodeGenerator implements ASTVisitor
 
         // 查找闭包签名
         $retType = 't_int';
-        $paramTypes = 'void*';
+        // 默认：从实参推导参数类型 + void* env（callable 参数等无签名场景）
+        $inferred = [];
+        foreach ($args as $a) {
+            $inferred[] = $this->inferType($a);
+        }
+        $paramTypes = (empty($inferred) ? '' : implode(', ', $inferred) . ', ') . 'void*';
         if ($callee instanceof VariableExpr) {
             $varName = self::varName($callee->name);
             $fnName = $this->varClosureMap[$varName] ?? '';
@@ -3526,6 +3737,12 @@ class CodeGenerator implements ASTVisitor
 
     public function visitForeachStmt(ForeachStmtNode $node): string
     {
+        // 生成器迭代分支：iterable 类型含 tphp_class_Generator
+        $iterType = $this->inferType($node->array);
+        if (str_contains($iterType, 'tphp_class_Generator')) {
+            return $this->emitGeneratorForeach($node);
+        }
+
         $arr  = $node->array->accept($this);
         $cnt  = '_fc_' . (++$this->tmpVarCounter);
         $idx  = '_fi_' . (++$this->tmpVarCounter);
@@ -3628,6 +3845,41 @@ class CodeGenerator implements ASTVisitor
         $this->scopeDepth++;
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         $this->scopeDepth--;
+        $lines[] = '}';
+        return implode("\n", $lines);
+    }
+
+    /** 生成器 foreach：while (valid) { key/current; body; next; } */
+    private function emitGeneratorForeach(ForeachStmtNode $node): string
+    {
+        $gExpr = $node->array->accept($this);
+        $gTmp = '_gen_iter_' . (++$this->tmpVarCounter);
+        $valVar = ltrim($node->valueVar, '$');
+        $keyVar = $node->keyVar ? ltrim($node->keyVar, '$') : '';
+
+        $needValDecl = !isset($this->declaredVars[$valVar]);
+        $needKeyDecl = ($keyVar && !isset($this->declaredVars[$keyVar]));
+
+        $this->declaredVars[$valVar] = true;
+        $this->varTypes[$valVar] = 't_var';
+        if ($keyVar) {
+            $this->declaredVars[$keyVar] = true;
+            $this->varTypes[$keyVar] = 't_var';
+        }
+
+        $lines = [];
+        if ($needKeyDecl) $lines[] = "t_var {$keyVar};";
+        if ($needValDecl) $lines[] = "t_var {$valVar};";
+        $lines[] = "tphp_class_Generator* {$gTmp} = {$gExpr};";
+        $lines[] = "while (tphp_class_Generator_valid({$gTmp})) {";
+        if ($keyVar) {
+            $lines[] = $this->ind("{$keyVar} = tphp_class_Generator_key({$gTmp});");
+        }
+        $lines[] = $this->ind("{$valVar} = tphp_class_Generator_current({$gTmp});");
+        $this->scopeDepth++;
+        foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $this->scopeDepth--;
+        $lines[] = $this->ind("tphp_class_Generator_next({$gTmp});");
         $lines[] = '}';
         return implode("\n", $lines);
     }

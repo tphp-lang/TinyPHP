@@ -57,6 +57,7 @@ class FunctionNode extends ASTNode
         /** @var StmtNode[] */
         public readonly array $body,
         public readonly string $namespace = '',  // 所属命名空间
+        public readonly bool $isGenerator = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -124,6 +125,7 @@ class MethodNode extends ASTNode
         public readonly array|null $body,
         /** @var PropertyDeclNode[] */
         public readonly array $promoted = [],
+        public readonly bool $isGenerator = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -672,11 +674,26 @@ class ClosureExpr extends ExprNode
         public readonly array $body,
         /** @var array{string,string}[] */
         public readonly array $useVars = [],
+        public readonly bool $isGenerator = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
     {
         return $visitor->visitClosure($this);
+    }
+}
+
+// yield expr | yield key => expr | yield;
+class YieldExpr extends ExprNode
+{
+    public function __construct(
+        public readonly ?ExprNode $key,    // null = auto-increment key
+        public readonly ?ExprNode $value,  // null = yield NULL (yield;)
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitYieldExpr($this);
     }
 }
 
@@ -887,6 +904,7 @@ interface ASTVisitor
     public function visitNew(NewExpr $node): string;
     public function visitArrayLiteral(ArrayLiteralExpr $node): string;
     public function visitClosure(ClosureExpr $node): string;
+    public function visitYieldExpr(YieldExpr $node): string;
     public function visitUnary(UnaryExpr $node): string;
     public function visitPostfix(PostfixExpr $node): string;
     public function visitCompoundAssign(CompoundAssignExpr $node): string;

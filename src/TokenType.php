@@ -15,6 +15,7 @@ enum TokenType: string
     case PRIVATE_KW = 'private';
     case FUNCTION   = 'function';
     case RETURN_KW  = 'return';
+    case YIELD_KW   = 'yield';
     case ECHO_KW    = 'echo';
     case NEW_KW     = 'new';
     case NULL_KW    = 'null';

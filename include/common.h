@@ -18,6 +18,7 @@
 #include "hash.h"
 #include "object/exception.h"
 #include "object/try.h"
+#include "object/generator.h"    // Generator 类（基于 minicoro 协程）
 #include "object/resource.h"     // Resource 基类（资源对象化根）
 #include "os/times.h"
 #include "os/json.h"

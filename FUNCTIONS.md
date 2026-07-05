@@ -26,8 +26,9 @@
 | `ext/pcre` | `ext/pcre/` | 8 |
 | `include/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
+| Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | C 互操作 (PHPC) | `phpc.h` | 24 |
-| **合计** | | **240+** |
+| **合计** | | **247+** |
 
 ---
 
@@ -626,6 +627,83 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | 资源列表 | LIFO 空闲槽复用池 | O(1) 插入/删除，最多 2048 活跃资源 |
 | RAII 自动释放 | `tp_obj_release` → `__destruct` → `fclose` | 作用域结束自动关闭 |
 | `tphp_rt_free_all_resources()` | 异常路径释放所有资源 | 防内存泄漏 |
+
+---
+
+## Generator / yield
+
+> 文件: `object/generator.h` + `include/minicoro.h`
+>
+> 基于 minicoro 协程库实现。生成器函数编译为**双函数**：协程入口 `tphp_gen_<name>_entry(mco_coro* co)` + 包装器 `tphp_fn_<name>(...)`。
+> **不使用 yield 的函数零开销**——编译为普通函数，不引入协程。
+
+### yield 语法
+
+| 语法 | 说明 | 示例 |
+|------|------|------|
+| `yield $v` | 产出值 | `yield 42;` |
+| `yield $k => $v` | 产出键值对 | `yield "a" => 10;` |
+| `return $v;` | 生成器返回值（配合 `getReturn()`） | `return 99;` |
+| `$g->send($v)` | 向 yield 表达式发送值，返回下一个 yield 值 | `$g->send(100)` |
+
+### Generator 类方法
+
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `current()` | `t_var` | 当前 yield 的值；未启动时先 `rewind()` |
+| `key()` | `t_var` | 当前 yield 的 key |
+| `next()` | `t_var` | 推进到下一个 yield，返回新值 |
+| `send($v)` | `t_var` | 发送值到 yield 表达式，返回下一个 yield 值 |
+| `valid()` | `t_int` | 是否仍有可迭代的值（1/0） |
+| `getReturn()` | `t_var` | 生成器的 return 值 |
+| `rewind()` | `void` | 首次 resume，推进到第一个 yield |
+
+### foreach 迭代
+
+```php
+function gen(): Generator {
+    yield 1;
+    yield "a" => 10;
+    yield 2;
+    return 99;
+}
+
+$g = gen();
+foreach ($g as $k => $v) {
+    var_dump($k);   // 0, "a", 1
+    var_dump($v);   // 1, 10, 2
+}
+var_dump($g->getReturn());  // 99
+```
+
+### send() 双向传值
+
+```php
+function gen(): Generator {
+    $x = yield 1;   // 接收 send() 传入的值
+    yield $x + 1;
+}
+
+$gen = gen();
+var_dump($gen->current());   // 1
+var_dump($gen->send(100));   // 101
+```
+
+### AOT 约束
+
+| 约束 | 说明 |
+|------|------|
+| `callable` 参数须用闭包 | `gen(1, 3, "apply")` 不可行——字符串是运行时数据，编译期无法解析为函数符号。须用 `gen(1, 3, fn($x) => apply($x))` |
+| macOS + TCC stub | TCC 的 `ucontext_t` 布局与 Apple Silicon 不匹配，Generator 方法返回默认值。GCC/Clang 走 ASM 路径正常工作 |
+
+### 平台支持
+
+| 平台 | TCC | GCC / Clang |
+|------|-----|-------------|
+| Windows x86_64 | Win32 Fiber | ASM |
+| Linux x86_64 | ucontext | ASM |
+| Linux aarch64 | ucontext | ASM |
+| macOS aarch64 | stub（不工作） | ASM |
 
 ---
 

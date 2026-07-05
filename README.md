@@ -152,6 +152,7 @@ use MyApp\Models\User;
 | 运算符 | 完整 15 级优先级：算术/比较/逻辑/位/三元 `?:`/空合并 `??`/太空船 `<=>`/自增自减/类型转换 |
 | 命名空间 | `namespace A\B`、`use A\{B,C}` 分组导入、`use function` |
 | 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
+| Generator | `yield`、`yield $k => $v`、`send()`、`getReturn()`、`return`、foreach 迭代（基于 minicoro 协程，不使用 yield 时零开销） |
 
 ### ❌ 不支持（AOT 物理不可行）
 
@@ -162,7 +163,6 @@ use MyApp\Models\User;
 | `include/require` | 没有运行时文件加载 | `#include` 引入 C 头文件，或多文件编译 |
 | `__call` `__get` `__set` | 没有运行时分发 | 显式定义方法，或用 `switch` 在单个方法内分发 |
 | `$obj->{$method}()` | 编译时不知道方法名 | 回调 map：`$fn = $map[$name]; $fn($args);` |
-| `yield` / Generator | 需要协程运行时（不做） | `array` 收集结果后返回，或回调遍历 |
 
 ### ⬜ 不做（权衡决定）
 
@@ -173,6 +173,19 @@ use MyApp\Models\User;
 | `callable $fn = "func"` 默认值 | 编译时无法将字符串函数名转换为函数指针 | 每次调用时显式传入闭包 |
 
 > `int|string` 联合类型和 `mixed` 已支持。
+
+### ⚠️ 与原生 PHP 的差异（Generator）
+
+基于 minicoro 协程库实现，核心语义与 PHP 一致，但有以下 AOT 约束导致的差异：
+
+| 差异点 | 原生 PHP | TinyPHP | 原因 |
+|--------|----------|---------|------|
+| `callable` 参数传字符串函数名 | `gen(1, 3, "apply")` 可行 | 不可行，须用闭包 `gen(1, 3, fn($x) => apply($x))` | AOT 编译期无法将运行时字符串解析为函数符号 |
+| 实现机制 | Zend VM 内部 Generator 对象 | minicoro 协程（ASM/ucontext/Fiber） | AOT 无运行时 VM，需独立协程库 |
+| macOS + TCC | 正常 | stub 实现，方法返回默认值 | TCC 的 `ucontext_t` 布局与 Apple Silicon 不匹配；GCC/Clang 走 ASM 路径正常 |
+| 不使用 yield 的函数 | 无差异 | 零开销，编译为普通函数 | 双函数变换：生成器函数 → 协程入口 + 包装器，普通函数不受影响 |
+
+支持的 yield 形态：`yield $v`、`yield $k => $v`、`return $v`（配合 `getReturn()`）、`send($v)` 双向传值。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ### 🔢 内置函数
 

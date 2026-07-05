@@ -38,6 +38,8 @@ class Parser
     private array $classImports = [];
     /** use 函数导入: 短名 → 完全限定名 (如 myDemoFn → Demo\myDemoFn) */
     private array $functionImports = [];
+    /** 生成器检测栈：解析函数/方法/闭包体时压入 bool，遇到 yield 设为 true */
+    private array $genStack = [];
     /** use 枚举导入: 短名 → 完全限定名 (如 Color → Enums\Color) */
     private array $enumImports = [];
     /** 当前文件声明的常量名集合（用于跨命名空间引用检测） */
@@ -392,13 +394,15 @@ class Parser
         }
 
         $this->consume(TokenType::LBRACE, 'Expected {');
+        $this->genStack[] = false;
         $body = [];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
             $body[] = $this->parseStmt();
         }
+        $isGen = array_pop($this->genStack);
         $this->consume(TokenType::RBRACE, 'Expected }');
 
-        return new FunctionNode($name, $params, $returnType, $body, $this->currentNamespace);
+        return new FunctionNode($name, $params, $returnType, $body, $this->currentNamespace, $isGen);
     }
 
     // ============================================================
@@ -627,10 +631,12 @@ class Parser
 
         // 方法体 (abstract methods end with ; instead of {})
         $body = [];
+        $isGen = false;
         if ($this->match(TokenType::SEMICOLON)) {
             $body = null; // abstract method
         } else {
             $this->consume(TokenType::LBRACE, 'Expected {');
+            $this->genStack[] = false;
             // 构造函数属性提升：注入 $this->prop = $prop 到方法体开头
             foreach ($promoted as $pp) {
                 $pname = ltrim($pp->name, '$');
@@ -642,10 +648,11 @@ class Parser
             while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
                 $body[] = $this->parseStmt();
             }
+            $isGen = array_pop($this->genStack);
             $this->consume(TokenType::RBRACE, 'Expected }');
         }
 
-        return new MethodNode($name, $visibility, $params, $returnType, $body, $promoted);
+        return new MethodNode($name, $visibility, $params, $returnType, $body, $promoted, $isGen);
     }
 
     // ============================================================
@@ -1098,6 +1105,32 @@ class Parser
         return new ReturnStmtNode($expr);
     }
 
+    /** yield | yield expr | yield key => expr
+     *  标记当前函数为生成器（genStack 栈顶置 true），返回 YieldExpr。
+     *  注意：不消费末尾分号——由调用方（parseExprStmt 或赋值语境）处理 */
+    private function parseYieldExpr(): ExprNode
+    {
+        if (!empty($this->genStack)) {
+            $this->genStack[array_key_last($this->genStack)] = true;
+        }
+        $line = $this->previous()->line;
+        $col  = $this->previous()->column;
+
+        // yield;  或  yield)  →  yield NULL
+        if ($this->check(TokenType::SEMICOLON) || $this->check(TokenType::RPAREN)
+            || $this->check(TokenType::COMMA)  || $this->check(TokenType::RBRACKET)) {
+            return $this->setPos(new YieldExpr(null, null), $line, $col);
+        }
+
+        $value = $this->parseExpr();
+        $key = null;
+        if ($this->match(TokenType::DOUBLE_ARROW)) {
+            $key = $value;
+            $value = $this->parseExpr();
+        }
+        return $this->setPos(new YieldExpr($key, $value), $line, $col);
+    }
+
     private function parseAssignStmt(): AssignStmtNode
     {
         $varName = $this->advance()->lexeme;
@@ -1109,6 +1142,12 @@ class Parser
 
     private function parseExprStmt(): StmtNode
     {
+        // yield expr;  → 表达式语句
+        if ($this->match(TokenType::YIELD_KW)) {
+            $expr = $this->parseYieldExpr();
+            $this->consume(TokenType::SEMICOLON, 'Expected ;');
+            return new ExprStmtNode($expr);
+        }
         $expr = $this->parseExpr();
         // 数组元素赋值: $arr[$i] = value
         if ($expr instanceof ArrayAccessExpr && $this->check(TokenType::EQUALS)) {
@@ -1355,6 +1394,11 @@ class Parser
         $line = $this->peek()->line;
         $col  = $this->peek()->column;
 
+        // yield（作为表达式：$x = yield 5; $y = yield $k => $v;）
+        if ($this->match(TokenType::YIELD_KW)) {
+            return $this->parseYieldExpr();
+        }
+
         // 字符串
         if ($this->match(TokenType::STRING_LIT)) {
             return $this->setPos(new StringLiteralExpr((string)$this->previous()->literal), $line, $col);
@@ -1467,7 +1511,6 @@ class Parser
                     'eval'    => "eval() is not supported in AOT mode. Use match() or a callback dispatch map instead.",
                     'include' => "include/require is not supported in AOT mode. Use #include for C headers, or multi-file compilation.",
                     'require' => "include/require is not supported in AOT mode. Use #include for C headers, or multi-file compilation.",
-                    'yield'   => "yield/generators are not supported. Collect results into an array and return it, or use a callback iterator.",
                 ];
                 if (isset($unsupportedFns[$name])) {
                     $this->error($unsupportedFns[$name]);
@@ -1642,13 +1685,15 @@ class Parser
         }
 
         $this->consume(TokenType::LBRACE, 'Expected {');
+        $this->genStack[] = false;
         $body = [];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
             $body[] = $this->parseStmt();
         }
+        $isGen = array_pop($this->genStack);
         $this->consume(TokenType::RBRACE, 'Expected }');
 
-        return new ClosureExpr($params, $returnType, $body, $useVars);
+        return new ClosureExpr($params, $returnType, $body, $useVars, $isGen);
     }
 
     /** @return ExprNode[] */

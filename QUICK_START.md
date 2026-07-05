@@ -41,7 +41,7 @@ PHP 中通过 `C->` 直接调用：
 
 class Main {
     public function main(): void {
-        var_dump(C->my_add(10, 20));
+        var_dump(C->my_add(c_int(10), c_int(20));
     }
 }
 ```

@@ -93,6 +93,7 @@ class Lexer
         'for'         => TokenType::FOR_KW,
         'while'       => TokenType::WHILE_KW,
         'foreach'     => TokenType::FOREACH_KW,
+        'yield'       => TokenType::YIELD_KW,
         'break'       => TokenType::BREAK_KW,
         'continue'    => TokenType::CONTINUE_KW,
         'goto'        => TokenType::GOTO,
