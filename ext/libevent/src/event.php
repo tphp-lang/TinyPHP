@@ -11,11 +11,11 @@
 class Event
 {
     const ET      = 32;
-    const PERSIST = 16;
+    public const int PERSIST = 16;
     const READ    = 2;
     const WRITE   = 4;
     const SIGNAL  = 8;
-    const TIMEOUT = 1;
+    public const int TIMEOUT = 1;
 
     public $pending;
 
