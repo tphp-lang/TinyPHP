@@ -13,7 +13,7 @@
 //   平台支持：
 //     Windows + GCC/Clang → ASM    |  Windows + TCC → Win32 Fiber
 //     Linux   + GCC/Clang → ASM    |  Linux   + TCC → ucontext
-//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → ASM（强制 MCO_USE_ASM）
+//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → 独立 .s 汇编 + minicoro-lite
 // ============================================================
 
 #include "object/object.h"
@@ -22,23 +22,14 @@
 /* ── minicoro 平台选择 ──────────────────────────────────── */
 
 /*
- * TCC on macOS: 强制启用 ASM 路径（实验性）。
- *
- * 背景：TCC 为 Apple 头文件兼容性定义 __GNUC__ = 2（< 3），
- * 导致 minicoro 的 ASM 检测（__GNUC__ >= 3）失败，回退到 ucontext。
- * 但 TCC 的 ucontext_t 布局与 Apple Silicon ABI 不匹配 → 段错误。
- *
- * 修复：手动定义 MCO_USE_ASM，绕过 __GNUC__ 检查，让 TCC 直接编译
- * ARM64 汇编（stp/ldp/mov/br 指令，TCC 的 arm64 汇编器应支持）。
- *
- * 兼容性：Apple 平台用 __arm64__，minicoro 检测 __aarch64__，
- * 若前者定义而后者未定义，补定义 __aarch64__ 以通过架构检测。
+ * TCC on macOS: 内联 __asm__() 在 ARM64 上不兼容 TCC，
+ * 但 TCC 的 ARM64 汇编器可以编译独立 .s 文件。
+ * 因此跳过 minicoro.h 的内联汇编，使用独立的
+ * include/mco_arm64_macos.s 提供 _mco_switch / _mco_wrap_main，
+ * 其余 minicoro 逻辑在此自包含实现。
  */
 #if defined(__APPLE__) && defined(__TINYC__)
-  #if defined(__arm64__) && !defined(__aarch64__)
-    #define __aarch64__ 1
-  #endif
-  #define MCO_USE_ASM
+  #define MCO_CUSTOM_ASM 1
 #endif
 
 /* TCC on Windows: kernel32.def 缺少 CreateFiberEx。
@@ -52,9 +43,245 @@
 /* 禁用 minicoro 调试日志——会写入 stdout，干扰 #debug 输出比对 */
 #define MCO_NO_DEBUG
 
-/* 单 TU 编译：在此定义 MINICORO_IMPL 以包含实现 */
-#define MINICORO_IMPL
-#include "minicoro.h"
+/* ── macOS+TCC: 自包含 minicoro-lite（使用独立 .s 文件） ──── */
+#ifdef MCO_CUSTOM_ASM
+
+#include <stdlib.h>
+#include <string.h>
+
+#define MCO_MIN_STACK_SIZE 32768
+#define MCO_DEFAULT_STACK_SIZE 57344
+#define MCO_DEFAULT_STORAGE_SIZE 4096
+#define MCO_MAGIC_NUMBER 0x7E3CB1A9
+
+typedef enum { MCO_SUCCESS = 0, MCO_GENERIC_ERROR = -1, MCO_INVALID_POINTER = -2,
+               MCO_INVALID_COROUTINE = -3, MCO_NOT_RUNNING = -4, MCO_NOT_SUSPENDED = -5,
+               MCO_MAKE_CONTEXT_ERROR = -6, MCO_SWITCH_CONTEXT_ERROR = -7,
+               MCO_NOT_ENOUGH_SPACE = -8, MCO_OUT_OF_MEMORY = -9,
+               MCO_INVALID_ARGUMENTS = -10, MCO_INVALID_OPERATION = -11,
+               MCO_STACK_OVERFLOW = -12 } mco_result;
+typedef enum { MCO_DEAD = 0, MCO_RUNNING = 1, MCO_SUSPENDED = 2, MCO_NORMAL = 3 } mco_state;
+
+typedef struct _mco_ctxbuf {
+  void *x[12]; /* x19-x30 */
+  void *sp;
+  void *lr;
+  void *d[8];  /* d8-d15 */
+} _mco_ctxbuf;
+
+typedef struct mco_coro mco_coro;
+struct mco_coro {
+  void* context;
+  mco_state state;
+  void (*func)(mco_coro* co);
+  mco_coro* prev_co;
+  void* user_data;
+  void* allocator_data;
+  void (*free_cb)(void* ptr, void* allocator_data);
+  void* stack_base;
+  size_t stack_size;
+  unsigned char* storage;
+  size_t bytes_stored;
+  size_t storage_size;
+  size_t magic_number;
+};
+
+typedef struct mco_desc {
+  void (*func)(mco_coro* co);
+  void* user_data;
+  void* (*malloc_cb)(size_t size, void* allocator_data);
+  void  (*free_cb)(void* ptr, void* allocator_data);
+  void* allocator_data;
+  size_t storage_size;
+  size_t coro_size;
+  size_t stack_size;
+} mco_desc;
+
+typedef struct _mco_context {
+  _mco_ctxbuf ctx;
+  _mco_ctxbuf back_ctx;
+} _mco_context;
+
+/* 来自 include/mco_arm64_macos.s 的外部汇编函数 */
+extern void _mco_wrap_main(void);
+extern int _mco_switch(_mco_ctxbuf* from, _mco_ctxbuf* to);
+
+static mco_coro* mco_current_co = NULL;
+
+static size_t _mco_align_forward(size_t addr, size_t align) {
+  return (addr + (align - 1)) & ~(align - 1);
+}
+
+static void* mco_malloc(size_t size, void* data) { (void)data; return malloc(size); }
+static void  mco_free(void* ptr, void* data) { (void)data; free(ptr); }
+
+static void _mco_prepare_jumpin(mco_coro* co) {
+  mco_coro* prev_co = mco_current_co;
+  co->prev_co = prev_co;
+  if (prev_co) prev_co->state = MCO_NORMAL;
+  mco_current_co = co;
+}
+
+static void _mco_prepare_jumpout(mco_coro* co) {
+  mco_coro* prev_co = co->prev_co;
+  co->prev_co = NULL;
+  if (prev_co) prev_co->state = MCO_RUNNING;
+  mco_current_co = prev_co;
+}
+
+static void _mco_jumpin(mco_coro* co) {
+  _mco_context* context = (_mco_context*)co->context;
+  _mco_prepare_jumpin(co);
+  _mco_switch(&context->back_ctx, &context->ctx);
+}
+
+static void _mco_jumpout(mco_coro* co) {
+  _mco_context* context = (_mco_context*)co->context;
+  _mco_prepare_jumpout(co);
+  _mco_switch(&context->ctx, &context->back_ctx);
+}
+
+static void _mco_main(mco_coro* co) {
+  co->func(co);
+  co->state = MCO_DEAD;
+  _mco_jumpout(co);
+}
+
+static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+  ctx->x[0] = (void*)(co);
+  ctx->x[1] = (void*)(_mco_main);
+  ctx->x[2] = (void*)(0xdeaddeaddeaddead);
+  ctx->sp = (void*)((size_t)stack_base + stack_size);
+  ctx->lr = (void*)(_mco_wrap_main);
+  return MCO_SUCCESS;
+}
+
+static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
+  size_t co_addr = (size_t)co;
+  size_t context_addr = _mco_align_forward(co_addr + sizeof(mco_coro), 16);
+  size_t storage_addr = _mco_align_forward(context_addr + sizeof(_mco_context), 16);
+  size_t stack_addr = _mco_align_forward(storage_addr + desc->storage_size, 16);
+  _mco_context* context = (_mco_context*)context_addr;
+  memset(context, 0, sizeof(_mco_context));
+  unsigned char* storage = (unsigned char*)storage_addr;
+  memset(storage, 0, desc->storage_size);
+  void *stack_base = (void*)stack_addr;
+  size_t stack_size = desc->stack_size;
+  mco_result res = _mco_makectx(co, &context->ctx, stack_base, stack_size);
+  if (res != MCO_SUCCESS) return res;
+  co->context = context;
+  co->stack_base = stack_base;
+  co->stack_size = stack_size;
+  co->storage = storage;
+  co->storage_size = desc->storage_size;
+  return MCO_SUCCESS;
+}
+
+static void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
+  desc->coro_size = _mco_align_forward(sizeof(mco_coro), 16) +
+                    _mco_align_forward(sizeof(_mco_context), 16) +
+                    _mco_align_forward(desc->storage_size, 16) +
+                    stack_size + 16;
+  desc->stack_size = stack_size;
+}
+
+static mco_desc mco_desc_init(void (*func)(mco_coro* co), size_t stack_size) {
+  if (stack_size != 0) {
+    if (stack_size < MCO_MIN_STACK_SIZE) stack_size = MCO_MIN_STACK_SIZE;
+  } else {
+    stack_size = MCO_DEFAULT_STACK_SIZE;
+  }
+  stack_size = _mco_align_forward(stack_size, 16);
+  mco_desc desc;
+  memset(&desc, 0, sizeof(mco_desc));
+  desc.malloc_cb = mco_malloc;
+  desc.free_cb = mco_free;
+  desc.func = func;
+  desc.storage_size = MCO_DEFAULT_STORAGE_SIZE;
+  _mco_init_desc_sizes(&desc, stack_size);
+  return desc;
+}
+
+static mco_result mco_create(mco_coro** out_co, mco_desc* desc) {
+  if (!out_co) return MCO_INVALID_POINTER;
+  if (!desc || !desc->malloc_cb || !desc->free_cb) { *out_co = NULL; return MCO_INVALID_ARGUMENTS; }
+  mco_coro* co = (mco_coro*)desc->malloc_cb(desc->coro_size, desc->allocator_data);
+  if (!co) { *out_co = NULL; return MCO_OUT_OF_MEMORY; }
+  memset(co, 0, sizeof(mco_coro));
+  mco_result res = _mco_create_context(co, desc);
+  if (res != MCO_SUCCESS) { desc->free_cb(co, desc->allocator_data); *out_co = NULL; return res; }
+  co->state = MCO_SUSPENDED;
+  co->free_cb = desc->free_cb;
+  co->allocator_data = desc->allocator_data;
+  co->func = desc->func;
+  co->user_data = desc->user_data;
+  co->magic_number = MCO_MAGIC_NUMBER;
+  *out_co = co;
+  return MCO_SUCCESS;
+}
+
+static mco_result mco_destroy(mco_coro* co) {
+  if (!co) return MCO_INVALID_COROUTINE;
+  if (!(co->state == MCO_SUSPENDED || co->state == MCO_DEAD)) return MCO_INVALID_OPERATION;
+  co->state = MCO_DEAD;
+  if (co->free_cb) co->free_cb(co, co->allocator_data);
+  return MCO_SUCCESS;
+}
+
+static mco_result mco_resume(mco_coro* co) {
+  if (!co) return MCO_INVALID_COROUTINE;
+  if (co->state != MCO_SUSPENDED) return MCO_NOT_SUSPENDED;
+  co->state = MCO_RUNNING;
+  _mco_jumpin(co);
+  return MCO_SUCCESS;
+}
+
+static mco_result mco_yield(mco_coro* co) {
+  if (!co) return MCO_INVALID_COROUTINE;
+  volatile size_t dummy;
+  size_t stack_addr = (size_t)&dummy;
+  size_t stack_min = (size_t)co->stack_base;
+  if (co->magic_number != MCO_MAGIC_NUMBER || stack_addr < stack_min || stack_addr > stack_min + co->stack_size)
+    return MCO_STACK_OVERFLOW;
+  if (co->state != MCO_RUNNING) return MCO_NOT_RUNNING;
+  co->state = MCO_SUSPENDED;
+  _mco_jumpout(co);
+  return MCO_SUCCESS;
+}
+
+static mco_state mco_status(mco_coro* co) { return co ? co->state : MCO_DEAD; }
+static void* mco_get_user_data(mco_coro* co) { return co ? co->user_data : NULL; }
+static mco_coro* mco_running(void) { return mco_current_co; }
+
+static mco_result mco_push(mco_coro* co, const void* src, size_t len) {
+  if (!co) return MCO_INVALID_COROUTINE;
+  if (len > 0) {
+    if (co->bytes_stored + len > co->storage_size) return MCO_NOT_ENOUGH_SPACE;
+    if (!src) return MCO_INVALID_POINTER;
+    memcpy(&co->storage[co->bytes_stored], src, len);
+    co->bytes_stored += len;
+  }
+  return MCO_SUCCESS;
+}
+
+static mco_result mco_pop(mco_coro* co, void* dest, size_t len) {
+  if (!co) return MCO_INVALID_COROUTINE;
+  if (len > 0) {
+    if (len > co->bytes_stored) return MCO_NOT_ENOUGH_SPACE;
+    size_t new_stored = co->bytes_stored - len;
+    if (dest) memcpy(dest, &co->storage[new_stored], len);
+    co->bytes_stored = new_stored;
+  }
+  return MCO_SUCCESS;
+}
+
+static size_t mco_get_bytes_stored(mco_coro* co) { return co ? co->bytes_stored : 0; }
+
+#else
+  /* 单 TU 编译：在此定义 MINICORO_IMPL 以包含实现 */
+  #define MINICORO_IMPL
+  #include "minicoro.h"
+#endif
 
 /* ── yield 协议结构体 ──────────────────────────────────── */
 typedef struct {

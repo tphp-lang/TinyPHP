@@ -21,7 +21,18 @@ foreach ($iter as $file) {
     if ($file->getExtension() !== 'php') continue;
     $content = file_get_contents($file->getPathname());
     if ($content === false) continue;
-    if (str_contains($content, '@skip')) continue;
+    if (str_contains($content, '@skip')) {
+        // 检查是否为平台+编译器特定 skip（如 @skip:macos+tcc）
+        if (preg_match('/@skip:(\w+)\+(\w+)/', $content, $m)) {
+            $skipOS = strtolower($m[1]);
+            $skipCC = strtolower($m[2]);
+            $curOS = strtolower(PHP_OS_FAMILY);
+            $curCC = strtolower($compiler);
+            if (str_contains($curOS, $skipOS) && $curCC === $skipCC) continue;
+        } else {
+            continue;
+        }
+    }
     if (!str_contains($content, '#debug')) continue;
     $testFiles[] = $file->getPathname();
 }
