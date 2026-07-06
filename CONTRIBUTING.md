@@ -44,8 +44,6 @@ include/                         C 运行时头文件（全 static inline）
       └── password.h             bcrypt 密码哈希（password_hash/password_verify，EksBlowfish）
 ```
 
-> TCC 不在仓库中——通过 `build.sh`/`build.cmd` 从 `https://repo.or.cz/tinycc.git` (mob 分支) clone 并编译。
-
 ---
 
 ## 2. 编译流水线详解
