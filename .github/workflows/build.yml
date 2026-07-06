@@ -14,14 +14,10 @@ jobs:
   windows-x86_64:
     runs-on: windows-latest
     env:
-      # ── 核心工具 ──
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
       MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-micro-win.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-win-x86_64.zip
-      # ── 第三方库 ──
       LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
-      # LIB_SSL_URL: https://...
-      # LIB_CURL_URL: https://...
     steps:
       - uses: actions/checkout@v4
 
@@ -45,38 +41,36 @@ jobs:
       - name: Build EXTS
         shell: msys2 {0}
         run: |
-          # 下载并解压所有第三方库源码到 ext/*/package/
-          echo "=== Downloading libevent ==="
           curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
-          unzip -q libevent.zip
+          cmake -E tar xf libevent.zip
           mv libevent-* ext/libevent/package
 
-          # 一次性构建所有库
-          echo "=== Building all exts ==="
           mkdir -p ext/build
           cmake -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
             -S ext -B ext/build
           cmake --build ext/build -j$(nproc)
 
-          echo "=== Results ==="
-          find ext/lib -name "*.a" -o -name "*.lib" 2>/dev/null
+          mkdir -p ext/libevent/include ext/libevent/lib
+          cp -r ext/libevent/package/include/* ext/libevent/include/
+          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
+          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
+          rm -rf ext/libevent/package ext/build
 
-          # 清理源码，只保留头文件和库
-          rm -rf ext/libevent/package
+          echo "=== libevent built ==="
+          ls -lh ext/libevent/lib/ || true
+          ls ext/libevent/include/ || true
 
       - name: Download PHP
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri $env:PHP_URL -OutFile php.zip
           Expand-Archive -Path php.zip -DestinationPath .
-          ls php.exe
 
       - name: Download MICRO
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri $env:MICRO_URL -OutFile micro.zip
           Expand-Archive -Path micro.zip -DestinationPath .
-          ls micro.sfx
 
       - name: BUILD PHAR
         shell: pwsh
@@ -128,24 +122,23 @@ jobs:
 
       - name: Build EXTS
         run: |
-          # 下载并解压所有第三方库源码到 ext/*/package/
-          echo "=== Downloading libevent ==="
           curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
           unzip -q libevent.zip
           mv libevent-* ext/libevent/package
 
-          # 一次性构建所有库
-          echo "=== Building all exts ==="
           mkdir -p ext/build
           cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
             -S ext -B ext/build
           cmake --build ext/build -j$(nproc)
 
-          echo "=== Results ==="
-          find ext/lib -name "*.a" 2>/dev/null
+          mkdir -p ext/libevent/include ext/libevent/lib
+          cp -r ext/libevent/package/include/* ext/libevent/include/
+          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
+          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
+          rm -rf ext/libevent/package ext/build
 
-          # 清理源码
-          rm -rf ext/libevent/package
+          echo "=== libevent built ==="
+          ls -lh ext/libevent/lib/ || true
 
       - name: Download PHP
         run: |
@@ -206,22 +199,23 @@ jobs:
 
       - name: Build EXTS
         run: |
-          echo "=== Downloading libevent ==="
           curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
           unzip -q libevent.zip
           mv libevent-* ext/libevent/package
 
-          echo "=== Building all exts ==="
           mkdir -p ext/build
           cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
             -S ext -B ext/build
           cmake --build ext/build -j$(nproc)
 
-          echo "=== Results ==="
-          find ext/lib -name "*.a" 2>/dev/null
+          mkdir -p ext/libevent/include ext/libevent/lib
+          cp -r ext/libevent/package/include/* ext/libevent/include/
+          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
+          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
+          rm -rf ext/libevent/package ext/build
 
-          # 清理源码
-          rm -rf ext/libevent/package
+          echo "=== libevent built ==="
+          ls -lh ext/libevent/lib/ || true
 
       - name: Download PHP
         run: |
@@ -279,22 +273,23 @@ jobs:
 
       - name: Build EXTS
         run: |
-          echo "=== Downloading libevent ==="
           curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
           unzip -q libevent.zip
           mv libevent-* ext/libevent/package
 
-          echo "=== Building all exts ==="
           mkdir -p ext/build
           cmake -DCMAKE_C_COMPILER=cc -DCMAKE_BUILD_TYPE=Release \
             -S ext -B ext/build
           cmake --build ext/build -j$(sysctl -n hw.ncpu)
 
-          echo "=== Results ==="
-          find ext/lib -name "*.a" 2>/dev/null
+          mkdir -p ext/libevent/include ext/libevent/lib
+          cp -r ext/libevent/package/include/* ext/libevent/include/
+          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
+          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
+          rm -rf ext/libevent/package ext/build
 
-          # 清理源码
-          rm -rf ext/libevent/package
+          echo "=== libevent built ==="
+          ls -lh ext/libevent/lib/ || true
 
       - name: Download PHP
         run: |
