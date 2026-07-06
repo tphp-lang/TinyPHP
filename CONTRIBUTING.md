@@ -9,7 +9,6 @@
 ```
 tphp.php                         CLI 入口（参数解析、文件收集、AST 合并、编译器调用）
 tphp / tphp.cmd                  Linux/macOS / Windows 快捷入口
-build.sh / build.cmd             TCC 构建脚本
 
   └─ src/
        ├── TokenType.php         Token 枚举（~90 token）
