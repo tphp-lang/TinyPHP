@@ -44,7 +44,7 @@ jobs:
 
       - name: Build EXTS
         shell: msys2 {0}
-        run: {
+        run: |
           # 下载并解压所有第三方库源码到 ext/*/package/
           echo "=== Downloading libevent ==="
           curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
@@ -63,7 +63,6 @@ jobs:
 
           # 清理源码，只保留头文件和库
           rm -rf ext/libevent/package
-        }
 
       - name: Download PHP
         shell: pwsh
