@@ -45,26 +45,24 @@ jobs:
       - name: Build EXTS
         shell: msys2 {0}
         run: {
-          # ── libevent ──
-          echo "=== Building libevent ==="
+          # 下载并解压所有第三方库源码到 ext/*/package/
+          echo "=== Downloading libevent ==="
           curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
           unzip -q libevent.zip
-          DIR=$(ls -d libevent-* | head -1)
-          mkdir -p "$DIR/build"
-          cmake -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
-            -S "$DIR" -B "$DIR/build"
-          cmake --build "$DIR/build" -j$(nproc)
-          mkdir -p ext/libevent/include ext/libevent/lib
-          cp -r "$DIR/include/"* ext/libevent/include/
-          cp "$DIR/build/lib/libevent.a" ext/libevent/lib/libevent_core.a
-          cp "$DIR/build/include/event2/event-config.h" ext/libevent/include/event2/ 2>/dev/null || true
-          rm -rf "$DIR"
-          echo "libevent: $(ls ext/libevent/lib/)"
+          mv libevent-* ext/libevent/package
 
-          # ── 其他库（按需添加）──
-          # echo "=== Building xxx ==="
-          # curl -fsSL -o xxx.zip "$LIB_XXX_URL"
-          # ...
+          # 一次性构建所有库
+          echo "=== Building all exts ==="
+          mkdir -p ext/build
+          cmake -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
+            -S ext -B ext/build
+          cmake --build ext/build -j$(nproc)
+
+          echo "=== Results ==="
+          find ext/lib -name "*.a" -o -name "*.lib" 2>/dev/null
+
+          # 清理源码，只保留头文件和库
+          rm -rf ext/libevent/package
         }
 
       - name: Download PHP
@@ -131,21 +129,24 @@ jobs:
 
       - name: Build EXTS
         run: |
-          # ── libevent ──
-          echo "=== Building libevent ==="
+          # 下载并解压所有第三方库源码到 ext/*/package/
+          echo "=== Downloading libevent ==="
           curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
           unzip -q libevent.zip
-          DIR=$(ls -d libevent-* | head -1)
-          mkdir -p "$DIR/build"
+          mv libevent-* ext/libevent/package
+
+          # 一次性构建所有库
+          echo "=== Building all exts ==="
+          mkdir -p ext/build
           cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
-            -S "$DIR" -B "$DIR/build"
-          cmake --build "$DIR/build" -j$(nproc)
-          mkdir -p ext/libevent/include ext/libevent/lib
-          cp -r "$DIR/include/"* ext/libevent/include/
-          cp "$DIR/build/lib/libevent.a" ext/libevent/lib/libevent_core.a
-          cp "$DIR/build/include/event2/event-config.h" ext/libevent/include/event2/ 2>/dev/null || true
-          rm -rf "$DIR"
-          echo "libevent: $(ls ext/libevent/lib/)"
+            -S ext -B ext/build
+          cmake --build ext/build -j$(nproc)
+
+          echo "=== Results ==="
+          find ext/lib -name "*.a" 2>/dev/null
+
+          # 清理源码
+          rm -rf ext/libevent/package
 
       - name: Download PHP
         run: |
@@ -179,6 +180,298 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tinyphp-linux-x86_64
+          path: release
+
+  # ============================================================
+  # Linux aarch64 — GCC 编译 TCC (mob 分支)
+  # ============================================================
+  linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-aarch64-glibc.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-linux-aarch64-glibc.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-aarch64.zip
+      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc make
+
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
+
+      - name: Build EXTS
+        run: |
+          echo "=== Downloading libevent ==="
+          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
+          unzip -q libevent.zip
+          mv libevent-* ext/libevent/package
+
+          echo "=== Building all exts ==="
+          mkdir -p ext/build
+          cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
+            -S ext -B ext/build
+          cmake --build ext/build -j$(nproc)
+
+          echo "=== Results ==="
+          find ext/lib -name "*.a" 2>/dev/null
+
+          # 清理源码
+          rm -rf ext/libevent/package
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: Download MICRO
+        run: |
+          curl -fsSL -o micro.zip "$MICRO_URL"
+          unzip -q micro.zip
+          chmod +x micro.sfx
+
+      - name: BUILD PHAR
+        run: |
+          ./php -d "phar.readonly=0" build.php
+          cat micro.sfx tphp.phar > tphp
+          chmod +x tphp
+
+      - name: Test
+        run: |
+          ./tphp test/main/min.php
+          ./min
+
+      - name: Package
+        run: |
+          mkdir -p release/tphp
+          cp tphp release/tphp/
+          chmod +x release/tphp/tphp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-linux-aarch64
+          path: release
+
+  # ============================================================
+  # macOS aarch64 — clang 编译 TCC (mob 分支)
+  # ============================================================
+  macos-aarch64:
+    runs-on: macos-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-macos-aarch64.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-macos-aarch64.zip
+      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
+
+      - name: Build EXTS
+        run: |
+          echo "=== Downloading libevent ==="
+          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
+          unzip -q libevent.zip
+          mv libevent-* ext/libevent/package
+
+          echo "=== Building all exts ==="
+          mkdir -p ext/build
+          cmake -DCMAKE_C_COMPILER=cc -DCMAKE_BUILD_TYPE=Release \
+            -S ext -B ext/build
+          cmake --build ext/build -j$(sysctl -n hw.ncpu)
+
+          echo "=== Results ==="
+          find ext/lib -name "*.a" 2>/dev/null
+
+          # 清理源码
+          rm -rf ext/libevent/package
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: Download MICRO
+        run: |
+          curl -fsSL -o micro.zip "$MICRO_URL"
+          unzip -q micro.zip
+          chmod +x micro.sfx
+
+      - name: BUILD PHAR
+        run: |
+          ./php -d "phar.readonly=0" build.php
+          cat micro.sfx tphp.phar > tphp
+          chmod +x tphp
+
+      - name: Test
+        run: |
+          ./tphp test/main/min.php
+          ./min
+
+      - name: Package
+        run: |
+          mkdir -p release/tphp
+          cp tphp release/tphp/
+          chmod +x release/tphp/tphp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-macos-aarch64
+          path: release
+
+  # ============================================================
+  # Linux aarch64 — GCC 编译 TCC (mob 分支)
+  # ============================================================
+  linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-aarch64-glibc.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-linux-aarch64-glibc.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-aarch64.zip
+      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc make
+
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
+
+      - name: Build EXTS
+        run: |
+          echo "=== Downloading libevent ==="
+          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
+          unzip -q libevent.zip
+          mv libevent-* ext/libevent/package
+
+          echo "=== Building all exts ==="
+          mkdir -p ext/build
+          cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
+            -S ext -B ext/build
+          cmake --build ext/build -j$(nproc)
+
+          echo "=== Results ==="
+          find ext/lib -name "*.a" 2>/dev/null
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: Download MICRO
+        run: |
+          curl -fsSL -o micro.zip "$MICRO_URL"
+          unzip -q micro.zip
+          chmod +x micro.sfx
+
+      - name: BUILD PHAR
+        run: |
+          ./php -d "phar.readonly=0" build.php
+          cat micro.sfx tphp.phar > tphp
+          chmod +x tphp
+
+      - name: Test
+        run: |
+          ./tphp test/main/min.php
+          ./min
+
+      - name: Package
+        run: |
+          mkdir -p release/tphp
+          cp tphp release/tphp/
+          chmod +x release/tphp/tphp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-linux-aarch64
+          path: release
+
+  # ============================================================
+  # macOS aarch64 — clang 编译 TCC (mob 分支)
+  # ============================================================
+  macos-aarch64:
+    runs-on: macos-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
+      MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-macos-aarch64.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-macos-aarch64.zip
+      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
+
+      - name: Build EXTS
+        run: |
+          echo "=== Downloading libevent ==="
+          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
+          unzip -q libevent.zip
+          mv libevent-* ext/libevent/package
+
+          echo "=== Building all exts ==="
+          mkdir -p ext/build
+          cmake -DCMAKE_C_COMPILER=cc -DCMAKE_BUILD_TYPE=Release \
+            -S ext -B ext/build
+          cmake --build ext/build -j$(sysctl -n hw.ncpu)
+
+          echo "=== Results ==="
+          find ext/lib -name "*.a" 2>/dev/null
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: Download MICRO
+        run: |
+          curl -fsSL -o micro.zip "$MICRO_URL"
+          unzip -q micro.zip
+          chmod +x micro.sfx
+
+      - name: BUILD PHAR
+        run: |
+          ./php -d "phar.readonly=0" build.php
+          cat micro.sfx tphp.phar > tphp
+          chmod +x tphp
+
+      - name: Test
+        run: |
+          ./tphp test/main/min.php
+          ./min
+
+      - name: Package
+        run: |
+          mkdir -p release/tphp
+          cp tphp release/tphp/
+          chmod +x release/tphp/tphp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinyphp-macos-aarch64
           path: release
 
   # ============================================================
