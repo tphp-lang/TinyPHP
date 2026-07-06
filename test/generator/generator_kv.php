@@ -1,4 +1,4 @@
-<?php // @skip:macos+tcc
+<?php 
 #debug string(1) "a"
 #debug int(10)
 #debug string(1) "b"

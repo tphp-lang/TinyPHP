@@ -697,6 +697,16 @@ if (PHP_OS_FAMILY === 'Darwin' && $isTCC) {
 }
 
 $allCFiles = array_unique(array_merge($userCFiles, $extraCFiles, $importCFiles));
+// macOS + TCC: 链接独立 ARM64 汇编文件（替代内联 ASM）
+if (PHP_OS_FAMILY === 'Darwin' && $isTCC) {
+    $arch = php_uname('m');
+    if ($arch === 'arm64' || $arch === 'aarch64') {
+        $mcoAsm = $includeDir . DIRECTORY_SEPARATOR . 'mco_arm64_macos.s';
+        if (file_exists($mcoAsm)) {
+            $allCFiles[] = $mcoAsm;
+        }
+    }
+}
 $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
 // Linux needs -lm for math functions (round, ceil, floor, sqrt, pow, etc.)
 $linkFlags = '';
