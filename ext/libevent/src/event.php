@@ -1,18 +1,17 @@
 <?php
 // ext/libevent/src/event.php — libevent wrapper for TinyPHP
 //
-// Provides EventBase and Event classes that wrap libevent C API.
-// C functions use opaque pointers; PHP classes manage object lifecycle.
+// C functions use tphp_fn_ prefix, PHP calls them directly.
+// Opaque pointers hide libevent internals.
 
 #flag -I__EXT__ . "/libevent/include"
 #flag -L__EXT__ . "/libevent/lib"
 #flag -l event_core
 #include __EXT__ . "libevent/src/event.h"
 
-// ── EventBase class ──
+// ── EventBase ──
 class EventBase {
-    /** @var t_event_base */
-    private t_event_base $base;
+    private $base;
 
     public function __construct() {
         $this->base = C->tphp_fn_event_base_new();
@@ -29,19 +28,11 @@ class EventBase {
     public function loopBreak(): int {
         return C->tphp_fn_event_base_loopbreak($this->base);
     }
-
-    public function __destruct() {
-        if ($this->base !== null) {
-            C->tphp_fn_event_base_free($this->base);
-            $this->base = null;
-        }
-    }
 }
 
-// ── Event class ──
+// ── Event ──
 class Event {
-    /** @var t_event */
-    private t_event $ev;
+    private $ev;
 
     public function __construct(EventBase $base, int $fd, int $events, callable $callback) {
         $this->ev = C->tphp_fn_event_new($base, $fd, $events, $callback, null);
@@ -58,19 +49,11 @@ class Event {
     public function pending(int $events): int {
         return C->tphp_fn_event_pending($this->ev, $events);
     }
-
-    public function __destruct() {
-        if ($this->ev !== null) {
-            C->tphp_fn_event_free($this->ev);
-            $this->ev = null;
-        }
-    }
 }
 
-// ── EventBuffer class ──
+// ── EventBuffer ──
 class EventBuffer {
-    /** @var t_event_buffer */
-    private t_event_buffer $buf;
+    private $buf;
 
     public function __construct() {
         $this->buf = C->tphp_fn_event_buffer_new();
@@ -92,13 +75,6 @@ class EventBuffer {
 
     public function length(): int {
         return C->tphp_fn_event_buffer_length($this->buf);
-    }
-
-    public function __destruct() {
-        if ($this->buf !== null) {
-            C->tphp_fn_event_buffer_free($this->buf);
-            $this->buf = null;
-        }
     }
 }
 
