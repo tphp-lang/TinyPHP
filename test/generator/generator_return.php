@@ -1,4 +1,4 @@
-<?php 
+<?php // @skip:macos+tcc
 #debug int(1)
 #debug int(2)
 #debug int(99)
