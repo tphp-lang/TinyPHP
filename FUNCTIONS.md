@@ -694,7 +694,7 @@ var_dump($gen->send(100));   // 101
 | 约束 | 说明 |
 |------|------|
 | `callable` 参数须用闭包 | `gen(1, 3, "apply")` 不可行——字符串是运行时数据，编译期无法解析为函数符号。须用 `gen(1, 3, fn($x) => apply($x))` |
-| macOS + TCC stub | TCC 的 `ucontext_t` 布局与 Apple Silicon 不匹配，Generator 方法返回默认值。GCC/Clang 走 ASM 路径正常工作 |
+| macOS + TCC | **不支持**，编译时报错。TCC 的 `ucontext_t` 布局与 Apple Silicon 不匹配，请使用 `-cc gcc` 或 `-cc clang` |
 
 ### 平台支持
 
@@ -703,7 +703,7 @@ var_dump($gen->send(100));   // 101
 | Windows x86_64 | Win32 Fiber | ASM |
 | Linux x86_64 | ucontext | ASM |
 | Linux aarch64 | ucontext | ASM |
-| macOS aarch64 | stub（不工作） | ASM |
+| macOS aarch64 + TCC | **不支持**（编译报错） | ASM |
 
 ---
 

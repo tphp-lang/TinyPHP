@@ -2,6 +2,8 @@
   <img src="./favicon.svg" width="300" height="300" alt="TinyPHP logo">
 </p>
 
+[![zread](https://img.shields.io/badge/Ask_Zread-_.svg?style=flat&color=00b0aa&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTQuOTYxNTYgMS42MDAxSDIuMjQxNTZDMS44ODgxIDEuNjAwMSAxLjYwMTU2IDEuODg2NjQgMS42MDE1NiAyLjI0MDFWNC45NjAxQzEuNjAxNTYgNS4zMTM1NiAxLjg4ODEgNS42MDAxIDIuMjQxNTYgNS42MDAxSDQuOTYxNTZDNS4zMTUwMiA1LjYwMDEgNS42MDE1NiA1LjMxMzU2IDUuNjAxNTYgNC45NjAxVjIuMjQwMUM1LjYwMTU2IDEuODg2NjQgNS4zMTUwMiAxLjYwMDEgNC45NjE1NiAxLjYwMDFaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00Ljk2MTU2IDEwLjM5OTlIMi4yNDE1NkMxLjg4ODEgMTAuMzk5OSAxLjYwMTU2IDEwLjY4NjQgMS42MDE1NiAxMS4wMzk5VjEzLjc1OTlDMS42MDE1NiAxNC4xMTM0IDEuODg4MSAxNC4zOTk5IDIuMjQxNTYgMTQuMzk5OUg0Ljk2MTU2QzUuMzE1MDIgMTQuMzk5OSA1LjYwMTU2IDE0LjExMzQgNS42MDE1NiAxMy43NTk5VjExLjAzOTlDNS42MDE1NiAxMC42ODY0IDUuMzE1MDIgMTAuMzk5OSA0Ljk2MTU2IDEwLjM5OTlaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik0xMy43NTg0IDEuNjAwMUgxMS4wMzg0QzEwLjY4NSAxLjYwMDEgMTAuMzk4NCAxLjg4NjY0IDEwLjM5ODQgMi4yNDAxVjQuOTYwMUMxMC4zOTg0IDUuMzEzNTYgMTAuNjg1IDUuNjAwMSAxMS4wMzg0IDUuNjAwMUgxMy43NTg0QzE0LjExMTkgNS42MDAxIDE0LjM5ODQgNS4zMTM1NiAxNC4zOTg0IDQuOTYwMVYyLjI0MDFDMTQuMzk4NCAxLjg4NjY0IDE0LjExMTkgMS42MDAxIDEzLjc1ODQgMS42MDAxWiIgZmlsbD0iI2ZmZiIvPgo8cGF0aCBkPSJNNCAxMkwxMiA0TDQgMTJaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00IDEyTDEyIDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K&logoColor=ffffff)](https://zread.ai/tphp-lang/TinyPHP)
+
 # TinyPHP
 
 > **PHP → C AOT 编译器** — 用 PHP 语法写原生二进制，零运行时依赖，性能飙 300-500 倍。
@@ -182,7 +184,7 @@ use MyApp\Models\User;
 |--------|----------|---------|------|
 | `callable` 参数传字符串函数名 | `gen(1, 3, "apply")` 可行 | 不可行，须用闭包 `gen(1, 3, fn($x) => apply($x))` | AOT 编译期无法将运行时字符串解析为函数符号 |
 | 实现机制 | Zend VM 内部 Generator 对象 | minicoro 协程（ASM/ucontext/Fiber） | AOT 无运行时 VM，需独立协程库 |
-| macOS + TCC | 正常 | stub 实现，方法返回默认值 | TCC 的 `ucontext_t` 布局与 Apple Silicon 不匹配；GCC/Clang 走 ASM 路径正常 |
+| macOS + TCC | 正常 | **不支持**，编译时报错 | TCC 的 `ucontext_t` 布局与 Apple Silicon 不匹配；建议使用 `-cc gcc` 或 `-cc clang` |
 | 不使用 yield 的函数 | 无差异 | 零开销，编译为普通函数 | 双函数变换：生成器函数 → 协程入口 + 包装器，普通函数不受影响 |
 
 支持的 yield 形态：`yield $v`、`yield $k => $v`、`return $v`（配合 `getReturn()`）、`send($v)` 双向传值。详见 [FUNCTIONS.md](FUNCTIONS.md)。
