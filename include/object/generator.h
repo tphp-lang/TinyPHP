@@ -13,7 +13,7 @@
 //   平台支持：
 //     Windows + GCC/Clang → ASM    |  Windows + TCC → Win32 Fiber
 //     Linux   + GCC/Clang → ASM    |  Linux   + TCC → ucontext
-//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → STUB (ucontext 损坏)
+//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → ASM（强制 MCO_USE_ASM）
 // ============================================================
 
 #include "object/object.h"
@@ -21,40 +21,25 @@
 
 /* ── minicoro 平台选择 ──────────────────────────────────── */
 
-#if defined(__APPLE__) && defined(__TINYC__)
 /*
- * Stub: TCC on macOS — ucontext 布局不匹配 Apple Silicon，运行时 segfault。
+ * TCC on macOS: 强制启用 ASM 路径（实验性）。
  *
- * 检测条件说明：
- *   早期用 !defined(__GNUC__) 检测 TCC，但 TCC 为 GCC 兼容性会定义 __GNUC__
- *   （值为 2，< 3，使 minicoro 走 ucontext 而非 ASM 路径），导致 stub 失效、
- *   真实 minicoro 被编译，运行时 ucontext 崩溃。
- *   改用 __TINYC__（TCC 唯一可靠身份标识，见 tcc.h 与官方文档）。
+ * 背景：TCC 为 Apple 头文件兼容性定义 __GNUC__ = 2（< 3），
+ * 导致 minicoro 的 ASM 检测（__GNUC__ >= 3）失败，回退到 ucontext。
+ * 但 TCC 的 ucontext_t 布局与 Apple Silicon ABI 不匹配 → 段错误。
  *
- * GCC/Clang on macOS 走 ASM 路径，正常工作。
- * 此 stub 让编译通过，运行时 Generator 方法返回默认值。
+ * 修复：手动定义 MCO_USE_ASM，绕过 __GNUC__ 检查，让 TCC 直接编译
+ * ARM64 汇编（stp/ldp/mov/br 指令，TCC 的 arm64 汇编器应支持）。
+ *
+ * 兼容性：Apple 平台用 __arm64__，minicoro 检测 __aarch64__，
+ * 若前者定义而后者未定义，补定义 __aarch64__ 以通过架构检测。
  */
-typedef struct mco_coro_t_stub { int _unused; } mco_coro;
-typedef struct { void (*func)(mco_coro*); void* user_data; } mco_desc;
-typedef int mco_result;
-typedef int mco_state;
-#define MCO_SUCCESS   0
-#define MCO_DEAD      0
-#define MCO_SUSPENDED 3
-static inline mco_desc mco_desc_init(void (*f)(mco_coro*), size_t s) { mco_desc d = {f, NULL}; (void)s; return d; }
-static inline mco_result mco_create(mco_coro** out, mco_desc* d) { *out = NULL; (void)d; return MCO_SUCCESS; }
-static inline mco_result mco_destroy(mco_coro* co) { (void)co; return MCO_SUCCESS; }
-static inline mco_result mco_resume(mco_coro* co) { (void)co; return MCO_SUCCESS; }
-static inline mco_result mco_yield(mco_coro* co) { (void)co; return MCO_SUCCESS; }
-static inline mco_state mco_status(mco_coro* co) { (void)co; return MCO_DEAD; }
-static inline void* mco_get_user_data(mco_coro* co) { (void)co; return NULL; }
-static inline mco_result mco_push(mco_coro* co, const void* s, size_t l) { (void)co; (void)s; (void)l; return MCO_SUCCESS; }
-static inline mco_result mco_pop(mco_coro* co, void* d, size_t l) { (void)co; (void)d; (void)l; return MCO_SUCCESS; }
-static inline size_t mco_get_bytes_stored(mco_coro* co) { (void)co; return 0; }
-static inline mco_coro* mco_running(void) { return NULL; }
-
-#else
-/* 真实 minicoro 实现 */
+#if defined(__APPLE__) && defined(__TINYC__)
+  #if defined(__arm64__) && !defined(__aarch64__)
+    #define __aarch64__ 1
+  #endif
+  #define MCO_USE_ASM
+#endif
 
 /* TCC on Windows: kernel32.def 缺少 CreateFiberEx。
  * x86_64 Windows 上 OS 总是保存 FP 状态，FIBER_FLAG_FLOAT_SWITCH 冗余，
@@ -70,8 +55,6 @@ static inline mco_coro* mco_running(void) { return NULL; }
 /* 单 TU 编译：在此定义 MINICORO_IMPL 以包含实现 */
 #define MINICORO_IMPL
 #include "minicoro.h"
-
-#endif /* __APPLE__ && __TINYC__ */
 
 /* ── yield 协议结构体 ──────────────────────────────────── */
 typedef struct {
@@ -162,9 +145,7 @@ static inline void _gen_resume_and_cache(tphp_class_Generator* self, t_var sent_
 
 void tphp_class_Generator___destruct(tphp_class_Generator* self) {
     if (self && self->co) {
-        #if !defined(__APPLE__) || !defined(__TINYC__)
         mco_destroy(self->co);
-        #endif
         self->co = NULL;
     }
 }

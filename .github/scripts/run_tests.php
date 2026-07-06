@@ -8,6 +8,10 @@ $testDir = getenv('GITHUB_WORKSPACE') ?: dirname(__DIR__, 2);
 $phpExe  = PHP_OS_FAMILY === 'Windows' ? 'php.exe' : './php';
 $tphp    = $testDir . DIRECTORY_SEPARATOR . 'tphp.php';
 
+// 平台 & 编译器
+$platform = PHP_OS_FAMILY . ' ' . php_uname('m');
+$compiler = $ccFlag ? ltrim(str_replace('-cc ', '', $ccFlag)) : 'tcc';
+
 // 收集所有含 #debug 的测试文件（排除 @skip）
 $testFiles = [];
 $iter = new RecursiveIteratorIterator(
@@ -24,8 +28,6 @@ foreach ($iter as $file) {
 sort($testFiles);
 
 // 运行测试
-$platform = PHP_OS_FAMILY . ' ' . php_uname('m');
-$compiler = $ccFlag ? ltrim(str_replace('-cc ', '', $ccFlag)) : 'tcc';
 echo "Platform: $platform | Compiler: $compiler\n";
 echo "Tests: " . count($testFiles) . "\n\n";
 
