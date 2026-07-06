@@ -518,6 +518,7 @@ __TRAIT__             ❌
 ```
 c_call:
     'C->' IDENTIFIER '(' args ')'   ✅ (直接 C 函数调用)
+  | 'C->' IDENTIFIER                ✅ (直接 C 常量/枚举/宏访问，无括号)
 
 c_type_bridge:
     'c_int(' expr ')'     ✅ → int32_t
@@ -586,6 +587,7 @@ phpc_memory:
 | `#callback type name(params)` | 声明 C 回调签名 |
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
 | `C->func(args)` | 直接 C 函数调用 |
+| `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
 | `c_int/c_float/c_str` | PHP → C 类型桥接 |
 | `php_int/php_float/php_str` | C → PHP 类型桥接 |
 | `phpc_arr_*` `phpc_obj` `phpc_fn_*` `phpc_thunk` | 数组/对象/回调互操作 |

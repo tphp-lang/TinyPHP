@@ -226,7 +226,7 @@ TCC 亚秒编译，GCC/Clang -O2 带来 3-10 倍额外提速。`compat.h` 统一
 
 ### C 互操作（PHPC）
 
-完整的 PHP ↔ C 双向互操作：`C->function(args)` 直接调用 C 函数，`c_int/c_str` 类型桥接，数组/对象/回调互操作。详见下方 PHPC 章节。
+完整的 PHP ↔ C 双向互操作：`C->function(args)` 直接调用 C 函数，`C->CONST` 直接访问 C 枚举/宏常量，`c_int/c_str` 类型桥接，数组/对象/回调互操作。详见下方 PHPC 章节。
 
 ### 扩展系统
 
@@ -247,7 +247,7 @@ class Main {
 
 ## C 互操作（PHPC）
 
-> 完整实现：`include/phpc.h`（~180 行），通过 `#include`/`#flag`/`C->call`/`c_*`/`php_*`/`phpc_*` 实现 PHP ↔ C 双向互操作。所有 phpc 函数为**全局函数**，不受命名空间 mangle。测试：`test/phpc/`。
+> 完整实现：`include/phpc.h`（~180 行），通过 `#include`/`#flag`/`C->call`/`C->CONST`/`c_*`/`php_*`/`phpc_*` 实现 PHP ↔ C 双向互操作。所有 phpc 函数为**全局函数**，不受命名空间 mangle。测试：`test/phpc/`。
 
 ### 编译控制
 
@@ -311,6 +311,20 @@ c_str($s)   → const char*  php_str(s)  → t_string (深拷贝)
 ```
 
 直接 C 调用：`C->function(args)` → 生成原生 `function(args)`，无 `tphp_fn_` 前缀。
+
+直接 C 常量/枚举/宏访问：`C->CONST`（无括号）→ 生成原生 C 标识符，按 `t_int` 推断类型。需配合 `#include "header.h"` 引入定义。
+
+```php
+#include "include/cconst.h"
+
+class Main {
+    public function main(): void {
+        var_dump(C->COLOR_RED);    // C 枚举值 → int(0)
+        var_dump(C->MAX_SIZE);     // C #define 宏 → int(1024)
+        $total = C->COLOR_RED + C->COLOR_GREEN;  // 表达式中使用
+    }
+}
+```
 
 ### 数组互操作
 

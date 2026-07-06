@@ -1059,7 +1059,8 @@ class CodeGenerator implements ASTVisitor
             $cutParams = array_slice($node->params, 0, $cutIdx);
 
             // 重载函数参数列表（包含 self）
-            $overloadParams = ['tphp_class_' . $cn . '* self'];
+            // 注意：$cn 已是 classCName() 返回值（含 tphp_class_ 前缀），不再重复添加
+            $overloadParams = [$cn . '* self'];
             foreach ($cutParams as $p) {
                 $overloadParams[] = self::paramDecl($p);
             }
@@ -1456,6 +1457,10 @@ class CodeGenerator implements ASTVisitor
             return $this->enumCTypes[$expr->enumName] ?? 't_int';
         }
         if ($expr instanceof PropertyAccessExpr) {
+            // C->CONST — C constant/enum/macro, default to t_int
+            if ($expr->object instanceof VariableExpr && $expr->object->name === 'C') {
+                return 't_int';
+            }
             $objKey = ($expr->object instanceof VariableExpr) ? self::varName($expr->object->name) : '';
             $objType = $this->varTypes[$objKey] ?? '';
             // 链式数组访问: $catalog[0][0]->prop — 用 inferType 推导对象类型
@@ -1703,6 +1708,10 @@ class CodeGenerator implements ASTVisitor
             if ($expr->name === 'preg_quote')     return 't_string';
             if ($expr->name === 'preg_last_error')     return 't_int';
             if ($expr->name === 'preg_last_error_msg') return 't_string';
+            // libevent 扩展函数返回类型
+            if ($expr->name === 'event_base_get_method') return 't_string';
+            if ($expr->name === 'evbuffer_read')         return 't_string';
+            if ($expr->name === 'evbuffer_readln')       return 't_string';
         }
         // 闭包调用 → 查 closureSigs
         if ($expr->name === '__invoke' && $expr->callee instanceof VariableExpr) {
@@ -1867,6 +1876,10 @@ class CodeGenerator implements ASTVisitor
     /** 获取属性类型（通过 classPropTypes 查找） */
     private function getPropType(PropertyAccessExpr $pa): string
     {
+        // C->CONST — C constant/enum/macro, default to t_int
+        if ($pa->object instanceof VariableExpr && $pa->object->name === 'C') {
+            return 't_int';
+        }
         $objKey = ($pa->object instanceof VariableExpr) ? self::varName($pa->object->name) : '';
         $objType = ($objKey === '$this' || $objKey === 'self')
             ? $this->className
@@ -3450,6 +3463,10 @@ class CodeGenerator implements ASTVisitor
 
     public function visitPropertyAccess(PropertyAccessExpr $node): string
     {
+        // C->CONST — direct C constant/enum/macro access (no parentheses)
+        if ($node->object instanceof VariableExpr && $node->object->name === 'C') {
+            return $node->property;
+        }
         $obj = $node->object->accept($this);
         $prop = ltrim($node->property, '$');
         // COS inheritance: resolve property through _parent chain

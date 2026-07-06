@@ -219,6 +219,26 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             },
             (string)$src
         );
+        // Preprocess: expand magic constants in #flag directives
+        $src = preg_replace_callback(
+            '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/m',
+            function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
+                $prefix = $m[1];
+                $flags = $m[2];
+                // Expand magic constants
+                $flags = str_replace('__DIR__', str_replace('\\', '/', $fileDir), $flags);
+                $flags = str_replace('__EXT__', $magicExt, $flags);
+                $flags = str_replace('__INC__', $magicInc, $flags);
+                $flags = str_replace('__CMD__', $magicCmd, $flags);
+                // Handle string concatenation: -I__EXT__ . "/libevent/include" → -I__EXT__/libevent/include
+                $flags = preg_replace('/\s*\.\s*"/', '', $flags);
+                $flags = preg_replace('/"\s*\.\s*/', '', $flags);
+                $flags = str_replace('"', '', $flags);  // remove remaining quotes
+                $flags = str_replace('\\', '/', $flags);
+                return $prefix . $flags;
+            },
+            (string)$src
+        );
         if (preg_match_all('/^#import\s+(\w+)/m', (string)$src, $m)) {
             foreach ($m[1] as $extName) {
                 if (isset($importedExts[$extName])) continue;  // 已导入，跳过
@@ -292,6 +312,25 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 $inc = preg_replace('/"\s*\.\s*/', '', $inc);
                 $inc = trim($inc, '" ');
                 return $m[1] . '"' . $inc . '"';
+            },
+            (string)$source
+        );
+        // Preprocess: expand magic constants in #flag directives
+        $source = preg_replace_callback(
+            '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/m',
+            function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
+                $prefix = $m[1];
+                $flags = $m[2];
+                $flags = str_replace('__DIR__', str_replace('\\', '/', $fileDir), $flags);
+                $flags = str_replace('__EXT__', $magicExt, $flags);
+                $flags = str_replace('__INC__', $magicInc, $flags);
+                $flags = str_replace('__CMD__', $magicCmd, $flags);
+                // Handle string concatenation: -I__EXT__ . "/libevent/include" → -I__EXT__/libevent/include
+                $flags = preg_replace('/\s*\.\s*"/', '', $flags);
+                $flags = preg_replace('/"\s*\.\s*/', '', $flags);
+                $flags = str_replace('"', '', $flags);
+                $flags = str_replace('\\', '/', $flags);
+                return $prefix . $flags;
             },
             (string)$source
         );

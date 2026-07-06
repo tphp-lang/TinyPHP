@@ -27,8 +27,8 @@
 | `include/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
-| C 互操作 (PHPC) | `phpc.h` | 24 |
-| **合计** | | **247+** |
+| C 互操作 (PHPC) | `phpc.h` | 25 |
+| **合计** | | **248+** |
 
 ---
 
@@ -716,6 +716,7 @@ var_dump($gen->send(100));   // 101
 | `c_int($x) / c_float($x) / c_str($s)` | PHP → C | → `int32_t` / `double` / `const char*` |
 | `php_int($x) / php_float($x) / php_str($s)` | C → PHP | → `t_int` / `t_float` / `t_string` |
 | `C->func(args)` | 直接 C 调用 | 无 name mangling |
+| `C->CONST` | 直接 C 常量/枚举/宏访问 | 无括号形式，按 `t_int` 推断 |
 | `#include "file.h"` | 预处理器 | 生成 `#include` |
 | `#flag [CC] [OS] flags` | 预处理器 | 平台+编译器过滤 |
 | `#callback type name(params)` | 预处理器 | 声明 C 回调签名 |

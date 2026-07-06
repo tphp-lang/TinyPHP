@@ -203,7 +203,8 @@ class Lexer
             }
             // #flag [GCC|Clang|TCC] [Windows|Linux|MacOS] [-D...] [-l...]
             // 最多两个前缀：编译器 + 平台，顺序不限
-            if (preg_match('/^#flag\s+(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s+(.+?)(?=\n|$)/', $rest, $m)) {
+            // 注意：无前缀时 \s* 而非 \s+ — 允许 #flag -DNDEBUG 形式
+            if (preg_match('/^#flag\s+(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(.+?)(?=\n|$)/', $rest, $m)) {
                 $pf1 = $m[1] ?: '';
                 $pf2 = $m[2] ?: '';
                 $flags = trim($m[3]);
