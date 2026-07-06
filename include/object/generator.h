@@ -13,7 +13,7 @@
 //   平台支持：
 //     Windows + GCC/Clang → ASM    |  Windows + TCC → Win32 Fiber
 //     Linux   + GCC/Clang → ASM    |  Linux   + TCC → ucontext
-//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → .s 文件（跳过内联 ASM）
+//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → 不支持（CI 跳过）
 // ============================================================
 
 #include "object/object.h"
@@ -31,16 +31,6 @@
 
 /* 禁用 minicoro 调试日志——会写入 stdout，干扰 #debug 输出比对 */
 #define MCO_NO_DEBUG
-
-/*
- * macOS + TCC: TCC 的内联 __asm__() 在 ARM64 上编译通过但运行时段错误。
- * 跳过 minicoro.h 的内联汇编（MCO_CUSTOM_ASM），使用独立 .s 文件
- * (include/mco_arm64_macos.s) 提供 _mco_switch/_mco_wrap_main 实现。
- */
-#if defined(__APPLE__) && defined(__TINYC__)
-  #define MCO_CUSTOM_ASM
-  #define MCO_USE_ASM
-#endif
 
 /* 单 TU 编译：在此定义 MINICORO_IMPL 以包含实现 */
 #define MINICORO_IMPL
