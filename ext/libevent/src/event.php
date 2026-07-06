@@ -1,8 +1,8 @@
 <?php
-// ext/libevent/src/event.php — libevent wrapper for TinyPHP
+// ext/libevent/src/event.php — libevent object classes for TinyPHP
 //
-// C functions use tphp_fn_ prefix, PHP calls them directly.
-// Opaque pointers hide libevent internals.
+// C structs use tphp_class_ pattern with t_object header.
+// PHP classes call tphp_class_* methods via object dispatch.
 
 #flag -I__EXT__ . "/libevent/include"
 #flag -L__EXT__ . "/libevent/lib"
@@ -11,70 +11,83 @@
 
 // ── EventBase ──
 class EventBase {
+    /** @var resource */
     private $base;
 
     public function __construct() {
-        $this->base = C->tphp_fn_event_base_new();
+        C->tphp_class_EventBase___construct($this);
     }
 
     public function dispatch(): int {
-        return C->tphp_fn_event_base_dispatch($this->base);
+        return C->tphp_class_EventBase_dispatch($this);
     }
 
     public function loop(int $flags = 0): int {
-        return C->tphp_fn_event_base_loop($this->base, $flags);
+        return C->tphp_class_EventBase_loop($this, $flags);
     }
 
     public function loopBreak(): int {
-        return C->tphp_fn_event_base_loopbreak($this->base);
+        return C->tphp_class_EventBase_loopBreak($this);
+    }
+
+    public function __destruct() {
+        C->tphp_class_EventBase___destruct($this);
     }
 }
 
 // ── Event ──
 class Event {
+    /** @var resource */
     private $ev;
 
     public function __construct(EventBase $base, int $fd, int $events, callable $callback) {
-        $this->ev = C->tphp_fn_event_new($base, $fd, $events, $callback, null);
+        C->tphp_class_Event___construct($this, $base, $fd, $events, $callback);
     }
 
     public function add(int $timeoutMs = 0): int {
-        return C->tphp_fn_event_add($this->ev, $timeoutMs);
+        return C->tphp_class_Event_add($this, $timeoutMs);
     }
 
     public function del(): int {
-        return C->tphp_fn_event_del($this->ev);
+        return C->tphp_class_Event_del($this);
     }
 
     public function pending(int $events): int {
-        return C->tphp_fn_event_pending($this->ev, $events);
+        return C->tphp_class_Event_pending($this, $events);
+    }
+
+    public function __destruct() {
+        C->tphp_class_Event___destruct($this);
     }
 }
 
 // ── EventBuffer ──
 class EventBuffer {
+    /** @var resource */
     private $buf;
 
     public function __construct() {
-        $this->buf = C->tphp_fn_event_buffer_new();
+        C->tphp_class_EventBuffer___construct($this);
     }
 
     public function add(string $data): int {
-        return C->tphp_fn_event_buffer_add($this->buf, $data, strlen($data));
+        return C->tphp_class_EventBuffer_add($this, $data);
     }
 
     public function drain(int $len): int {
-        return C->tphp_fn_event_buffer_drain($this->buf, $len);
+        return C->tphp_class_EventBuffer_drain($this, $len);
     }
 
     public function remove(int $len): string {
-        $buf = str_repeat("\0", $len);
-        C->tphp_fn_event_buffer_remove($this->buf, $buf, $len);
-        return $buf;
+        return C->tphp_class_EventBuffer_remove($this, $len);
     }
 
     public function length(): int {
-        return C->tphp_fn_event_buffer_length($this->buf);
+        return C->tphp_class_EventBuffer_length($this);
+    }
+
+    public function __destruct() {
+        C->tphp_class_EventBuffer___destruct($this);
     }
 }
 
