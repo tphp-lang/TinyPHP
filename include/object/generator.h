@@ -21,10 +21,17 @@
 
 /* ── minicoro 平台选择 ──────────────────────────────────── */
 
-#if defined(__APPLE__) && !defined(__GNUC__)
+#if defined(__APPLE__) && defined(__TINYC__)
 /*
  * Stub: TCC on macOS — ucontext 布局不匹配 Apple Silicon，运行时 segfault。
- * GCC/Clang on macOS 定义 __GNUC__，走 ASM 路径，正常工作。
+ *
+ * 检测条件说明：
+ *   早期用 !defined(__GNUC__) 检测 TCC，但 TCC 为 GCC 兼容性会定义 __GNUC__
+ *   （值为 2，< 3，使 minicoro 走 ucontext 而非 ASM 路径），导致 stub 失效、
+ *   真实 minicoro 被编译，运行时 ucontext 崩溃。
+ *   改用 __TINYC__（TCC 唯一可靠身份标识，见 tcc.h 与官方文档）。
+ *
+ * GCC/Clang on macOS 走 ASM 路径，正常工作。
  * 此 stub 让编译通过，运行时 Generator 方法返回默认值。
  */
 typedef struct mco_coro_t_stub { int _unused; } mco_coro;
@@ -64,7 +71,7 @@ static inline mco_coro* mco_running(void) { return NULL; }
 #define MINICORO_IMPL
 #include "minicoro.h"
 
-#endif /* __APPLE__ && !__GNUC__ */
+#endif /* __APPLE__ && __TINYC__ */
 
 /* ── yield 协议结构体 ──────────────────────────────────── */
 typedef struct {
@@ -155,7 +162,7 @@ static inline void _gen_resume_and_cache(tphp_class_Generator* self, t_var sent_
 
 void tphp_class_Generator___destruct(tphp_class_Generator* self) {
     if (self && self->co) {
-        #if !defined(__APPLE__) || defined(__GNUC__)
+        #if !defined(__APPLE__) || !defined(__TINYC__)
         mco_destroy(self->co);
         #endif
         self->co = NULL;
