@@ -1,27 +1,19 @@
 /*
  * mco_arm64_macos.s — minicoro context switch for macOS ARM64
  *
- * Extracted from minicoro.h inline ASM to work around TCC's inability
- * to handle file-scope __asm__() blocks on ARM64 macOS.
- *
- * Symbols use single-underscore prefix (macOS C ABI convention).
- * Compiled by TCC's assembler: tcc -c mco_arm64_macos.s
+ * Provides both single-underscore (_mco_switch) and double-underscore
+ * (__mco_switch) symbols to satisfy both:
+ *   - My minicoro-lite code (single underscore, extern declarations)
+ *   - minicoro.h inline ASM references (double underscore, macOS C ABI)
  */
 
 .text
 
-/* int _mco_switch(_mco_ctxbuf* from, _mco_ctxbuf* to)
- * Save current callee-saved registers into 'from', restore from 'to'.
- * _mco_ctxbuf layout (arm64):
- *   offset  0: x19-x30  (12 * 8 = 96 bytes)
- *   offset 96: sp        (8 bytes)
- *   offset 104: lr       (8 bytes)
- *   offset 112: d8-d15   (8 * 8 = 64 bytes)
- *   Total: 176 bytes
- */
+/* int _mco_switch / __mco_switch (_mco_ctxbuf* from, _mco_ctxbuf* to) */
 .globl _mco_switch
+.globl __mco_switch
 _mco_switch:
-    /* Save current context into x0 (from) */
+__mco_switch:
     mov  x10, sp
     mov  x11, x30
     stp  x19, x20, [x0, #(0*16)]
@@ -35,8 +27,6 @@ _mco_switch:
     stp  d10, d11, [x0, #(8*16)]
     stp  d12, d13, [x0, #(9*16)]
     stp  d14, d15, [x0, #(10*16)]
-
-    /* Restore target context from x1 (to) */
     ldp  x19, x20, [x1, #(0*16)]
     ldp  x21, x22, [x1, #(1*16)]
     ldp  x23, x24, [x1, #(2*16)]
@@ -51,11 +41,11 @@ _mco_switch:
     mov  sp, x10
     br   x11
 
-/* void _mco_wrap_main(void)
- * Coroutine trampoline: x19=co, x20=_mco_main, x19 -> x0 (first arg)
- */
+/* void _mco_wrap_main / __mco_wrap_main (void) */
 .globl _mco_wrap_main
+.globl __mco_wrap_main
 _mco_wrap_main:
+__mco_wrap_main:
     mov  x0, x19
     mov  x30, x21
     br   x20
