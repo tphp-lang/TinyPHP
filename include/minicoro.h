@@ -1072,6 +1072,7 @@ typedef struct _mco_ctxbuf {
 void _mco_wrap_main(void);
 int _mco_switch(_mco_ctxbuf* from, _mco_ctxbuf* to);
 
+#ifndef MCO_CUSTOM_ASM
 __asm__(
   ".text\n"
 #ifdef __APPLE__
@@ -1133,6 +1134,7 @@ __asm__(
   ".size _mco_wrap_main, .-_mco_wrap_main\n"
 #endif
 );
+#endif /* !MCO_CUSTOM_ASM */
 
 static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   ctx->x[0] = (void*)(co);
