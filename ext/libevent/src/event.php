@@ -8,7 +8,7 @@
 // ============================================================
 // Event
 // ============================================================
-final class Event
+class Event
 {
     const ET      = 32;
     const PERSIST = 16;
@@ -39,7 +39,7 @@ final class Event
 // ============================================================
 // EventBase
 // ============================================================
-final class EventBase
+class EventBase
 {
     public function __construct(EventConfig $cfg = null) {}
     public function dispatch(): bool { return false; }
@@ -61,7 +61,7 @@ final class EventBase
 // ============================================================
 // EventConfig
 // ============================================================
-final class EventConfig
+class EventConfig
 {
     public function __construct() {}
     public function avoidMethod(string $method): bool { return false; }
@@ -73,7 +73,7 @@ final class EventConfig
 // ============================================================
 // EventTimer
 // ============================================================
-final class EventTimer
+class EventTimer
 {
     public function __construct(EventBase $base, callable $callback, mixed $arg = null) {}
     public function add(double $timeout): bool { return false; }
@@ -87,7 +87,7 @@ final class EventTimer
 // ============================================================
 // EventSignal
 // ============================================================
-final class EventSignal
+class EventSignal
 {
     public function __construct(EventBase $base, int $signum, callable $callback, mixed $arg = null) {}
     public function add(double $timeout = null): bool { return false; }
@@ -97,7 +97,7 @@ final class EventSignal
 // ============================================================
 // EventBuffer
 // ============================================================
-final class EventBuffer
+class EventBuffer
 {
     public function __construct() {}
     public function add(string $data): bool { return false; }
@@ -122,7 +122,7 @@ final class EventBuffer
 // ============================================================
 // EventBufferEvent
 // ============================================================
-final class EventBufferEvent
+class EventBufferEvent
 {
     public function __construct(EventBase $base, mixed $fd, int $events) {}
     public function close(): void {}
@@ -148,7 +148,7 @@ final class EventBufferEvent
 // ============================================================
 // EventListener
 // ============================================================
-final class EventListener
+class EventListener
 {
     public function __construct(EventBase $base, callable $callback, mixed $data, int $flags, int $backlog, string $addr) {}
     public function disable(): bool { return false; }
@@ -161,7 +161,7 @@ final class EventListener
 // ============================================================
 // EventUtil
 // ============================================================
-final class EventUtil
+class EventUtil
 {
     public static function getLastSocketErrno(): int { return 0; }
     public static function getLastSocketError(): string { return ""; }
