@@ -13,7 +13,7 @@
 //   平台支持：
 //     Windows + GCC/Clang → ASM    |  Windows + TCC → Win32 Fiber
 //     Linux   + GCC/Clang → ASM    |  Linux   + TCC → ucontext
-//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → ASM（.s 文件提供符号）
+//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → ASM
 // ============================================================
 
 #include "object/object.h"
