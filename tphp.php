@@ -696,6 +696,16 @@ if (PHP_OS_FAMILY === 'Darwin' && $isTCC) {
     $bFlag .= ' -I"' . $tccRoot . DIRECTORY_SEPARATOR . 'include' . '"';
 }
 
+// macOS + TCC: yield/generator 不支持
+if ($isTCC && PHP_OS_FAMILY === 'Darwin') {
+    foreach ($files as $f) {
+        if (str_contains(file_get_contents($f), 'yield')) {
+            die("[NO] Error: yield/generator is not supported on macOS + TCC.\n"
+              . "      Please use GCC or Clang instead: -cc gcc or -cc clang\n");
+        }
+    }
+}
+
 $allCFiles = array_unique(array_merge($userCFiles, $extraCFiles, $importCFiles));
 $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
 // Linux needs -lm for math functions (round, ceil, floor, sqrt, pow, etc.)
