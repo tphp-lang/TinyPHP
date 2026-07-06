@@ -2,16 +2,9 @@
 *.dll
 *.pdb
 *.lib
-*.o
-*.obj
-*.a
-*.so
-*.dylib
 *.log
 *.tmp
 build/
 tcc
 tcc-src/
 *.phar
-php
-*.txt
