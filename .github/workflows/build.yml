@@ -70,8 +70,13 @@ jobs:
           echo "Using TCC: $TCC_BIN"
           "$TCC_BIN" -v
 
-          PKG=ext/libevent/package
-          TCC_BUILD=ext/libevent/build_tcc
+          # MSYS2 $(pwd) 返回 Unix 路径，Windows 原生 tcc.exe 需要 Windows 路径
+          # 用 cygpath -m 转换为混合路径 (C:/...)
+          ROOT=$(cygpath -m "$(pwd)")
+          PKG="$ROOT/ext/libevent/package"
+          TCC_BUILD="$ROOT/ext/libevent/build_tcc"
+          STUBS="$ROOT/ext/libevent/tcc-stubs"
+          LE_INC="$ROOT/ext/libevent/include"
           mkdir -p "$TCC_BUILD"
 
           # Core sources + Windows backends (per ext/libevent/package/CMakeLists.txt)
@@ -84,10 +89,10 @@ jobs:
 
           # win32_stubs.c: provides gettimeofday/gai_strerrorA/if_nametoindex
           # (TCC's .def files don't list these, but CMake detected them via GCC)
-          STUBS_SRC=ext/libevent/tcc-stubs/win32_stubs.c
+          STUBS_SRC="$STUBS/win32_stubs.c"
 
-          INC_FLAGS="-I$PKG -I$PKG/compat -I$PKG/include -Iext/libevent/include \
-                     -Iext/libevent/tcc-stubs -I$PKG/WIN32-Code"
+          # -I 用空格分隔，让 MSYS2 能正确识别路径参数并转换
+          INC_FLAGS="-I $PKG -I $PKG/compat -I $PKG/include -I $LE_INC -I $STUBS -I $PKG/WIN32-Code"
           DEF_FLAGS="-DHAVE_CONFIG_H -D_WIN32 -D_WIN32_WINNT=0x0600"
 
           echo "=== Compiling libevent_core with TCC ==="
@@ -99,11 +104,11 @@ jobs:
           "$TCC_BIN" -c -o "$TCC_BUILD/win32_stubs.o" "$STUBS_SRC" $INC_FLAGS $DEF_FLAGS
 
           echo "=== Archiving libevent_core_tcc.a ==="
-          "$TCC_BIN" -ar rcs ext/libevent/lib/libevent_core_tcc.a "$TCC_BUILD"/*.o
+          "$TCC_BIN" -ar rcs "$ROOT/ext/libevent/lib/libevent_core_tcc.a" "$TCC_BUILD"/*.o
 
-          rm -rf "$TCC_BUILD" "$PKG" ext/libevent/tcc-stubs
+          rm -rf "$TCC_BUILD" "$PKG" "$STUBS"
           echo "=== Done ==="
-          ls -lh ext/libevent/lib/
+          ls -lh "$ROOT/ext/libevent/lib/"
 
       - name: Download PHP
         shell: pwsh
