@@ -225,7 +225,7 @@ function_decl:
 
 closure:
     'function' '(' params ')' use_vars? return_type? body    ✅
-  | 'fn' '(' params ')' '=>' expr                            ✅ (箭头函数)
+  | 'fn' '(' params ')' return_type? '=>' expr               ✅ (箭头函数，支持返回类型)
 
 use_vars:
     'use' '(' var_list ')'   ✅
@@ -447,7 +447,7 @@ primary:
   | '[' args ']'                    ✅
   | 'new' name '(' args ')'         ✅
   | 'function' '(' params ')' body  ✅ (闭包)
-  | 'fn' '(' params ')' '=>' expr   ✅ (箭头函数)
+  | 'fn' '(' params ')' return_type? '=>' expr   ✅ (箭头函数，支持返回类型)
   | 'match' '(' expr ')' '{' arm* '}' ✅
   | 'list' '(' list_vars ')' '=' expr   ✅
   | '[' list_vars ']' '=' expr           ✅

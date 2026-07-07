@@ -8,11 +8,9 @@
 
 | PHP 扩展 | 对应 TinyPHP 文件 | 函数数 |
 |----------|------------------|--------|
-| `include/standard` 输出 | `std/output.h` | 15 |
-| `include/standard` 类型 | `std/type.h` | 20 |
-| `include/standard` 字符串 | `std/string.h` | 32 |
+| `include/standard` 输出/类型/字符串 | `std/core.h` (合并 output+type+string) | 67 |
 | `include/standard` HTML/Base64/URL | `std/html.h` | 6 |
-| `include/standard` 数组 | `array.h` + `std/array_extra.h` | 38 |
+| `include/standard` 数组 | `array.h` + `std/array_extra.h` | 41 |
 | `include/standard` 数学 | `std/math.h` + `tphp_math.h` | 21 |
 | `include/standard` 进制转换 | `conv.h` | 8 |
 | `include/standard` 断言/随机 | `std/ctrl.h` | 5 |
@@ -29,7 +27,7 @@
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | C 互操作 (PHPC) | `phpc.h` | 27 |
-| **合计** | | **251+** |
+| **合计** | | **254+** |
 
 ---
 
@@ -121,12 +119,13 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ## ext/standard — 输出函数
 
-> 文件: `std/output.h`
+> 文件: `std/core.h`
 
 | 函数 | C 实现 | 说明 |
 |------|--------|------|
 | `echo $x` | `fwrite(stdout)` | 二进制安全，不解析格式化符 |
-| `var_dump($x)` | type switch → `fprintf` | 支持全部类型，对象输出 `{}` |
+| `var_dump($x)` | type switch → `fprintf` | 支持全部类型，对象输出 `{}`；浮点用 `%.14g`（PHP 默认精度） |
+| `print_r($x, $ret=false)` | 递归格式化 | 支持数组/对象/标量；`$ret=true` 返回字符串 |
 | `exit($code)` | `exit(code)` | — |
 | `isset($var)` | 指针类型 → `ptr != NULL`；值类型 → 编译期 `true` | — |
 | `empty($var)` | 按类型分发 | int→`==0`, string→`is_falsy`, float/bool 同 |
@@ -135,7 +134,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ## ext/standard — 类型函数
 
-> 文件: `std/type.h`
+> 文件: `std/core.h`
 
 ### 类型检测
 
@@ -167,10 +166,10 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ## ext/standard — 字符串函数
 
-> 文件: `std/string.h`
+> 文件: `std/core.h`
 
 字符串为 16 字节 SSO 值类型 `{ char* data; int length; bool is_local; }`。
-≤512B 通过 128KB bump allocator 分配，零 `malloc`。
+≤23 字节内联存储（SSO），≤512B 通过 128KB bump allocator 分配，零 `malloc`。
 拼接优化：3+ 片段 `.` 链编译期展平为 ROPE，单次分配。
 
 ### 基础操作
@@ -201,7 +200,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 | 函数 | C 实现 | 性能 |
 |------|--------|------|
-| `str_replace($s, $r, $t)` | 两遍扫描 + `str_pool_alloc` | O(n) |
+| `str_replace($s, $r, $t)` | 两遍扫描 + `str_pool_alloc` | O(n)；支持数组参数（`$s`/`$r` 为数组时逐键替换） |
 | `substr_count($h, $n)` | 线性 `memcmp` 计数 | O(n) |
 | `strtr($s,$from,$to)` | 查表翻译 128 字符 | O(n) |
 
@@ -317,6 +316,9 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `max($a) / min($a)` | 遍历比较 | O(n) |
 | `array_sum($a) / array_product($a)` | 遍历累加/乘 | O(n) |
 | `array_is_list($a)` | 检查 key=0,1,2... | O(n) |
+| `array_map($cb, $a)` | 编译期内联展开回调循环 | O(n) |
+| `array_filter($a, $cb?)` | 编译期内联展开 + null 过滤 | O(n) |
+| `array_reduce($a, $cb, $init)` | 编译期内联累加器循环 | O(n) |
 
 ---
 
@@ -686,6 +688,7 @@ filter_var("0xff", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX);   // int(255)
 | 语法 | C 实现 | 内存安全 |
 |------|--------|---------|
 | `try { ... } catch (Exception $e)` | `setjmp/longjmp` | ✅ 先 `tphp_rt_free_all()` |
+| 多 catch 子句 `catch (A $e) ... catch (B $e)` | 类型匹配表 + `exception_offset` 计算子类→Exception 偏移 | ✅ 子类异常被父类 catch 正确匹配 |
 | `finally { ... }` | `TP_FINALLY` 宏 | ✅ 始终执行 |
 | `throw new Exception("msg")` | 复制到 256B 栈缓冲 → `longjmp` | ✅ |
 | `throw "string"` | `tp_throw` → `longjmp` | ✅ |
@@ -861,7 +864,6 @@ var_dump($gen->send(100));   // 101
 | `Date* OO API` (30+) | 需完整 DateTime 类 |
 | `array_multisort / natsort` | 专用场景 |
 | `usort / uasort / uksort` | 需闭包回调 |
-| `array_filter / array_map / array_reduce` | 需闭包回调 |
 | `calendar` 全套 | ~1000行 sdncal，延后 |
 
 ---
