@@ -17,7 +17,6 @@ jobs:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
       MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-micro-win.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-win-x86_64.zip
-      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -38,77 +37,6 @@ jobs:
           Invoke-WebRequest -Uri $env:TCC_URL -OutFile tcc.zip
           Expand-Archive -Path tcc.zip -DestinationPath .
           .\tcc\win32\tcc.exe -v
-
-      - name: Build EXTS
-        shell: msys2 {0}
-        run: |
-          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
-          cmake -E tar xf libevent.zip
-          mv libevent-* ext/libevent/package
-
-          mkdir -p ext/build
-          cmake -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
-            -S ext -B ext/build
-          cmake --build ext/build -j$(nproc)
-
-          mkdir -p ext/libevent/include ext/libevent/lib
-          cp -r ext/libevent/package/include/* ext/libevent/include/
-          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
-          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
-          rm -rf ext/build
-          # NOTE: keep ext/libevent/package/ for the TCC libevent build step
-
-          echo "=== libevent built ==="
-          ls -lh ext/libevent/lib/ || true
-          ls ext/libevent/include/ || true
-
-      - name: Build TCC libevent
-        shell: msys2 {0}
-        run: |
-          set -euo pipefail
-          TCC_BIN="./tcc/win32/tcc.exe"
-          echo "Using TCC: $TCC_BIN"
-          "$TCC_BIN" -v
-
-          # MSYS2 $(pwd) 返回 Unix 路径，Windows 原生 tcc.exe 需要 Windows 路径
-          # 用 cygpath -m 转换为混合路径 (C:/...)
-          ROOT=$(cygpath -m "$(pwd)")
-          PKG="$ROOT/ext/libevent/package"
-          TCC_BUILD="$ROOT/ext/libevent/build_tcc"
-          STUBS="$ROOT/ext/libevent/tcc-stubs"
-          LE_INC="$ROOT/ext/libevent/include"
-          mkdir -p "$TCC_BUILD"
-
-          # Core sources + Windows backends (per ext/libevent/package/CMakeLists.txt)
-          SRC_CORE=(
-              buffer.c bufferevent.c bufferevent_filter.c bufferevent_pair.c
-              bufferevent_ratelim.c bufferevent_sock.c event.c evmap.c evthread.c
-              evutil.c evutil_rand.c evutil_time.c listener.c log.c signal.c strlcpy.c
-              buffer_iocp.c bufferevent_async.c event_iocp.c win32select.c
-          )
-
-          # win32_stubs.c: provides gettimeofday/gai_strerrorA/if_nametoindex
-          # (TCC's .def files don't list these, but CMake detected them via GCC)
-          STUBS_SRC="$STUBS/win32_stubs.c"
-
-          # -I 用空格分隔，让 MSYS2 能正确识别路径参数并转换
-          INC_FLAGS="-I $PKG -I $PKG/compat -I $PKG/include -I $LE_INC -I $STUBS -I $PKG/WIN32-Code"
-          DEF_FLAGS="-DHAVE_CONFIG_H -D_WIN32 -D_WIN32_WINNT=0x0600"
-
-          echo "=== Compiling libevent_core with TCC ==="
-          for src in "${SRC_CORE[@]}"; do
-              echo "  TCC $src"
-              "$TCC_BIN" -c -o "$TCC_BUILD/${src%.c}.o" "$PKG/$src" $INC_FLAGS $DEF_FLAGS
-          done
-          echo "  TCC win32_stubs.c"
-          "$TCC_BIN" -c -o "$TCC_BUILD/win32_stubs.o" "$STUBS_SRC" $INC_FLAGS $DEF_FLAGS
-
-          echo "=== Archiving libevent_core_tcc.a ==="
-          "$TCC_BIN" -ar rcs "$ROOT/ext/libevent/lib/libevent_core_tcc.a" "$TCC_BUILD"/*.o
-
-          rm -rf "$TCC_BUILD" "$PKG" "$STUBS"
-          echo "=== Done ==="
-          ls -lh "$ROOT/ext/libevent/lib/"
 
       - name: Download PHP
         shell: pwsh
@@ -156,7 +84,6 @@ jobs:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
       MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-linux-x86_64-glibc.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-x86_64.zip
-      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -169,26 +96,6 @@ jobs:
           unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
-
-      - name: Build EXTS
-        run: |
-          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
-          unzip -q libevent.zip
-          mv libevent-* ext/libevent/package
-
-          mkdir -p ext/build
-          cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
-            -S ext -B ext/build
-          cmake --build ext/build -j$(nproc)
-
-          mkdir -p ext/libevent/include ext/libevent/lib
-          cp -r ext/libevent/package/include/* ext/libevent/include/
-          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
-          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
-          rm -rf ext/libevent/package ext/build
-
-          echo "=== libevent built ==="
-          ls -lh ext/libevent/lib/ || true
 
       - name: Download PHP
         run: |
@@ -233,7 +140,6 @@ jobs:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-aarch64-glibc.zip
       MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-linux-aarch64-glibc.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-aarch64.zip
-      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -246,26 +152,6 @@ jobs:
           unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
-
-      - name: Build EXTS
-        run: |
-          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
-          unzip -q libevent.zip
-          mv libevent-* ext/libevent/package
-
-          mkdir -p ext/build
-          cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
-            -S ext -B ext/build
-          cmake --build ext/build -j$(nproc)
-
-          mkdir -p ext/libevent/include ext/libevent/lib
-          cp -r ext/libevent/package/include/* ext/libevent/include/
-          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
-          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
-          rm -rf ext/libevent/package ext/build
-
-          echo "=== libevent built ==="
-          ls -lh ext/libevent/lib/ || true
 
       - name: Download PHP
         run: |
@@ -310,7 +196,6 @@ jobs:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
       MICRO_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-micro-8.4-macos-aarch64.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-macos-aarch64.zip
-      LIB_EVENT_URL: https://github.com/libevent/libevent/archive/refs/tags/release-2.1.13-stable.zip
     steps:
       - uses: actions/checkout@v4
 
@@ -320,26 +205,6 @@ jobs:
           unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
-
-      - name: Build EXTS
-        run: |
-          curl -fsSL -o libevent.zip "$LIB_EVENT_URL"
-          unzip -q libevent.zip
-          mv libevent-* ext/libevent/package
-
-          mkdir -p ext/build
-          cmake -DCMAKE_C_COMPILER=cc -DCMAKE_BUILD_TYPE=Release \
-            -S ext -B ext/build
-          cmake --build ext/build -j$(sysctl -n hw.ncpu)
-
-          mkdir -p ext/libevent/include ext/libevent/lib
-          cp -r ext/libevent/package/include/* ext/libevent/include/
-          find ext/build -name "libevent*.a" -exec cp {} ext/libevent/lib/libevent_core.a \;
-          find ext/build -name "event-config.h" -exec cp {} ext/libevent/include/event2/ \;
-          rm -rf ext/libevent/package ext/build
-
-          echo "=== libevent built ==="
-          ls -lh ext/libevent/lib/ || true
 
       - name: Download PHP
         run: |

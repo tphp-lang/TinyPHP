@@ -230,7 +230,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 $flags = str_replace('__EXT__', $magicExt, $flags);
                 $flags = str_replace('__INC__', $magicInc, $flags);
                 $flags = str_replace('__CMD__', $magicCmd, $flags);
-                // Handle string concatenation: -I__EXT__ . "/libevent/include" → -I__EXT__/libevent/include
+                // Handle string concatenation: -I__EXT__ . "/foo/include" → -I__EXT__/foo/include
                 $flags = preg_replace('/\s*\.\s*"/', '', $flags);
                 $flags = preg_replace('/"\s*\.\s*/', '', $flags);
                 $flags = str_replace('"', '', $flags);  // remove remaining quotes
@@ -325,7 +325,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 $flags = str_replace('__EXT__', $magicExt, $flags);
                 $flags = str_replace('__INC__', $magicInc, $flags);
                 $flags = str_replace('__CMD__', $magicCmd, $flags);
-                // Handle string concatenation: -I__EXT__ . "/libevent/include" → -I__EXT__/libevent/include
+                // Handle string concatenation: -I__EXT__ . "/foo/include" → -I__EXT__/foo/include
                 $flags = preg_replace('/\s*\.\s*"/', '', $flags);
                 $flags = preg_replace('/"\s*\.\s*/', '', $flags);
                 $flags = str_replace('"', '', $flags);
