@@ -48,6 +48,7 @@ class Main
 | `void` | `void` | 仅返回类型 |
 | `never` | `void` | 永不返回（exit/throw） |
 | `mixed` | `t_var` | 标签联合体，有运行时开销 |
+| `Generator` | `tphp_class_Generator*` | 协程对象（minicoro 实现，stackless） |
 | 类类型 | `tphp_class_X*` 或 `tphp_na_Ns_tphp_class_X*` | COS 对象指针（命名空间类带 `tphp_na_` 前缀） |
 
 > ⚠️ **`===` 和 `==` 等价**：类型固定意味着编译期已知类型，"同时类型不同"的情况不存在。
@@ -64,7 +65,6 @@ class Main
 | 运行时内省 | `Reflection*` `debug_backtrace()` `get_defined_vars()` | 无 |
 | 动态引入 | `include` `require` | 无运行时文件加载 |
 | 魔术方法 | `__call` `__get` `__set` `__callStatic` | 无动态分发 |
-| 生成器 | `yield` | 不做 |
 | 可空 | `?int` | 不做（破坏类型固定优势） |
 | 联合类型 | `int\|string` | ✅ 已支持（映射到 `mixed`/`t_var`） |
 
@@ -225,7 +225,7 @@ function_decl:
 
 closure:
     'function' '(' params ')' use_vars? return_type? body    ✅
-  | 'fn' '(' params ')' return_type? '=>' expr               ✅ (箭头函数，支持返回类型)
+  | 'fn' '(' typed_params ')' ':' type '=>' expr             ✅ (箭头函数，强制参数+返回类型)
 
 use_vars:
     'use' '(' var_list ')'   ✅
@@ -340,7 +340,7 @@ throw_stmt:
 
 ```
 expr:
-    yield_expr       ❌
+    yield_expr       ✅
   | ternary_expr     ✅
   | logical_or       ✅
   | logical_and      ✅
@@ -363,6 +363,15 @@ ternary_expr:
     expr '?' expr ':' expr   ✅
   | expr '?:' expr           ✅
   | coalesce_expr            ✅
+
+yield_expr:
+    'yield' expr                       ✅ (yield value)
+  | 'yield' expr '=>' expr             ✅ (yield key => value)
+  | 'yield'                            ✅ (yield null)
+  | 'yield' 'from' expr                ⬜ (yield from 委托，待实现)
+
+> Generator 函数返回 `Generator` 类型，基于 minicoro 库（stackless 协程）。
+> 支持 `current()` / `send()` / `next()` / `getReturn()` 等方法。
 
 coalesce_expr:
     expr '??' expr   ✅
@@ -447,7 +456,7 @@ primary:
   | '[' args ']'                    ✅
   | 'new' name '(' args ')'         ✅
   | 'function' '(' params ')' body  ✅ (闭包)
-  | 'fn' '(' params ')' return_type? '=>' expr   ✅ (箭头函数，支持返回类型)
+  | 'fn' '(' typed_params ')' ':' type '=>' expr   ✅ (箭头函数，强制参数+返回类型)
   | 'match' '(' expr ')' '{' arm* '}' ✅
   | 'list' '(' list_vars ')' '=' expr   ✅
   | '[' list_vars ']' '=' expr           ✅
@@ -621,7 +630,6 @@ phpc_memory:
 
 | 语法 | 原因 |
 |------|------|
-| `yield` / Generator | 成本高收益低 |
 | `?int` `int\|string` | 破坏类型固定优势 |
 | `...$args` 可变参数 | 需动态栈构造 |
 | 命名参数 | AOT 无意义 |

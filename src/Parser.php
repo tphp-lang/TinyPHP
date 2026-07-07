@@ -1644,18 +1644,19 @@ class Parser
         $params = [];
         if (!$this->check(TokenType::RPAREN)) {
             do {
-                // Arrow params: optional type, then $name
-                $type = $this->checkTypeStart() ? $this->parseType() : 'int';
+                // Arrow params: mandatory type, then $name
+                if (!$this->checkTypeStart()) {
+                    $this->error($this->peek(), 'Arrow function parameter requires type declaration');
+                }
+                $type = $this->parseType();
                 $this->consume(TokenType::IDENTIFIER, 'Expected parameter name');
                 $params[] = new ParamNode($type, $this->previous()->lexeme);
             } while ($this->match(TokenType::COMMA));
         }
         $this->consume(TokenType::RPAREN, 'Expected )');
-        // 可选返回类型: fn(...): type =>
-        $retType = 'int';
-        if ($this->match(TokenType::COLON)) {
-            $retType = $this->parseType();
-        }
+        // 强制返回类型: fn(...): type =>
+        $this->consume(TokenType::COLON, 'Arrow function requires return type declaration');
+        $retType = $this->parseType();
         $this->consume(TokenType::DOUBLE_ARROW, 'Expected =>');
         $bodyExpr = $this->parseExpr();
         $body = [new ReturnStmtNode($bodyExpr)];

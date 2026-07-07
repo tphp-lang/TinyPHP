@@ -31,11 +31,11 @@ class Main {
         if ($user === "admin") { echo "1. admin login OK\n"; }
 
         // ── 2. fn 箭头: 打折计算 ──
-        $discount = fn($price) => ($price * 80) / 100;
+        $discount = fn(float $price): float => ($price * 80) / 100;
         $final = $discount(250);
         echo "2. 250 discounted=" . $final . "\n";
         // 加法
-        $sum = fn($a, $b) => $a + $b;
+        $sum = fn(int $a, int $b): int => $a + $b;
         echo "2. 10+30=" . $sum(10, 30) . "\n";
 
         // ── 3. nullsafe: 可选链 ──

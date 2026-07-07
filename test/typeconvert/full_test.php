@@ -46,7 +46,7 @@ class Main {
         if ($o1->id !== 99)  { echo "5. id!==99 OK\n"; }
 
         // ── 6. fn 箭头函数 ──
-        $discount = fn($p) => ($p * 80) / 100;
+        $discount = fn(float $p): float => ($p * 80) / 100;
         echo '6. discount 100=' . $discount(100) . "\n";
 
         // ── 7. match 多条件 ──
