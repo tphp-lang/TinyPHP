@@ -848,20 +848,19 @@ class Parser
         return new GotoStmtNode($label);
     }
 
-    // try { body } catch (Var $e) { body } finally { body }
+    // try { body } catch (Type $e) { body }* finally { body }?
     private function parseTryStmt(): TryStmtNode
     {
         $this->consume(TokenType::LBRACE, 'Expected {');
         $tryBody = $this->parseBlock();
         $this->consume(TokenType::RBRACE, 'Expected }');
 
-        $catchBody = [];
-        $catchVar  = 'e';
+        $catchClauses = [];
         $finallyBody = [];
 
-        // catch (TYPE $var) { ... }
-        if ($this->match(TokenType::CATCH_KW)) {
-            $this->consume(TokenType::LPAREN, 'Expected (' );
+        // 支持多 catch 子句
+        while ($this->match(TokenType::CATCH_KW)) {
+            $this->consume(TokenType::LPAREN, 'Expected (');
             $catchType = $this->parseType();
             $t = $this->consume(TokenType::IDENTIFIER, 'Expected catch variable')->lexeme;
             $catchVar = ltrim($t, '$');
@@ -869,6 +868,7 @@ class Parser
             $this->consume(TokenType::LBRACE, 'Expected {');
             $catchBody = $this->parseBlock();
             $this->consume(TokenType::RBRACE, 'Expected }');
+            $catchClauses[] = ['type' => $catchType, 'var' => $catchVar, 'body' => $catchBody];
         }
 
         // finally { ... }
@@ -878,7 +878,7 @@ class Parser
             $this->consume(TokenType::RBRACE, 'Expected }');
         }
 
-        return new TryStmtNode($tryBody, $catchBody, $finallyBody, $catchVar);
+        return new TryStmtNode($tryBody, $catchClauses, $finallyBody);
     }
 
     // throw expr;
@@ -1179,24 +1179,13 @@ class Parser
 
     private function parseExpr(): ExprNode
     {
-        return $this->parseNullCoalesce();
+        return $this->parseTernary();
     }
 
-    // ??  （优先级最低）
-    private function parseNullCoalesce(): ExprNode
-    {
-        $left = $this->parseTernary();
-        while ($this->match(TokenType::QUEST_QUEST)) {
-            $right = $this->parseTernary();
-            $left = $this->setPos(new NullCoalesceExpr($left, $right), $left->line, $left->column);
-        }
-        return $left;
-    }
-
-    // ?: ternary
+    // ?: ternary （优先级最低，右结合）
     private function parseTernary(): ExprNode
     {
-        $cond = $this->parseLogicalOr();
+        $cond = $this->parseNullCoalesce();
         // ?-> is nullsafe, not ternary
         if ($this->check(TokenType::QUEST) && $this->peek(1)->type === TokenType::ARROW) {
             return $cond; // let parsePostfix handle nullsafe chain
@@ -1208,6 +1197,18 @@ class Parser
             return $this->setPos(new TernaryExpr($cond, $then, $else), $cond->line, $cond->column);
         }
         return $cond;
+    }
+
+    // ?? （右结合，优先级高于 ?:，低于 ||）
+    private function parseNullCoalesce(): ExprNode
+    {
+        $left = $this->parseLogicalOr();
+        while ($this->match(TokenType::QUEST_QUEST)) {
+            // 右结合：右侧递归调用自身，使 $a ?? $b ?? $c 解析为 $a ?? ($b ?? $c)
+            $right = $this->parseNullCoalesce();
+            $left = $this->setPos(new NullCoalesceExpr($left, $right), $left->line, $left->column);
+        }
+        return $left;
     }
 
     // ||
@@ -1269,7 +1270,7 @@ class Parser
     private function parseEquality(): ExprNode
     {
         $left = $this->parseComparison();
-        while ($this->match(TokenType::EQ) || $this->match(TokenType::NE) || $this->match(TokenType::IDENTICAL) || $this->match(TokenType::NOT_IDENTICAL) || $this->match(TokenType::SPACESHIP) || $this->match(TokenType::INSTANCEOF_KW)) {
+        while ($this->match(TokenType::EQ) || $this->match(TokenType::NE) || $this->match(TokenType::IDENTICAL) || $this->match(TokenType::NOT_IDENTICAL) || $this->match(TokenType::SPACESHIP)) {
             $op = $this->previous()->lexeme;
             $right = $this->parseComparison();
             $left = $this->setPos(new BinaryExpr($left, $op, $right), $left->line, $left->column);
@@ -1358,7 +1359,18 @@ class Parser
         if ($this->match(TokenType::TILDE)) {
             return $this->setPos(new UnaryExpr('~', $this->parseUnary()), $line, $col);
         }
-        return $this->parsePostfix();
+        return $this->parseInstanceof();
+    }
+
+    // instanceof （优先级高于 !，低于算术；右操作数为类名/变量/后缀表达式）
+    private function parseInstanceof(): ExprNode
+    {
+        $left = $this->parsePostfix();
+        while ($this->match(TokenType::INSTANCEOF_KW)) {
+            $right = $this->parsePostfix();
+            $left = $this->setPos(new BinaryExpr($left, 'instanceof', $right), $left->line, $left->column);
+        }
+        return $left;
     }
 
     // 后缀链: primary (->method(args) | ->prop | [index] | ++ | --)*
@@ -1531,13 +1543,13 @@ class Parser
                     'array_push','array_pop','array_shift','array_unshift','in_array',
                     'array_key_exists','array_keys','array_values','array_merge',
                     'array_unique','array_reverse','array_slice','array_sum',
-                    'array_product','array_fill','sort','rsort',
+                    'array_product','array_fill','array_map','array_filter','array_reduce','sort','rsort',
                     'intval','floatval','strval','boolval',
                     'max','min','range','rand','mt_rand',
                     'random_int','random_bytes',
                     'abs','round','ceil','floor','sqrt',
                     'strtolower','strtoupper','shuffle','array_search','microtime',
-                    'json_encode','json_decode'];
+                    'json_encode','json_decode','print_r','var_dump'];
                 if (!in_array($name, $globalFns, true) && !str_starts_with($name, 'is_') && !str_starts_with($name, 'ctype_')
                     && !str_starts_with($name, 'c_') && !str_starts_with($name, 'php_') && !str_starts_with($name, 'phpc_')) {
                     $name = $this->resolveFunctionName($name);
@@ -1625,7 +1637,7 @@ class Parser
     }
 
     /** 匿名函数: function ( params? ) use (vars?) : type? { body } */
-    /** fn($x, $y) => expr  → 闭包语法糖 */
+    /** fn($x, $y): int => expr  → 闭包语法糖 */
     private function parseArrowFunction(): ClosureExpr
     {
         $this->consume(TokenType::LPAREN, 'Expected (' );
@@ -1639,10 +1651,15 @@ class Parser
             } while ($this->match(TokenType::COMMA));
         }
         $this->consume(TokenType::RPAREN, 'Expected )');
+        // 可选返回类型: fn(...): type =>
+        $retType = 'int';
+        if ($this->match(TokenType::COLON)) {
+            $retType = $this->parseType();
+        }
         $this->consume(TokenType::DOUBLE_ARROW, 'Expected =>');
         $bodyExpr = $this->parseExpr();
         $body = [new ReturnStmtNode($bodyExpr)];
-        return new ClosureExpr($params, 'int', $body, []); // default return type: int
+        return new ClosureExpr($params, $retType, $body, []);
     }
 
     /** 检查当前 token 是否为类型关键字（排除 $var） */

@@ -132,5 +132,6 @@ struct _t_array {
     int capacity;
     int refcount;
     int cursor;             // internal pointer for current/next/prev/end/reset
+    void *str_index;        // pointer-free hash index for O(1) string-key lookup (NULL if none)
     t_arr_entry entries[];  // flexible array member
 };

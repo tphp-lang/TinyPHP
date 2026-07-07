@@ -26,7 +26,144 @@ static inline t_bool tphp_rt_str_eq(t_string a, t_string b);
 static inline void tphp_rt_register(void *ptr, int type);
 static inline void tphp_rt_free_all(void);
 
-static int tphp_fn_str_hash(t_string s);
+// ============================================================
+// String Key Hash Index — pointer-free open-addressing table
+//
+//   Stores (hash, entry_index) pairs — NO string pointers.
+//   String verification reads directly from entries[], so the
+//   index survives arr_grow's realloc (entry indices are stable).
+//
+//   Slot values:  0 = empty, -1 = tombstone, >0 = entry_idx+1
+// ============================================================
+
+#define ARR_HASH_THRESHOLD 8   // don't build index below this size
+
+typedef struct {
+    int *slots;    // entry_idx+1 (0=empty, -1=tomb)
+    int  cap;      // power of 2
+    int  count;    // active entries (excludes tombstones)
+} arr_stridx;
+
+static inline uint32_t _arr_key_hash(t_string s) {
+    const char *p = STR_PTR(s);
+    uint32_t h = 5381u;
+    for (int i = 0; i < s.length; i++)
+        h = ((h << 5) + h) + (unsigned char)p[i];
+    return h;
+}
+
+/** Free the hash index (safe to call if NULL). */
+static inline void arr_stridx_free(t_array *a) {
+    if (a->str_index != NULL) {
+        arr_stridx *idx = (arr_stridx*)a->str_index;
+        free(idx->slots);
+        free(idx);
+        a->str_index = NULL;
+    }
+}
+
+/** Build index from all existing string keys. No-op if already built. */
+static inline void arr_stridx_build(t_array *a) {
+    if (a->str_index != NULL) return;
+    int cap = 16;
+    while (cap < a->length * 2) cap *= 2;
+    arr_stridx *idx = (arr_stridx*)malloc(sizeof(arr_stridx));
+    if (idx == NULL) return;
+    idx->slots = (int*)calloc((size_t)cap, sizeof(int));
+    if (idx->slots == NULL) { free(idx); return; }
+    idx->cap = cap;
+    idx->count = 0;
+    a->str_index = idx;
+    int mask = cap - 1;
+    for (int i = 0; i < a->length; i++) {
+        if (a->entries[i].key.type == TYPE_STRING) {
+            uint32_t h = _arr_key_hash(a->entries[i].key.value._string);
+            int slot = (int)(h & mask);
+            while (idx->slots[slot] != 0)
+                slot = (slot + 1) & mask;
+            idx->slots[slot] = i + 1;
+            idx->count++;
+        }
+    }
+}
+
+/** Lazily build index if array is large enough. */
+static inline void arr_stridx_ensure(t_array *a) {
+    if (a->str_index == NULL && a->length >= ARR_HASH_THRESHOLD)
+        arr_stridx_build(a);
+}
+
+/** O(1) lookup. Returns entry index or -1. */
+static inline int arr_stridx_lookup(t_array *a, t_string key) {
+    if (a->str_index == NULL) return -1;
+    arr_stridx *idx = (arr_stridx*)a->str_index;
+    uint32_t h = _arr_key_hash(key);
+    int mask = idx->cap - 1;
+    int slot = (int)(h & mask);
+    while (idx->slots[slot] != 0) {
+        int ei = idx->slots[slot] - 1;
+        if (ei >= 0 && ei < a->length &&
+            a->entries[ei].key.type == TYPE_STRING &&
+            tphp_rt_str_eq(a->entries[ei].key.value._string, key))
+            return ei;
+        slot = (slot + 1) & mask;
+    }
+    return -1;
+}
+
+/** Insert a new (key → entry_idx) mapping. Auto-resizes at 0.75 load. */
+static inline void arr_stridx_insert(t_array *a, t_string key, int entry_idx) {
+    if (a->str_index == NULL) return;
+    arr_stridx *idx = (arr_stridx*)a->str_index;
+    // Resize if load factor > 0.75
+    if (idx->count * 4 >= idx->cap * 3) {
+        int newcap = idx->cap * 2;
+        int *ns = (int*)calloc((size_t)newcap, sizeof(int));
+        if (ns == NULL) return;
+        int nmask = newcap - 1, ncount = 0;
+        for (int i = 0; i < idx->cap; i++) {
+            if (idx->slots[i] > 0) {
+                int ei = idx->slots[i] - 1;
+                uint32_t h = _arr_key_hash(a->entries[ei].key.value._string);
+                int s = (int)(h & nmask);
+                while (ns[s] != 0) s = (s + 1) & nmask;
+                ns[s] = ei + 1;
+                ncount++;
+            }
+        }
+        free(idx->slots);
+        idx->slots = ns;
+        idx->cap = newcap;
+        idx->count = ncount;
+    }
+    uint32_t h = _arr_key_hash(key);
+    int mask = idx->cap - 1;
+    int slot = (int)(h & mask);
+    while (idx->slots[slot] > 0)
+        slot = (slot + 1) & mask;
+    idx->slots[slot] = entry_idx + 1;
+    idx->count++;
+}
+
+/** Delete a key from the index (sets tombstone). */
+static inline void arr_stridx_delete(t_array *a, t_string key) {
+    if (a->str_index == NULL) return;
+    arr_stridx *idx = (arr_stridx*)a->str_index;
+    uint32_t h = _arr_key_hash(key);
+    int mask = idx->cap - 1;
+    int slot = (int)(h & mask);
+    while (idx->slots[slot] != 0) {
+        int ei = idx->slots[slot] - 1;
+        if (ei >= 0 && ei < a->length &&
+            a->entries[ei].key.type == TYPE_STRING &&
+            tphp_rt_str_eq(a->entries[ei].key.value._string, key)) {
+            idx->slots[slot] = -1;
+            idx->count--;
+            return;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
 
 // === Array Freelist Pool (LIFO, up to 128 cached arrays) ===
 
@@ -39,6 +176,7 @@ static int       arr_freelist_count = 0;
 /** 将数组归还到复用池（仅当引用计数为 0 且无外部持有者时调用） */
 static inline void arr_pool_put(t_array *a) {
     if (unlikely(a == NULL)) return;
+    arr_stridx_free(a);  // free hash index before recycling or freeing
     if (arr_freelist_count >= ARR_POOL_MAX) { free(a); return; }
     // 重置状态
     a->length   = 0;
@@ -166,20 +304,35 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
 
 static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) {
     if (unlikely(a == NULL)) return a;
-    // 线性扫描：覆盖已存在
-    for (int i = 0; i < a->length; i++) {
-        if (a->entries[i].key.type == TYPE_STRING &&
-            tphp_rt_str_eq(a->entries[i].key.value._string, key)) {
-            a->entries[i].val = val;
+    // Use hash index for O(1) lookup if available
+    if (a->str_index != NULL) {
+        int idx = arr_stridx_lookup(a, key);
+        if (idx >= 0) {
+            a->entries[idx].val = val;
             return a;
         }
+    } else {
+        // Small array: linear scan
+        for (int i = 0; i < a->length; i++) {
+            if (a->entries[i].key.type == TYPE_STRING &&
+                tphp_rt_str_eq(a->entries[i].key.value._string, key)) {
+                a->entries[i].val = val;
+                return a;
+            }
+        }
     }
-    // 追加
+    // Append new entry
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_STRING;
     a->entries[a->length].key.value._string = tphp_rt_str_dup(key);
     a->entries[a->length].val = val;
+    int new_idx = a->length;
     a->length++;
+    // Maintain index: update if exists, build if threshold reached
+    if (a->str_index != NULL)
+        arr_stridx_insert(a, key, new_idx);
+    else if (a->length >= ARR_HASH_THRESHOLD)
+        arr_stridx_build(a);
     return a;
 }
 
@@ -198,6 +351,14 @@ static inline t_var* tphp_fn_arr_get_int(t_array *a, t_int key) {
 
 static inline t_var* tphp_fn_arr_get_str(t_array *a, t_string key) {
     if (unlikely(a == NULL)) return NULL;
+    // Lazily build index for large arrays
+    arr_stridx_ensure(a);
+    if (a->str_index != NULL) {
+        int idx = arr_stridx_lookup(a, key);
+        if (idx >= 0) return &a->entries[idx].val;
+        return NULL;
+    }
+    // Small array: linear scan
     for (int i = 0; i < a->length; i++) {
         if (a->entries[i].key.type == TYPE_STRING &&
             tphp_rt_str_eq(a->entries[i].key.value._string, key))
@@ -276,8 +437,11 @@ static inline bool tphp_fn_arr_pop(t_array *a, t_var *out) {
     a->length--;
     if (out != NULL) *out = a->entries[a->length].val;
     // 释放被弹出 entry 的 string key（堆分配）
-    if (a->entries[a->length].key.type == TYPE_STRING)
+    if (a->entries[a->length].key.type == TYPE_STRING) {
+        if (a->str_index != NULL)
+            arr_stridx_delete(a, a->entries[a->length].key.value._string);
         tphp_rt_str_free(&a->entries[a->length].key.value._string);
+    }
     return true;
 }
 
@@ -335,6 +499,8 @@ static inline bool tphp_fn_arr_shift(t_array *a, t_var *out) {
     // Free string key of first entry
     if (a->entries[0].key.type == TYPE_STRING)
         tphp_rt_str_free(&a->entries[0].key.value._string);
+    // Invalidate index — shifting changes entry positions
+    arr_stridx_free(a);
     // Shift remaining entries left
     memmove(&a->entries[0], &a->entries[1],
             (size_t)(a->length - 1) * sizeof(t_arr_entry));
@@ -358,6 +524,8 @@ static inline int tphp_fn_arr_unshift(t_array *a, t_var val) {
             a->entries[i].key.value._int = i;
     }
     a->length++;
+    // Invalidate index — prepending changes entry positions
+    arr_stridx_free(a);
     return a->length;
 }
 
@@ -476,6 +644,7 @@ static inline t_int tphp_fn_arr_search(t_array *a, t_var needle) {
 
 static inline void tphp_fn_shuffle(t_array *a) {
     if (unlikely(a == NULL || a->length <= 1)) return;
+    arr_stridx_free(a);  // shuffling changes entry positions
     for (int i = a->length - 1; i > 0; i--) {
         int j = rand() % (i + 1);
         if (j != i) {
@@ -493,17 +662,12 @@ static inline void tphp_fn_shuffle(t_array *a) {
 
 // === Sort (in-place quicksort, ascending by value) ===
 
+// 前向声明（定义在本文件后段 ksort 区，供 sort/rsort 共用）
+static int _tphp_cmp_var(const t_var *a, const t_var *b);
+
 static inline int _arr_sort_cmp_asc(const void *a, const void *b) {
-    const t_var *va = &((const t_arr_entry *)a)->val;
-    const t_var *vb = &((const t_arr_entry *)b)->val;
-    t_float fa, fb;
-    if (va->type == TYPE_INT) fa = (t_float)va->value._int;
-    else if (va->type == TYPE_FLOAT) fa = va->value._float;
-    else return (va->type < vb->type) ? -1 : 1;
-    if (vb->type == TYPE_INT) fb = (t_float)vb->value._int;
-    else if (vb->type == TYPE_FLOAT) fb = vb->value._float;
-    else return (va->type < vb->type) ? -1 : 1;
-    return (fa < fb) ? -1 : (fa > fb) ? 1 : 0;
+    return _tphp_cmp_var(&((const t_arr_entry *)a)->val,
+                         &((const t_arr_entry *)b)->val);
 }
 
 static inline int _arr_sort_cmp_desc(const void *a, const void *b) {
@@ -512,6 +676,7 @@ static inline int _arr_sort_cmp_desc(const void *a, const void *b) {
 
 static inline void tphp_fn_sort(t_array *a) {
     if (unlikely(a == NULL || a->length <= 1)) return;
+    arr_stridx_free(a);  // sorting changes entry positions
     qsort(a->entries, (size_t)a->length, sizeof(t_arr_entry), _arr_sort_cmp_asc);
     // Re-key int keys after sort
     for (int i = 0; i < a->length; i++) {
@@ -522,6 +687,7 @@ static inline void tphp_fn_sort(t_array *a) {
 
 static inline void tphp_fn_rsort(t_array *a) {
     if (unlikely(a == NULL || a->length <= 1)) return;
+    arr_stridx_free(a);  // sorting changes entry positions
     qsort(a->entries, (size_t)a->length, sizeof(t_arr_entry), _arr_sort_cmp_desc);
     for (int i = 0; i < a->length; i++) {
         if (a->entries[i].key.type == TYPE_INT)
@@ -631,16 +797,6 @@ static inline t_array* tphp_fn_arr_fill(t_int start, t_int count, t_var val) {
         r = tphp_fn_arr_set_int(r, start + i, val);
     }
     return r;
-}
-
-// === Hash ===
-
-static inline int tphp_fn_str_hash(t_string s) {
-    if (s.data == NULL) return 0;
-    unsigned int h = 5381;
-    for (int i = 0; i < s.length; i++)
-        h = ((h << 5) + h) + (unsigned char)STR_PTR(s)[i];
-    return (int)h;
 }
 
 // ── array_key_first / array_key_last — O(1) ──────────────────
@@ -812,23 +968,57 @@ static inline t_array* tphp_fn_array_column_str(t_array* a, t_string col) {
 
 
 // ── ksort/krsort/asort/arsort (qsort pointer sort) ──────
+
+// 通用 t_var 比较：先按 type tag 排（NULL<BOOL<INT<FLOAT<STRING<ARRAY<OBJECT<CALLBACK），
+// 同类型内部按值排。行为对齐 PHP sort() 对混合类型的处理。
+static int _tphp_cmp_var(const t_var *a, const t_var *b) {
+    if (a->type != b->type) {
+        // 不同类型：按 type tag 数值升序（与 PHP 大致一致：NULL<BOOL<INT<FLOAT<STRING<ARRAY<OBJECT）
+        return (int)a->type - (int)b->type;
+    }
+    switch (a->type) {
+        case TYPE_NULL:
+            return 0;
+        case TYPE_BOOL:
+            return (int)(a->value._bool > b->value._bool) - (int)(a->value._bool < b->value._bool);
+        case TYPE_INT:
+            return (a->value._int > b->value._int) - (a->value._int < b->value._int);
+        case TYPE_FLOAT: {
+            t_float d = a->value._float - b->value._float;
+            return (d > 0) - (d < 0);
+        }
+        case TYPE_STRING: {
+            int la = a->value._string.length;
+            int lb = b->value._string.length;
+            int n = la < lb ? la : lb;
+            int c = (n > 0) ? memcmp(STR_PTR(a->value._string), STR_PTR(b->value._string), (size_t)n) : 0;
+            return c != 0 ? c : (la - lb);
+        }
+        default:
+            // ARRAY/OBJECT/CALLBACK 不参与值排序，保持稳定
+            return 0;
+    }
+}
+
 static int _cmp_val(const void *a, const void *b) {
-    t_int va = (*(t_arr_entry**)a)->val.value._int;
-    t_int vb = (*(t_arr_entry**)b)->val.value._int;
-    return (va > vb) - (va < vb);
+    return _tphp_cmp_var(&(*(const t_arr_entry* const*)a)->val,
+                         &(*(const t_arr_entry* const*)b)->val);
+}
+static int _cmp_val_r(const void *a, const void *b) {
+    return _tphp_cmp_var(&(*(const t_arr_entry* const*)b)->val,
+                         &(*(const t_arr_entry* const*)a)->val);
 }
 static int _cmp_key(const void *a, const void *b) {
-    t_int va = (*(t_arr_entry**)a)->key.value._int;
-    t_int vb = (*(t_arr_entry**)b)->key.value._int;
-    return (va > vb) - (va < vb);
+    return _tphp_cmp_var(&(*(const t_arr_entry* const*)a)->key,
+                         &(*(const t_arr_entry* const*)b)->key);
 }
 static int _cmp_key_r(const void *a, const void *b) {
-    t_int va = (*(t_arr_entry**)a)->key.value._int;
-    t_int vb = (*(t_arr_entry**)b)->key.value._int;
-    return (vb > va) - (vb < va);
+    return _tphp_cmp_var(&(*(const t_arr_entry* const*)b)->key,
+                         &(*(const t_arr_entry* const*)a)->key);
 }
 static inline void tphp_fn_asort(t_array* a) {
     if (a == NULL || a->length < 2) return;
+    arr_stridx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
     if (!ptrs) return;
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
@@ -841,14 +1031,20 @@ static inline void tphp_fn_asort(t_array* a) {
 }
 static inline void tphp_fn_arsort(t_array* a) {
     if (a == NULL || a->length < 2) return;
-    tphp_fn_asort(a);
-    for (int i = 0, j = a->length - 1; i < j; i++, j--) {
-        t_arr_entry t = a->entries[i]; a->entries[i] = a->entries[j]; a->entries[j] = t;
-    }
+    arr_stridx_free(a);  // sorting changes entry positions
+    t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
+    if (!ptrs) return;
+    for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
+    qsort(ptrs, (size_t)a->length, sizeof(t_arr_entry*), _cmp_val_r);
+    t_arr_entry *tmp = (t_arr_entry*)malloc((size_t)a->length * sizeof(t_arr_entry));
+    if (!tmp) { free(ptrs); return; }
+    for (int i = 0; i < a->length; i++) tmp[i] = *ptrs[i];
+    for (int i = 0; i < a->length; i++) a->entries[i] = tmp[i];
+    free(tmp); free(ptrs);
 }
 static inline void tphp_fn_ksort(t_array* a) {
     if (a == NULL || a->length < 2) return;
-    for (int i = 0; i < a->length; i++) if (a->entries[i].key.type != TYPE_INT) return;
+    arr_stridx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
     if (!ptrs) return;
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
@@ -861,7 +1057,7 @@ static inline void tphp_fn_ksort(t_array* a) {
 }
 static inline void tphp_fn_krsort(t_array* a) {
     if (a == NULL || a->length < 2) return;
-    for (int i = 0; i < a->length; i++) if (a->entries[i].key.type != TYPE_INT) return;
+    arr_stridx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
     if (!ptrs) return;
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];

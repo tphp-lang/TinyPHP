@@ -64,6 +64,81 @@ class CodeGenerator implements ASTVisitor
         'Generator' => 'tphp_class_Generator*',
     ];
 
+    /** 内置函数返回类型注册表（替代 inferCallReturnType 中的 140+ if-else） */
+    private static array $builtinRetTypes = [
+        // ── t_int ──
+        'time' => 't_int', 'hrtime' => 't_int', 'count' => 't_int', 'sleep' => 't_int', 'usleep' => 't_int',
+        'array_push' => 't_int', 'array_unshift' => 't_int', 'mb_strlen' => 't_int', 'filter_id' => 't_int',
+        'strlen' => 't_int', 'strpos' => 't_int', 'abs' => 't_int', 'array_search' => 't_int',
+        'intval' => 't_int', 'rand' => 't_int', 'mt_rand' => 't_int', 'random_int' => 't_int',
+        'intdiv' => 't_int', 'ord' => 't_int', 'bindec' => 't_int', 'hexdec' => 't_int', 'octdec' => 't_int',
+        'array_key_first' => 't_int', 'array_key_last' => 't_int', 'strtotime' => 't_int', 'mktime' => 't_int',
+        'substr_count' => 't_int', 'crc32' => 't_int', 'preg_last_error' => 't_int',
+        // ── t_string ──
+        'date' => 't_string', 'implode' => 't_string', 'join' => 't_string', 'json_encode' => 't_string',
+        'htmlspecialchars' => 't_string', 'nl2br' => 't_string', 'base64_encode' => 't_string',
+        'base64_decode' => 't_string', 'http_build_query' => 't_string', 'sha256' => 't_string', 'sha512' => 't_string',
+        'password_hash' => 't_string', 'base_convert' => 't_string', 'mb_substr' => 't_string',
+        'sprintf' => 't_string', 'str_replace' => 't_string', 'strtolower' => 't_string', 'strtoupper' => 't_string',
+        'trim' => 't_string', 'ltrim' => 't_string', 'rtrim' => 't_string', 'substr' => 't_string',
+        'file_get_contents' => 't_string', 'strval' => 't_string', 'chr' => 't_string', 'getenv' => 't_string',
+        'decbin' => 't_string', 'decoct' => 't_string', 'dechex' => 't_string', 'number_format' => 't_string',
+        'uniqid' => 't_string', 'ucfirst' => 't_string', 'lcfirst' => 't_string', 'strrev' => 't_string',
+        'str_repeat' => 't_string', 'str_pad' => 't_string', 'str_shuffle' => 't_string',
+        'addslashes' => 't_string', 'stripslashes' => 't_string', 'bin2hex' => 't_string', 'hex2bin' => 't_string',
+        'urlencode' => 't_string', 'urldecode' => 't_string', 'md5' => 't_string', 'sha1' => 't_string',
+        'strtr' => 't_string', 'preg_replace' => 't_string', 'preg_quote' => 't_string',
+        'preg_last_error_msg' => 't_string', 'php_str' => 't_string', 'php_str_clone' => 't_string',
+        'random_bytes' => 't_string', 'gettype' => 't_string',
+        // ── t_bool ──
+        'shuffle' => 't_bool', 'json_validate' => 't_bool', 'password_verify' => 't_bool',
+        'in_array' => 't_bool', 'array_key_exists' => 't_bool', 'str_contains' => 't_bool',
+        'boolval' => 't_bool', 'str_starts_with' => 't_bool', 'str_ends_with' => 't_bool',
+        'array_is_list' => 't_bool', 'file_put_contents' => 't_bool',
+        // ── t_float ──
+        'sin' => 't_float', 'cos' => 't_float', 'tan' => 't_float', 'asin' => 't_float', 'acos' => 't_float',
+        'atan' => 't_float', 'exp' => 't_float', 'log' => 't_float', 'log10' => 't_float', 'fmod' => 't_float',
+        'microtime' => 't_float', 'pi' => 't_float', 'deg2rad' => 't_float', 'rad2deg' => 't_float',
+        'round' => 't_float', 'ceil' => 't_float', 'floor' => 't_float', 'sqrt' => 't_float', 'floatval' => 't_float',
+        // ── t_array* ──
+        'array_keys' => 't_array*', 'array_values' => 't_array*', 'array_merge' => 't_array*',
+        'array_map' => 't_array*', 'array_filter' => 't_array*', 'array_reverse' => 't_array*',
+        'array_slice' => 't_array*', 'array_unique' => 't_array*', 'range' => 't_array*',
+        'array_fill' => 't_array*', 'explode' => 't_array*', 'array_diff' => 't_array*',
+        'array_intersect' => 't_array*', 'array_column' => 't_array*', 'array_flip' => 't_array*',
+        'array_chunk' => 't_array*', 'array_combine' => 't_array*', 'array_count_values' => 't_array*',
+        'filter_list' => 't_array*', 'str_split' => 't_array*', 'parse_url' => 't_array*',
+        'parse_str' => 't_array*', 'preg_match' => 't_array*', 'preg_match_all' => 't_array*',
+        'preg_split' => 't_array*', 'preg_grep' => 't_array*',
+        'phpc_new_arr_int' => 't_array*', 'phpc_new_arr_dbl' => 't_array*',
+        'phpc_new_arr_str' => 't_array*', 'phpc_new_arr' => 't_array*',
+        // ── t_var ──
+        'array_pop' => 't_var', 'array_shift' => 't_var', 'array_sum' => 't_var', 'array_product' => 't_var',
+        'max' => 't_var', 'min' => 't_var', 'json_decode' => 't_var', 'array_rand' => 't_var',
+        'current' => 't_var', 'key' => 't_var', 'next' => 't_var', 'prev' => 't_var',
+        'end' => 't_var', 'reset' => 't_var', 'pow' => 't_var', 'filter_var' => 't_var',
+        // ── void ──
+        'print_r' => 'void', 'var_dump' => 'void', 'sort' => 'void', 'rsort' => 'void',
+        'asort' => 'void', 'arsort' => 'void', 'ksort' => 'void', 'krsort' => 'void',
+        'putenv' => 'void', 'phpc_unregister_obj' => 'void', 'phpc_free' => 'void', 'phpc_free_str_arr' => 'void',
+        // ── t_object / t_callback / null (指针/无返回) ──
+        'phpc_new_obj' => 't_object',
+        'phpc_new_fn' => 't_callback', 'phpc_new_fn_env' => 't_callback',
+        'phpc_arr_int' => 'null', 'phpc_arr_dbl' => 'null', 'phpc_arr_str' => 'null', 'phpc_obj' => 'null',
+        'phpc_fn' => 'null', 'phpc_env' => 'null', 'phpc_fn_i32' => 'null', 'phpc_fn_i64' => 'null', 'phpc_fn_f64' => 'null',
+        'phpc_thunk' => 'null',
+        // ── phpc 互操作 ──
+        'c_int' => 't_int', 'php_int' => 't_int', 'c_float' => 't_float', 'php_float' => 't_float',
+        'c_str' => 't_string', 'php_str' => 't_string',
+    ];
+
+    /** 内置函数返回数组的元素类型注册表（替代 visitAssign 中的 switch-case） */
+    private static array $builtinArrElemTypes = [
+        'array_keys' => 't_int', 'array_values' => 't_int', 'array_merge' => 't_int',
+        'explode' => 't_string', 'preg_match' => 't_string', 'preg_split' => 't_string',
+        'preg_grep' => 't_string', 'filter_list' => 't_string',
+    ];
+
     /** 临时变量计数器，用于数组字面量的复合表达式 */
     private int $tmpVarCounter = 0;
 
@@ -244,6 +319,18 @@ class CodeGenerator implements ASTVisitor
         }
 
         // ── SEC_CLSIMPL: Phase 2 — 所有类的方法实现 + allocator ──
+        // 前向声明所有类描述符（catch 子句引用 _class_tphp_class_* 时需要）
+        $clsFwdDecls = [];
+        foreach ($allClasses as $class) {
+            $cn = self::classCName($class);
+            if ($class->isAbstract && $class->parentName === null && empty($class->properties)) continue;
+            $clsFwdDecls[] = "static const t_class _class_{$cn};";
+        }
+        // Exception 内置类
+        $clsFwdDecls[] = "static const t_class _class_tphp_class_Exception;";
+        if (!empty($clsFwdDecls)) {
+            $this->sectionBlock(self::SEC_CLSIMPL, "/* ── Class descriptor forward declarations ── */\n" . implode("\n", $clsFwdDecls) . "\n");
+        }
         foreach ($allClasses as $class) {
             $this->className = self::classCName($class);
             $isMain = (self::classCName($class) === $mainClassName);
@@ -296,6 +383,14 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Exception')->methods['getMessage']    = new MethodInfo('t_string');
         $this->symbols->getClass('tphp_class_Exception')->methods['__construct'] = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_Exception')->methods['__destruct']  = new MethodInfo('void');
+        $this->classOwnProps['tphp_class_Exception']['message'] = true;
+        $this->classParentName['tphp_class_Exception'] = '';
+        $this->classPropTypes['tphp_class_Exception']['message'] = 't_string';
+        $this->classMethodRetTypes['tphp_class_Exception'] = [
+            'getMessage'   => 't_string',
+            '__construct'  => 'void',
+            '__destruct'   => 'void',
+        ];
 
         // 内置 Generator 类（基于 minicoro 协程）
         $this->symbols->addClass('tphp_class_Generator');
@@ -570,6 +665,7 @@ class CodeGenerator implements ASTVisitor
         $o[] = $this->ind("    .name          = \"{$cn}\",");
         $o[] = $this->ind("    .parent        = {$parentPtr},");
         $o[] = $this->ind("    .instance_size = sizeof({$cn}),");
+        $o[] = $this->ind("    .exception_offset = " . $this->computeExceptionOffset($cn) . ",");
         $o[] = $this->ind("    .dtor          = (void*){$cn}___destruct,");
         $o[] = $this->ind("    .vtable        = _vtable_{$cn},");
         $o[] = $this->ind("    .vtable_len    = 0,");
@@ -1134,6 +1230,9 @@ class CodeGenerator implements ASTVisitor
                     $parts[] = 'tphp_fn_var_dump(' . $this->wrapVar($e) . ');';
                 } elseif ($vt === 't_string' || $vt === 't_int' || $vt === 't_float' || $vt === 't_bool') {
                     $parts[] = $this->echoWrap($vt, $code);
+                } elseif ($vt === 'tphp_class_Exception*') {
+                    // Exception 对象：echo $e 等价 echo $e->getMessage()
+                    $parts[] = "tphp_fn_echo(tphp_class_Exception_getMessage({$code}));";
                 } else {
                     $parts[] = "tphp_fn_echo({$code});";
                 }
@@ -1378,22 +1477,26 @@ class CodeGenerator implements ASTVisitor
 
         // $x = array_keys/values/explode/merge(...) → 追踪返回数组的元素类型
         if ($node->expr instanceof CallExpr && $node->expr->callee === null) {
-            switch ($node->expr->name) {
-                case 'array_keys':
-                case 'array_values':
-                    $this->arrElementTypes[$var] = 't_int';
+            $fnName = $node->expr->name;
+            // 查元素类型注册表
+            if (isset(self::$builtinArrElemTypes[$fnName])) {
+                $this->arrElementTypes[$var] = self::$builtinArrElemTypes[$fnName];
+            }
+            // 特殊处理：需要运行时分析的函数
+            switch ($fnName) {
+                case 'array_map':
+                    // 元素类型 = callback 返回类型
+                    $sig = $this->inferCallbackSig($node->expr->args[0] ?? null);
+                    $this->arrElementTypes[$var] = $sig['ret'] ?? 't_int';
                     break;
-                case 'explode':
-                    $this->arrElementTypes[$var] = 't_string';
-                    break;
-                case 'array_merge':
-                    $this->arrElementTypes[$var] = 't_int';
-                    break;
-                case 'preg_match':
-                case 'preg_split':
-                case 'preg_grep':
-                case 'filter_list':
-                    $this->arrElementTypes[$var] = 't_string';
+                case 'array_filter':
+                    // 元素类型 = 输入数组元素类型（从源数组变量推导）
+                    if (isset($node->expr->args[0]) && $node->expr->args[0] instanceof VariableExpr) {
+                        $srcVar = self::varName($node->expr->args[0]->name);
+                        if (isset($this->arrElementTypes[$srcVar])) {
+                            $this->arrElementTypes[$var] = $this->arrElementTypes[$srcVar];
+                        }
+                    }
                     break;
                 case 'preg_match_all':
                     $this->arrElementTypes[$var] = 't_array*';
@@ -1554,169 +1657,23 @@ class CodeGenerator implements ASTVisitor
     /** 推导 CallExpr 的返回类型 */
     private function inferCallReturnType(CallExpr $expr): string
     {
-        // 内置函数返回类型
+        // 内置函数返回类型 — 查注册表
         if ($expr->callee === null) {
-            if ($expr->name === 'time')   return 't_int';
-            if ($expr->name === 'hrtime') return 't_int';
-            if ($expr->name === 'date')   return 't_string';
-            if ($expr->name === 'count')  return 't_int';
-            if ($expr->name === 'sleep')  return 't_int';
-            if ($expr->name === 'usleep') return 't_int';
-            // is_* 类型检测系列 → t_bool
-            if (str_starts_with($expr->name, 'is_')) return 't_bool';
-            // 数组函数返回类型
-            if ($expr->name === 'array_push')  return 't_int';
-            if ($expr->name === 'array_pop')   return 't_var';
-            if ($expr->name === 'array_shift') return 't_var';
-            if ($expr->name === 'array_unshift') return 't_int';
-            if ($expr->name === 'in_array')    return 't_bool';
-            if ($expr->name === 'array_key_exists') return 't_bool';
-            if ($expr->name === 'array_keys')  return 't_array*';
-            if ($expr->name === 'array_values') return 't_array*';
-            if ($expr->name === 'array_merge')  return 't_array*';
-            if ($expr->name === 'array_sum')   return 't_var';
-            if ($expr->name === 'array_product') return 't_var';
-            if ($expr->name === 'array_reverse') return 't_array*';
-            if ($expr->name === 'array_slice') return 't_array*';
-            if ($expr->name === 'array_unique') return 't_array*';
-            if ($expr->name === 'range') return 't_array*';
-            if ($expr->name === 'array_fill') return 't_array*';
-            if ($expr->name === 'sort' || $expr->name === 'rsort') return 'void';
-            if ($expr->name === 'max') return 't_var';
-            if ($expr->name === 'min') return 't_var';
-            if ($expr->name === 'implode' || $expr->name === 'join') return 't_string';
-            if ($expr->name === 'explode') return 't_array*';
-            if ($expr->name === 'json_encode') return 't_string';
-            if ($expr->name === 'json_decode') return 't_var';
-            if ($expr->name === 'htmlspecialchars') return 't_string';
-            if ($expr->name === 'nl2br') return 't_string';
-            if ($expr->name === 'base64_encode') return 't_string';
-            if ($expr->name === 'base64_decode') return 't_string';
-            if ($expr->name === 'http_build_query') return 't_string';
-            if ($expr->name === 'array_diff')  return 't_array*';
-            if ($expr->name === 'array_intersect') return 't_array*';
-            if ($expr->name === 'array_column') return 't_array*';
-            if ($expr->name === 'array_flip') return 't_array*';
-            if ($expr->name === 'shuffle') return 't_bool';
-            if ($expr->name === 'sin' || $expr->name === 'cos' || $expr->name === 'tan') return 't_float';
-            if ($expr->name === 'asin' || $expr->name === 'acos' || $expr->name === 'atan') return 't_float';
-            if ($expr->name === 'exp' || $expr->name === 'log' || $expr->name === 'log10') return 't_float';
-            if ($expr->name === 'fmod') return 't_float';
-            if (str_starts_with($expr->name, 'is_') && $expr->name !== 'is_int' && $expr->name !== 'is_float'
-                && $expr->name !== 'is_string' && $expr->name !== 'is_bool' && $expr->name !== 'is_array'
-                && $expr->name !== 'is_null' && $expr->name !== 'is_numeric') return 't_bool';
-            if ($expr->name === 'json_validate') return 't_bool';
-            if ($expr->name === 'sha256' || $expr->name === 'sha512') return 't_string';
-            if ($expr->name === 'password_hash') return 't_string';
-            if ($expr->name === 'password_verify') return 't_bool';
-            if ($expr->name === 'base_convert') return 't_string';
-            if ($expr->name === 'array_chunk') return 't_array*';
-            if ($expr->name === 'array_combine') return 't_array*';
-            if ($expr->name === 'array_count_values') return 't_array*';
-            if ($expr->name === 'array_rand') return 't_var';
-            if ($expr->name === 'mb_strlen') return 't_int';
-            if ($expr->name === 'mb_substr') return 't_string';
-            if ($expr->name === 'filter_var') return 't_var';
-            if ($expr->name === 'filter_list') return 't_array*';
-            if ($expr->name === 'filter_id')   return 't_int';
-            // phpc 互操作函数返回类型
-            if ($expr->name === 'c_int' || $expr->name === 'php_int')   return 't_int';
-            if ($expr->name === 'c_float' || $expr->name === 'php_float') return 't_float';
-            if ($expr->name === 'c_str' || $expr->name === 'php_str')   return 't_string';
-            if ($expr->name === 'phpc_new_arr_int' || $expr->name === 'phpc_new_arr_dbl'
-             || $expr->name === 'phpc_new_arr_str' || $expr->name === 'phpc_new_arr') return 't_array*';
-            // phpc_arr_* 返回 malloc 的 C 指针，存储为 void*
-            if ($expr->name === 'phpc_arr_int' || $expr->name === 'phpc_arr_dbl'
-             || $expr->name === 'phpc_arr_str') return 'null';
-            if ($expr->name === 'phpc_obj')  return 'null';
-            if ($expr->name === 'phpc_new_obj') return 't_object';
-            if ($expr->name === 'phpc_unregister_obj') return 'void';
-            if (in_array($expr->name, ['phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64'], true)) return 'null';
-            if ($expr->name === 'phpc_thunk' || str_ends_with($expr->name, '\\phpc_thunk')) return 'null';
-            if ($expr->name === 'phpc_new_fn' || $expr->name === 'phpc_new_fn_env') return 't_callback';
-            if ($expr->name === 'phpc_free' || $expr->name === 'phpc_free_str_arr') return 'void';
-            if ($expr->name === 'php_str' || $expr->name === 'php_str_clone') return 't_string';
-            // 字符串函数返回类型
-            // ctype functions → bool
-            if (str_starts_with($expr->name, 'ctype_')) return 't_bool';
-            if ($expr->name === 'strlen')       return 't_int';
-            if ($expr->name === 'trim' || $expr->name === 'ltrim' || $expr->name === 'rtrim') return 't_string';
-            if ($expr->name === 'substr')       return 't_string';
-            if ($expr->name === 'strpos')       return 't_int';
-            if ($expr->name === 'str_contains') return 't_bool';
-            if ($expr->name === 'sprintf')     return 't_string';
-            if ($expr->name === 'str_replace')  return 't_string';
-            if ($expr->name === 'strtolower' || $expr->name === 'strtoupper') return 't_string';
-            if ($expr->name === 'abs')          return 't_int';
-            if ($expr->name === 'round' || $expr->name === 'ceil' || $expr->name === 'floor') return 't_float';
-            if ($expr->name === 'sqrt')         return 't_float';
-            if ($expr->name === 'shuffle')      return 'void';
-            if ($expr->name === 'array_search') return 't_int';
-            if ($expr->name === 'file_get_contents') return 't_string';
-            if ($expr->name === 'file_put_contents') return 't_bool';
-            if ($expr->name === 'microtime')    return 't_float';
-            // 类型转换函数
-            if ($expr->name === 'intval')   return 't_int';
-            if ($expr->name === 'floatval') return 't_float';
-            if ($expr->name === 'strval')   return 't_string';
-            if ($expr->name === 'boolval')  return 't_bool';
-            if ($expr->name === 'rand' || $expr->name === 'mt_rand' || $expr->name === 'random_int') return 't_int';
-            if ($expr->name === 'random_bytes') return 't_string';
-            // ── 第一梯队新增 ──
-            if ($expr->name === 'pi')              return 't_float';
-            if ($expr->name === 'deg2rad' || $expr->name === 'rad2deg') return 't_float';
-            if ($expr->name === 'intdiv')          return 't_int';
-            if ($expr->name === 'pow')             return 't_var';
-            if ($expr->name === 'ord')             return 't_int';
-            if ($expr->name === 'chr')             return 't_string';
-            if ($expr->name === 'str_starts_with' || $expr->name === 'str_ends_with') return 't_bool';
-            if ($expr->name === 'is_numeric')      return 't_bool';
-            if ($expr->name === 'gettype')         return 't_string';
-            if ($expr->name === 'getenv')          return 't_string';
-            if ($expr->name === 'putenv')          return 'void';
-            if ($expr->name === 'bindec' || $expr->name === 'hexdec' || $expr->name === 'octdec') return 't_int';
-            if ($expr->name === 'decbin' || $expr->name === 'decoct' || $expr->name === 'dechex') return 't_string';
-            if ($expr->name === 'number_format')   return 't_string';
-            if ($expr->name === 'array_key_first' || $expr->name === 'array_key_last') return 't_int';
-            if ($expr->name === 'array_rand')      return 't_int';
-            if ($expr->name === 'array_is_list')   return 't_bool';
-            if ($expr->name === 'current' || $expr->name === 'key' || $expr->name === 'next' || $expr->name === 'prev' || $expr->name === 'end' || $expr->name === 'reset') return 't_var';
-            if ($expr->name === 'strtotime')       return 't_int';
-            if ($expr->name === 'mktime')          return 't_int';
-            if ($expr->name === 'uniqid')          return 't_string';
-            // ── 第二梯队 ──
-            if ($expr->name === 'ucfirst' || $expr->name === 'lcfirst') return 't_string';
-            if ($expr->name === 'strrev' || $expr->name === 'str_repeat') return 't_string';
-            if ($expr->name === 'str_split')      return 't_array*';
-            if ($expr->name === 'str_pad')        return 't_string';
-            if ($expr->name === 'substr_count')   return 't_int';
-            if ($expr->name === 'str_shuffle')    return 't_string';
-            if ($expr->name === 'addslashes' || $expr->name === 'stripslashes') return 't_string';
-            if ($expr->name === 'bin2hex' || $expr->name === 'hex2bin') return 't_string';
-            if ($expr->name === 'urlencode' || $expr->name === 'urldecode') return 't_string';
-            if ($expr->name === 'array_chunk')    return 't_array*';
-            if ($expr->name === 'array_combine')  return 't_array*';
-            if ($expr->name === 'array_flip')     return 't_array*';
-            if ($expr->name === 'array_column')   return 't_array*';
-            // ── 第三梯队 ──
-            if ($expr->name === 'md5' || $expr->name === 'sha1') return 't_string';
-            if ($expr->name === 'crc32')          return 't_int';
-            if ($expr->name === 'parse_url' || $expr->name === 'parse_str') return 't_array*';
-            if ($expr->name === 'strtr')          return 't_string';
-            if ($expr->name === 'asort' || $expr->name === 'arsort' || $expr->name === 'ksort' || $expr->name === 'krsort') return 'void';
-            // PCRE 正则函数返回类型
-            if ($expr->name === 'preg_match')      return 't_array*';
-            if ($expr->name === 'preg_match_all')  return 't_array*';
-            if ($expr->name === 'preg_replace')   return 't_string';
-            if ($expr->name === 'preg_split')     return 't_array*';
-            if ($expr->name === 'preg_grep')      return 't_array*';
-            if ($expr->name === 'preg_quote')     return 't_string';
-            if ($expr->name === 'preg_last_error')     return 't_int';
-            if ($expr->name === 'preg_last_error_msg') return 't_string';
-            // libevent 扩展函数返回类型
-            if ($expr->name === 'event_base_get_method') return 't_string';
-            if ($expr->name === 'evbuffer_read')         return 't_string';
-            if ($expr->name === 'evbuffer_readln')       return 't_string';
+            $name = $expr->name;
+            // 前缀规则：is_* / ctype_* → t_bool
+            if (str_starts_with($name, 'is_')) return 't_bool';
+            if (str_starts_with($name, 'ctype_')) return 't_bool';
+            // 后缀规则：\phpc_thunk → null
+            if (str_ends_with($name, '\\phpc_thunk')) return 'null';
+            // array_reduce 返回类型 = callback 返回类型
+            if ($name === 'array_reduce') {
+                $sig = $this->inferCallbackSig($expr->args[1] ?? null);
+                return $sig['ret'] ?? 't_int';
+            }
+            // 查注册表
+            if (isset(self::$builtinRetTypes[$name])) {
+                return self::$builtinRetTypes[$name];
+            }
         }
         // 闭包调用 → 查 closureSigs
         if ($expr->name === '__invoke' && $expr->callee instanceof VariableExpr) {
@@ -2441,11 +2398,22 @@ class CodeGenerator implements ASTVisitor
 
     public function visitNullCoalesce(NullCoalesceExpr $node): string
     {
-        $left  = $node->left->accept($this);
-        $right = $node->right->accept($this);
         $lt = $this->inferType($node->left);
-        if ($lt === 'null') return $right;
-        return '(' . $left . ' != null ? ' . $left . ' : ' . $right . ')';
+        // AOT 类型固定：值类型（int/float/bool/string/array*/object*）永不为 null，直接返回 left
+        if ($lt === 'null') return $node->right->accept($this);
+        $left  = $node->left->accept($this);
+        // 只有 t_var（可空联合体）才需要运行时 TYPE_NULL 检查
+        if ($lt === 't_var') {
+            $right = $node->right->accept($this);
+            return '(' . $left . '.type != TYPE_NULL ? ' . $left . ' : ' . $right . ')';
+        }
+        // void*（nullable 对象指针）需要运行时 null 检查
+        if ($lt === 'void*' || $lt === 'null') {
+            $right = $node->right->accept($this);
+            return '(' . $left . ' != null ? ' . $left . ' : ' . $right . ')';
+        }
+        // 其他值类型：编译期已知非 null，直接返回 left
+        return $left;
     }
 
     public function visitMatchExpr(MatchExpr $node): string
@@ -2505,6 +2473,12 @@ class CodeGenerator implements ASTVisitor
         // var_dump 内置函数 —— 包装参数为 t_var 并调用 tphp_var_dump
         if ($node->callee === null && $node->name === 'var_dump') {
             return $this->generateVarDump($node->args);
+        }
+
+        // print_r($x) — 包装参数为 t_var 调用 tphp_fn_print_r
+        if ($node->callee === null && $node->name === 'print_r') {
+            $wrapped = $this->wrapVar($node->args[0]);
+            return 'tphp_fn_print_r(' . $wrapped . ')';
         }
 
         // count 内置函数 → tphp_arr_count
@@ -2652,9 +2626,23 @@ class CodeGenerator implements ASTVisitor
             return 'tphp_fn_str_contains(' . $node->args[0]->accept($this) . ', ' . $node->args[1]->accept($this) . ')';
         }
 
-        // str_replace($search, $replace, $subject)
+        // str_replace($search, $replace, $subject) — 支持数组参数
         if ($node->callee === null && $node->name === 'str_replace') {
-            return 'tphp_fn_str_replace(' . $node->args[0]->accept($this) . ', ' . $node->args[1]->accept($this) . ', ' . $node->args[2]->accept($this) . ')';
+            $sType = $this->inferType($node->args[0]);
+            $rType = $this->inferType($node->args[1]);
+            $sCode = $node->args[0]->accept($this);
+            $rCode = $node->args[1]->accept($this);
+            $subjCode = $node->args[2]->accept($this);
+            // 两个都是数组 → 数组变体
+            if ($sType === 't_array*' && $rType === 't_array*') {
+                return "tphp_fn_str_replace_arr({$sCode}, {$rCode}, {$subjCode})";
+            }
+            // search 是数组，replace 是字符串 → 同一替换串
+            if ($sType === 't_array*') {
+                return "tphp_fn_str_replace_arr_str({$sCode}, {$rCode}, {$subjCode})";
+            }
+            // search 是字符串，replace 是数组 → PHP 对每个 replace 应用同一 search（不常见，按字符串处理）
+            return "tphp_fn_str_replace({$sCode}, {$rCode}, {$subjCode})";
         }
 
         // sprintf($fmt, ...$args) → 动态测量 + str_pool_alloc（无上限，完整 C 格式支持）
@@ -2673,6 +2661,21 @@ class CodeGenerator implements ASTVisitor
                  . " char* {$tn}_buf = str_pool_alloc({$tn}_len + 1);"
                  . " snprintf({$tn}_buf, {$tn}_len + 1, {$fmtCode}.data{$fmtArgs});"
                  . " tphp_rt_str_dup((t_string){{$tn}_buf, {$tn}_len}); })";
+        }
+
+        // array_map($callback, $arr) — 编译期内联展开，类型特化
+        if ($node->callee === null && $node->name === 'array_map') {
+            return $this->generateArrayMap($node);
+        }
+
+        // array_filter($arr, $callback) — 编译期内联展开
+        if ($node->callee === null && $node->name === 'array_filter') {
+            return $this->generateArrayFilter($node);
+        }
+
+        // array_reduce($arr, $callback, $initial) — 编译期内联展开
+        if ($node->callee === null && $node->name === 'array_reduce') {
+            return $this->generateArrayReduce($node);
         }
 
         // 类型转换: intval/floatval/strval/boolval
@@ -3219,6 +3222,118 @@ class CodeGenerator implements ASTVisitor
         }
 
         return "(($retType(*)({$paramTypes})){$calleeCode}.func)({$callArgs})";
+    }
+
+    // ── array_map / array_filter / array_reduce 编译期内联展开 ──
+
+    /** 从 AST 推断闭包签名（无需先 visit） */
+    private function inferCallbackSig(ExprNode $expr): ?array
+    {
+        if ($expr instanceof ClosureExpr) {
+            $ret = self::mapType($expr->returnType);
+            $params = array_map(fn($p) => self::mapType($p->type), $expr->params);
+            return ['ret' => $ret, 'params' => $params];
+        }
+        if ($expr instanceof VariableExpr) {
+            $varName = self::varName($expr->name);
+            $fnName = $this->varClosureMap[$varName] ?? '';
+            if ($fnName && isset($this->closureSigs[$fnName])) {
+                $sig = $this->closureSigs[$fnName];
+                $params = $sig['params'] !== '' ? array_map('trim', explode(',', $sig['params'])) : [];
+                return ['ret' => $sig['ret'], 'params' => $params];
+            }
+        }
+        return null;
+    }
+
+    /** 类型 → 数组元素 getter 函数名 */
+    private function arrGetterForType(string $type): string {
+        return match($type) {
+            't_int'      => 'tphp_fn_arr_item_int',
+            't_float'    => 'tphp_fn_arr_item_float',
+            't_string'   => 'tphp_fn_arr_item_str',
+            't_bool'     => 'tphp_fn_arr_item_bool',
+            't_array*'   => 'tphp_fn_arr_item_array',
+            't_callback' => 'tphp_fn_arr_item_callback',
+            default      => 'tphp_fn_arr_item_object',
+        };
+    }
+
+    /** 类型 → VAR_ 包装宏 */
+    private function arrVarWrapForType(string $type): string {
+        return match($type) {
+            't_int'      => 'VAR_INT',
+            't_float'    => 'VAR_FLOAT',
+            't_string'   => 'VAR_STRING',
+            't_bool'     => 'VAR_BOOL',
+            't_array*'   => 'VAR_ARRAY',
+            't_callback' => 'VAR_CALLBACK',
+            default      => 'VAR_OBJ',
+        };
+    }
+
+    /** array_map($callback, $arr) → 类型特化内联循环 */
+    private function generateArrayMap(CallExpr $node): string
+    {
+        $cbCode  = $node->args[0]->accept($this);
+        $arrCode = $node->args[1]->accept($this);
+        $sig = $this->inferCallbackSig($node->args[0]);
+        $retType   = $sig['ret'] ?? 't_int';
+        $paramType = $sig['params'][0] ?? 't_int';
+        $getter  = $this->arrGetterForType($paramType);
+        $varWrap = $this->arrVarWrapForType($retType);
+        $tn = '_am_' . (++$this->tmpVarCounter);
+        $paramCast = $paramType;
+        return "({ t_callback {$tn}_cb = {$cbCode};"
+             . " t_array* {$tn}_r = tphp_fn_arr_create(0);"
+             . " t_array* {$tn}_a = {$arrCode};"
+             . " for (int {$tn}_i = 0; {$tn}_a && {$tn}_i < {$tn}_a->length; {$tn}_i++) {"
+             . " {$paramType} {$tn}_v = {$getter}({$tn}_a, {$tn}_i);"
+             . " {$retType} {$tn}_m = (({$retType}(*)({$paramCast}, void*)){$tn}_cb.func)({$tn}_v, {$tn}_cb.env);"
+             . " {$tn}_r = tphp_fn_arr_push({$tn}_r, {$varWrap}({$tn}_m));"
+             . " } {$tn}_r; })";
+    }
+
+    /** array_filter($arr, $callback) → 类型特化内联循环 */
+    private function generateArrayFilter(CallExpr $node): string
+    {
+        $arrCode = $node->args[0]->accept($this);
+        $cbCode  = $node->args[1]->accept($this);
+        $sig = $this->inferCallbackSig($node->args[1]);
+        $paramType = $sig['params'][0] ?? 't_int';
+        $retType   = $sig['ret'] ?? 't_bool';
+        $getter  = $this->arrGetterForType($paramType);
+        $varWrap = $this->arrVarWrapForType($paramType);
+        $tn = '_af_' . (++$this->tmpVarCounter);
+        return "({ t_callback {$tn}_cb = {$cbCode};"
+             . " t_array* {$tn}_r = tphp_fn_arr_create(0);"
+             . " t_array* {$tn}_a = {$arrCode};"
+             . " for (int {$tn}_i = 0; {$tn}_a && {$tn}_i < {$tn}_a->length; {$tn}_i++) {"
+             . " {$paramType} {$tn}_v = {$getter}({$tn}_a, {$tn}_i);"
+             . " if ((({$retType}(*)({$paramType}, void*)){$tn}_cb.func)({$tn}_v, {$tn}_cb.env)) {"
+             . " {$tn}_r = tphp_fn_arr_push({$tn}_r, {$varWrap}({$tn}_v));"
+             . " } } {$tn}_r; })";
+    }
+
+    /** array_reduce($arr, $callback, $initial) → 类型特化内联循环 */
+    private function generateArrayReduce(CallExpr $node): string
+    {
+        $arrCode  = $node->args[0]->accept($this);
+        $cbCode   = $node->args[1]->accept($this);
+        $initCode = $node->args[2]->accept($this);
+        $sig = $this->inferCallbackSig($node->args[1]);
+        $retType   = $sig['ret'] ?? 't_int';
+        $accType   = $sig['params'][0] ?? 't_int';
+        $elemType  = $sig['params'][1] ?? 't_int';
+        $getter  = $this->arrGetterForType($elemType);
+        $tn = '_ar_' . (++$this->tmpVarCounter);
+        return "({ t_callback {$tn}_cb = {$cbCode};"
+             . " {$retType} {$tn}_acc = {$initCode};"
+             . " t_array* {$tn}_a = {$arrCode};"
+             . " for (int {$tn}_i = 0; {$tn}_a && {$tn}_i < {$tn}_a->length; {$tn}_i++) {"
+             . " {$elemType} {$tn}_v = {$getter}({$tn}_a, {$tn}_i);"
+             . " {$tn}_acc = (({$retType}(*)({$accType}, {$elemType}, void*)){$tn}_cb.func)({$tn}_acc, {$tn}_v, {$tn}_cb.env);"
+             . " } {$tn}_acc; })";
     }
 
     /** is_int / is_float / is_string / is_bool / is_array / is_null / is_object / is_callable
@@ -4005,17 +4120,41 @@ class CodeGenerator implements ASTVisitor
             $lines[] = '    ' . $s->accept($this);
         }
         $this->scopeDepth--;
-        if (!empty($node->catchBody)) {
-            $cv = $node->catchVar;
+
+        // 多 catch 子句：每个生成 TP_CATCH_EX(var, Type)
+        // 最后无类型兜底用 TP_CATCH_ANY（捕获非对象异常如 tp_throw("str")）
+        $hasCatch = !empty($node->catchClauses);
+        $hasObjCatch = false;
+        foreach ($node->catchClauses as $clause) {
+            $cv = $clause['var'];
+            $ct = $clause['type'];
             $this->declaredVars[$cv] = true;
-            $this->varTypes[$cv] = 't_string';
-            $lines[] = 'TP_CATCH(' . $cv . ')';
+            // catch 类型为已声明 class 或 Exception → 生成 TP_CATCH_EX；否则按字符串消息兜底
+            $resolvedCn = $this->symbols->resolveClass($ct);
+            $isClass = $resolvedCn !== null || $ct === 'Exception' || $this->symbols->hasClass('tphp_class_' . $ct);
+            if ($isClass) {
+                // catch 变量统一用 Exception* 类型（tp_throw_ex 已强转为 Exception*）
+                // 子类特有方法暂不支持（PHP 语义中 catch 块内 $e 视为声明的类型，但 AOT 简化为基类）
+                $this->varTypes[$cv] = 'tphp_class_Exception*';
+                $lines[] = 'TP_CATCH_EX(' . $cv . ', ' . $ct . ')';
+                $hasObjCatch = true;
+            } else {
+                // 未知类型 → 兜底字符串消息
+                $this->varTypes[$cv] = 't_string';
+                $lines[] = 'TP_CATCH_ANY(' . $cv . ')';
+            }
             $this->scopeDepth++;
-            foreach ($node->catchBody as $s) {
+            foreach ($clause['body'] as $s) {
                 $lines[] = '    ' . $s->accept($this);
             }
             $this->scopeDepth--;
         }
+
+        // 有 catch 但全是对象类型：补 ANY 兜底捕获 tp_throw 的字符串异常
+        if ($hasCatch && $hasObjCatch && empty($node->finallyBody)) {
+            $lines[] = 'TP_CATCH_ANY(_tp_unused_msg) { (void)_tp_unused_msg; }';
+        }
+
         if (!empty($node->finallyBody)) {
             $lines[] = 'TP_FINALLY';
             $this->scopeDepth++;
@@ -4031,16 +4170,48 @@ class CodeGenerator implements ASTVisitor
     public function visitThrowStmt(ThrowStmtNode $node): string
     {
         $code = $node->expr->accept($this);
-        // throw new Exception("msg") → tp_throw_ex()
-        if ($node->expr instanceof NewExpr && $node->expr->className === 'Exception') {
+        // throw new Exception(...) 或 throw new Exception子类(...) → tp_throw_ex()
+        // tp_throw_ex 接收原始对象指针，内部通过 cls->exception_offset 计算 Exception*
+        if ($node->expr instanceof NewExpr) {
+            return "tp_throw_ex({$code});";
+        }
+        // throw $exceptionVar (Exception 子类类型) → tp_throw_ex
+        $type = $this->inferType($node->expr);
+        if (str_starts_with($type, 'tphp_class_') && str_ends_with($type, '*')) {
             return "tp_throw_ex({$code});";
         }
         // throw "string" → tp_throw(msg.data)
-        $type = $this->inferType($node->expr);
         if ($type === 't_string') {
             return "tp_throw({$code}.data);";
         }
         return "tp_throw((char*)(uintptr_t)(" . $code . "));";
+    }
+
+    /**
+     * 计算类的 exception_offset（Exception 子类专属）
+     * @param string $cName 类的 C 名（如 tphp_class_MyException）
+     * 返回 offsetof 表达式字符串（如 "offsetof(tphp_class_MyException, _parent)"），
+     * 或 "0"（非 Exception 子类）
+     */
+    private function computeExceptionOffset(string $cName): string
+    {
+        if ($cName === 'tphp_class_Exception') return '0';
+        // 沿继承链查找 Exception，构建 _parent._parent... 链
+        $chain = [];
+        $curCn = $cName;
+        while ($curCn !== null && $curCn !== '') {
+            $class = $this->symbols->getClass($curCn);
+            if ($class === null) break;
+            $parentName = $class->parent;
+            if ($parentName === 'tphp_class_Exception') {
+                $chain[] = '_parent';
+                return 'offsetof(' . $cName . ', ' . implode('.', $chain) . ')';
+            }
+            if ($parentName === '' || $parentName === null) break;
+            $chain[] = '_parent';
+            $curCn = $parentName;
+        }
+        return '0';
     }
 
     public function visitLabelStmt(LabelStmtNode $node): string { return $node->name . ':;'; }
@@ -4429,6 +4600,7 @@ class CodeGenerator implements ASTVisitor
                 't_array*'   => $strict
                     ? throw new RuntimeException(sprintf("[%d:%d] Array cannot be converted to string", $expr->line, $expr->column))
                     : 'STR_LIT("Array")',
+                'tphp_class_Exception*' => "tphp_class_Exception_getMessage({$code})",
                 default      => $strict
                     ? throw new RuntimeException(sprintf("[%d:%d] Object cannot be converted to string", $expr->line, $expr->column))
                     : 'STR_LIT("Object")',
