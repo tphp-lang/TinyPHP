@@ -520,36 +520,45 @@ c_call:
     'C->' IDENTIFIER '(' args ')'   ✅ (直接 C 函数调用)
   | 'C->' IDENTIFIER                ✅ (直接 C 常量/枚举/宏访问，无括号)
 
+c_type_annotation:                  ✅ (借鉴 vlang C.Type 命名空间设计)
+    'C.' IDENTIFIER                 → C 类型注解（函数参数/返回值）
+  // C.int → int, C.double → double, C.char_ptr → char*
+  // C.void_ptr → void*, C.FILE → FILE*（结构体指针默认）
+
 c_type_bridge:
-    'c_int(' expr ')'     ✅ → int32_t
-  | 'c_float(' expr ')'   ✅ → double
-  | 'c_str(' expr ')'     ✅ → const char*
-  | 'php_int(' expr ')'   ✅ → t_int
-  | 'php_float(' expr ')' ✅ → t_float
-  | 'php_str(' expr ')'   ✅ → t_string (深拷贝)
+    'c_int(' expr ')'       ✅ → int32_t
+  | 'c_float(' expr ')'     ✅ → double
+  | 'c_str(' expr ')'       ✅ → const char*
+  | 'php_int(' expr ')'     ✅ → t_int
+  | 'php_float(' expr ')'   ✅ → t_float
+  | 'php_str(' expr ')'     ✅ → t_string (深拷贝，复用 C 内存)
+  | 'php_str_clone(' expr ')' ✅ → t_string (深拷贝，明确克隆语义)
 
 phpc_array:
-    'phpc_arr_int(' expr ')'       ✅ → int32_t* (malloc)
-  | 'phpc_arr_dbl(' expr ')'       ✅ → double* (malloc)
-  | 'phpc_arr_str(' expr ')'       ✅ → char** (malloc)
+    'phpc_arr_int(' expr ')'       ✅ → int32_t* (malloc，类型不匹配抛 tp_throw)
+  | 'phpc_arr_dbl(' expr ')'       ✅ → double* (malloc，类型不匹配抛 tp_throw)
+  | 'phpc_arr_str(' expr ')'       ✅ → char** (malloc，类型不匹配抛 tp_throw)
   | 'phpc_new_arr_int(' p,p ')'    ✅ → t_array*
   | 'phpc_new_arr_dbl(' p,p ')'    ✅ → t_array*
   | 'phpc_new_arr_str(' p,p ')'    ✅ → t_array*
   | 'phpc_new_arr()'               ✅ → t_array*
 
 phpc_object:
-    'phpc_obj(' expr ')'                       ✅ → void*
-  | 'phpc_new_obj(' ptr ',' cls ')'            ✅ → t_object*
+    'phpc_obj(' expr ')'                       ✅ → void* (借用语义)
+  | 'phpc_new_obj(' ptr ',' cls ')'            ✅ → t_object* (接管语义)
+  | 'phpc_unregister_obj(' expr ')'            ✅ → void (解除注册，防 double-free)
 
 phpc_callback:
     'phpc_fn(' cb ')'              ✅ → void*
   | 'phpc_env(' cb ')'             ✅ → void*
   | 'phpc_fn_i32(' cb ')'          ✅ → int32_t(*)(int32_t, void*)
+  | 'phpc_fn_i64(' cb ')'          ✅ → int64_t(*)(int64_t, void*)
+  | 'phpc_fn_f64(' cb ')'          ✅ → double(*)(double, void*)
   | 'phpc_thunk(' name ',' cb ')'  ✅ → 按 #callback 签名生成 thunk
 
 phpc_memory:
-    'phpc_free(' ptr ')'           ✅ → free(ptr)
-  | 'phpc_free_str_arr(' p,p ')'   ✅
+    'phpc_free(' ptr ')'           ✅ → free(ptr)，NULL 安全
+  | 'phpc_free_str_arr(' p,p ')'   ✅ → 释放字符串数组（先 free 每个字符串，再 free 指针数组）
 ```
 
 ---
@@ -588,9 +597,10 @@ phpc_memory:
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
 | `C->func(args)` | 直接 C 函数调用 |
 | `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
+| `C.Type` | C 类型注解（函数参数/返回值，如 `C.Point` → `Point*`） |
 | `c_int/c_float/c_str` | PHP → C 类型桥接 |
-| `php_int/php_float/php_str` | C → PHP 类型桥接 |
-| `phpc_arr_*` `phpc_obj` `phpc_fn_*` `phpc_thunk` | 数组/对象/回调互操作 |
+| `php_int/php_float/php_str/php_str_clone` | C → PHP 类型桥接 |
+| `phpc_arr_*` `phpc_obj` `phpc_new_obj` `phpc_unregister_obj` `phpc_fn_*` `phpc_thunk` | 数组/对象/回调互操作 |
 | `phpc_free` `phpc_free_str_arr` | C 内存释放 |
 | `#import pcntl` | 按需引入扩展（自动加载 ext/pcntl/src/） |
 | `int &$x` | 引用传参（int/float/bool/string/array/对象全类型支持） |

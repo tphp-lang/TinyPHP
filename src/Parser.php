@@ -1519,11 +1519,12 @@ class Parser
                 $globalFns = ['var_dump','count','exit','die','isset','empty','unset',
                     'error','time','date','sleep','usleep','hrtime',
                     // phpc 互操作（全部全局，不解析命名空间）
-                    'c_int','c_float','c_str','php_int','php_float','php_str',
+                    'c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
                     'phpc_arr_int','phpc_arr_dbl','phpc_arr_str',
                     'phpc_new_arr_int','phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
-                    'phpc_obj','phpc_new_obj',
+                    'phpc_obj','phpc_new_obj','phpc_unregister_obj',
                     'phpc_fn','phpc_env','phpc_new_fn','phpc_new_fn_env',
+                    'phpc_fn_i32','phpc_fn_i64','phpc_fn_f64','phpc_thunk',
                     'phpc_free','phpc_free_str_arr',
                     'count','strlen','trim','ltrim','rtrim','substr','strpos',
                     'str_contains','str_replace','sprintf','implode','explode','join',
@@ -1784,6 +1785,17 @@ class Parser
             $this->error("Expected type declaration, got '{$typeToken->lexeme}'");
         }
         $result = $typeToken->lexeme;
+
+        // C 类型: C.IDENTIFIER（如 C.FILE, C.int, C.char_ptr, C.void_ptr）
+        // 借鉴 vlang 的 C.TypeName 命名空间前缀设计
+        if ($result === 'C' && $this->check(TokenType::DOT)) {
+            $this->advance(); // 消费 '.'
+            $memberToken = $this->advance();
+            if ($memberToken->type !== TokenType::IDENTIFIER) {
+                $this->error("Expected C type name after 'C.', got '{$memberToken->lexeme}'");
+            }
+            return 'C.' . $memberToken->lexeme;
+        }
 
         // union type: int|string|bool
         while ($this->match(TokenType::PIPE)) {

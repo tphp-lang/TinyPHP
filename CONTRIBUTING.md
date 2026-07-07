@@ -486,7 +486,7 @@ class Main {
 | `include/array.h` | ~869 | PHP 数组（128 槽复用池/sort/1.5× 增长） |
 | `include/runtime.h` | ~402 | 运行时（128KB 字符串池+Arena/资源追踪/error/str_free SSO 感知） |
 | `include/builtin.h` | ~22 | 内置函数入口 (incl 8个 `include/std/` 子文件) |
-| `include/phpc.h` | ~200 | PHPC 互操作（类型/数组/对象/回调/thunk/内存释放） |
+| `include/phpc.h` | ~240 | PHPC 互操作（类型/数组/对象/回调/thunk/内存释放/C 类型注解） |
 | `include/object/object.h` | ~100 | COS 对象系统 + 128 槽对象复用池 |
 | `include/object/try.h` | ~92 | setjmp/longjmp 异常 |
 | `include/os/json.h` | ~385 | JSON 编解码（位图转义+批量安全字符写入） |

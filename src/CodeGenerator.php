@@ -1627,10 +1627,12 @@ class CodeGenerator implements ASTVisitor
              || $expr->name === 'phpc_arr_str') return 'null';
             if ($expr->name === 'phpc_obj')  return 'null';
             if ($expr->name === 'phpc_new_obj') return 't_object';
+            if ($expr->name === 'phpc_unregister_obj') return 'void';
             if (in_array($expr->name, ['phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64'], true)) return 'null';
             if ($expr->name === 'phpc_thunk' || str_ends_with($expr->name, '\\phpc_thunk')) return 'null';
             if ($expr->name === 'phpc_new_fn' || $expr->name === 'phpc_new_fn_env') return 't_callback';
             if ($expr->name === 'phpc_free' || $expr->name === 'phpc_free_str_arr') return 'void';
+            if ($expr->name === 'php_str' || $expr->name === 'php_str_clone') return 't_string';
             // 字符串函数返回类型
             // ctype functions → bool
             if (str_starts_with($expr->name, 'ctype_')) return 't_bool';
@@ -2242,20 +2244,26 @@ class CodeGenerator implements ASTVisitor
 
     /** C 类型 → TinyPHP 类型（函数指针 cast） */
     private function cToTpType(string $cType): string {
-        return match (strtolower($cType)) {
-            'int32_t','int64_t','int','long','long long','uint32_t','uint64_t' => 't_int',
+        // 规范化: 去除所有空格并转小写，避免 "const char *" vs "const char*" 不一致
+        $n = strtolower(preg_replace('/\s+/', '', $cType));
+        return match ($n) {
+            'int32_t','int64_t','int','long','longlong','uint32_t','uint64_t','unsignedint','unsignedlong' => 't_int',
             'double','float' => 't_float',
-            'const char*','char*','const char *','char *' => 't_string',
+            'constchar*','char*','constchar','char' => 't_string',
+            'bool','_bool' => 't_bool',
+            'void' => 'void',
             default => 'void*',
         };
     }
 
     /** C 类型 → cast 表达式（参数转换） */
     private function cToCast(string $cType): string {
-        return match (strtolower($cType)) {
-            'int32_t','int64_t','int','long','long long','uint32_t','uint64_t' => '(t_int)',
+        $n = strtolower(preg_replace('/\s+/', '', $cType));
+        return match ($n) {
+            'int32_t','int64_t','int','long','longlong','uint32_t','uint64_t','unsignedint','unsignedlong' => '(t_int)',
             'double','float' => '(t_float)',
-            'const char*','char*','const char *','char *' => '',
+            'constchar*','char*','constchar','char' => '',
+            'bool','_bool' => '(t_bool)',
             default => '(void*)',
         };
     }
@@ -2263,12 +2271,15 @@ class CodeGenerator implements ASTVisitor
     /** C 返回类型 → return cast */
     private function cToReturnCast(string $cRet): string {
         if ($cRet === 'void') return '';
-        return match (strtolower($cRet)) {
+        $n = strtolower(preg_replace('/\s+/', '', $cRet));
+        return match ($n) {
             'int32_t'   => '(int32_t)',
             'int64_t'   => '(int64_t)',
+            'int'       => '(int)',
             'double'    => '(double)',
             'float'     => '(float)',
             'void*'     => '(void*)',
+            'bool','_bool' => '(bool)',
             default     => "({$cRet})",
         };
     }
@@ -2939,10 +2950,10 @@ class CodeGenerator implements ASTVisitor
             }
 
             // PHPC 互操作函数：加 tphp_fn_ 前缀
-            $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str',
+            $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
                         'phpc_arr_int','phpc_arr_dbl','phpc_arr_str','phpc_new_arr_int',
                         'phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
-                        'phpc_obj','phpc_new_obj','phpc_free','phpc_free_str_arr',
+                        'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_free','phpc_free_str_arr',
                         'phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
                         'phpc_new_fn','phpc_new_fn_env','phpc_thunk'];
             $shortN = strrchr($n, '\\') !== false ? substr(strrchr($n, '\\'), 1) : $n;
@@ -3041,10 +3052,10 @@ class CodeGenerator implements ASTVisitor
                 throw new \RuntimeException("Unknown callback: #callback {$cbName} not declared");
             }
 
-            $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str',
+            $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
                 'phpc_arr_int','phpc_arr_dbl','phpc_arr_str',
                 'phpc_new_arr_int','phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
-                'phpc_obj','phpc_new_obj',
+                'phpc_obj','phpc_new_obj','phpc_unregister_obj',
                 'phpc_fn','phpc_env','phpc_new_fn','phpc_new_fn_env',
                 'phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
                 'phpc_free','phpc_free_str_arr'];
@@ -4577,6 +4588,25 @@ class CodeGenerator implements ASTVisitor
         if ($t === 'callable') return 't_callback';
         // 联合类型 → t_var
         if (str_contains($t, '|')) return 't_var';
+        // C 类型: C.IDENTIFIER — 借鉴 vlang 的 C 命名空间设计
+        //   C.int → int, C.float → double, C.double → double, C.char → char, C.void → void
+        //   C.void_ptr → void*, C.char_ptr → char*, C.int_ptr → int*, C.float_ptr → double*
+        //   C.XXX → XXX*（默认：结构体指针，如 C.FILE → FILE*）
+        if (str_starts_with($t, 'C.')) {
+            $ct = substr($t, 2);
+            return match ($ct) {
+                'int', 'int32', 'int64', 'uint32', 'uint64' => $ct === 'int' ? 'int' : $ct . '_t',
+                'float', 'double' => 'double',
+                'char' => 'char',
+                'void' => 'void',
+                'void_ptr' => 'void*',
+                'char_ptr' => 'char*',
+                'int_ptr' => 'int*',
+                'float_ptr' => 'double*',
+                'bool' => 'bool',
+                default => $ct . '*',  // 结构体指针: C.FILE → FILE*
+            };
+        }
         // 枚举类型 → 返回 C struct 指针类型
         if (isset($this->enumCTypes[$t])) {
             return $this->enumCTypes[$t];
@@ -4593,6 +4623,24 @@ class CodeGenerator implements ASTVisitor
     private static function resolveType(string $type): string {
         if (str_contains($type, '|')) return 't_var';
         if ($type === 'callable') return 't_callback';
+        // C 类型: C.IDENTIFIER — 直接映射为对应 C 类型
+        if (str_starts_with($type, 'C.')) {
+            $ct = substr($type, 2);
+            return match ($ct) {
+                'int' => 'int',
+                'int32' => 'int32_t', 'int64' => 'int64_t',
+                'uint32' => 'uint32_t', 'uint64' => 'uint64_t',
+                'float', 'double' => 'double',
+                'char' => 'char',
+                'void' => 'void',
+                'void_ptr' => 'void*',
+                'char_ptr' => 'char*',
+                'int_ptr' => 'int*',
+                'float_ptr' => 'double*',
+                'bool' => 'bool',
+                default => $ct . '*',  // 结构体指针
+            };
+        }
         return self::$typeMap[$type] ?? ('tphp_class_' . $type . '*');
     }
 
@@ -4617,6 +4665,9 @@ class CodeGenerator implements ASTVisitor
     // 是否 byRef 指针类型（int* / t_string* / t_array** / tphp_class_X** 等）
     private function isByRefType(string $type): bool {
         if ($type === 'void*') return false;
+        // C 类型指针（Point*, char*, FILE* 等）不是 byRef，直接传递
+        // 只有 TinyPHP 内部值类型的指针才是 byRef
+        if (!str_starts_with($type, 't_') && !str_starts_with($type, 'tphp_')) return false;
         // 值类型的指针：t_int*, t_float*, t_string*, t_bool* → byRef
         // 指针类型的双指针：t_array**, tphp_class_X**, tphp_enum_X** → byRef
         if (str_ends_with($type, '**')) return true;

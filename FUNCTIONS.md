@@ -27,7 +27,7 @@
 | `include/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
-| C 互操作 (PHPC) | `phpc.h` | 25 |
+| C 互操作 (PHPC) | `phpc.h` | 27 |
 | **合计** | | **248+** |
 
 ---
@@ -714,15 +714,19 @@ var_dump($gen->send(100));   // 101
 | 函数 | 方向 | 说明 |
 |------|------|------|
 | `c_int($x) / c_float($x) / c_str($s)` | PHP → C | → `int32_t` / `double` / `const char*` |
-| `php_int($x) / php_float($x) / php_str($s)` | C → PHP | → `t_int` / `t_float` / `t_string` |
+| `php_int($x) / php_float($x) / php_str($s)` | C → PHP | → `t_int` / `t_float` / `t_string` (深拷贝) |
+| `php_str_clone($s)` | C → PHP | → `t_string` (深拷贝，明确克隆语义) |
 | `C->func(args)` | 直接 C 调用 | 无 name mangling |
 | `C->CONST` | 直接 C 常量/枚举/宏访问 | 无括号形式，按 `t_int` 推断 |
+| `C.Type` | C 类型注解 | 函数参数/返回值用 C 类型（如 `C.Point` → `Point*`） |
 | `#include "file.h"` | 预处理器 | 生成 `#include` |
 | `#flag [CC] [OS] flags` | 预处理器 | 平台+编译器过滤 |
 | `#callback type name(params)` | 预处理器 | 声明 C 回调签名 |
-| `phpc_arr_int/dbl/str` | PHP→C | 严格类型检查，malloc |
+| `phpc_arr_int/dbl/str` | PHP→C | 严格类型检查，**类型不匹配抛 tp_throw 异常**，malloc |
 | `phpc_new_arr_int/dbl/str` | C→PHP | 深拷贝 |
-| `phpc_obj` / `phpc_fn` / `phpc_env` | 双向 | 对象/函数/环境指针 |
+| `phpc_obj` / `phpc_fn` / `phpc_env` | 双向 | 对象/函数/环境指针（借用语义） |
+| `phpc_new_obj` | C→PHP | 包裹 C 指针为 PHP 对象（接管语义） |
+| `phpc_unregister_obj` | 双向 | 解除对象注册（C 库自行 free 时调用，防 double-free） |
 | `phpc_thunk('name', $fn)` | no-env 回调 | 按 #callback 生成 thunk |
 
 ---

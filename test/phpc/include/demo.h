@@ -84,6 +84,51 @@ void point_free(Point* p) {
     free(p);
 }
 
+// ── C 类型参数/返回值测试函数 ──────────────────────────
+// 这些函数用于测试 TinyPHP 的 C.TYPE 类型注解功能
+
+// 返回 Point 指针（测试 C.Point 返回类型）
+Point* point_origin(void) {
+    Point* p = (Point*)malloc(sizeof(Point));
+    if (p) { p->x = 0.0; p->y = 0.0; }
+    return p;
+}
+
+// 接受 Point 指针参数，返回 double（测试 C.Point 参数 + C.double 返回）
+double point_get_x(Point* p) {
+    return p ? p->x : 0.0;
+}
+
+// 字符串处理：接受 const char*，返回 const char*（测试 C.char_ptr）
+const char* greet(const char* name) {
+    static char buf[256];
+    if (!name) return "Hello, stranger!";
+    snprintf(buf, sizeof(buf), "Hello, %s!", name);
+    return buf;
+}
+
+// 接受 C int，返回 C int（测试 C.int）
+int int_square(int x) {
+    return x * x;
+}
+
+// 返回 NULL 测试（错误路径）
+Point* point_create_null(void) {
+    return NULL;
+}
+
+// 拼接字符串数组（测试 phpc_arr_str / phpc_free_str_arr）
+const char* join_strs(char** strs, int len) {
+    static char buf[4096];
+    buf[0] = '\0';
+    if (!strs || len <= 0) return "";
+    for (int i = 0; i < len; i++) {
+        if (i > 0) strcat(buf, ",");
+        if (strs[i]) strncat(buf, strs[i], sizeof(buf) - strlen(buf) - 1);
+    }
+    return buf;
+}
+
 // ── 对象互操作 ─────────────────────────────────────────
 // 验证 phpc_obj 提取的指针有效（非 NULL）
 int obj_valid(void* obj) { return (obj != NULL) ? 1 : 0; }

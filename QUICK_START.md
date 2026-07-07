@@ -53,6 +53,29 @@ php tphp.php main.php my_func.c --debug
 # [YES] 30
 ```
 
+### C 类型注解（可选）
+
+借鉴 vlang 的 `C.Type` 设计，函数参数和返回值可直接使用 C 类型，编译器自动映射：
+
+```php
+#include "my_func.h"
+
+function add(int $a, int $b): C.int {     // 返回 C int
+    return C->my_add(c_int($a), c_int($b));
+}
+
+// C 结构体指针作为参数和返回值
+function make_point(): C.Point { return C->point_create(); }
+function get_x(C.Point $p): C.double { return C->point_get_x($p); }
+```
+
+| C 类型注解 | 映射 |
+|-----------|------|
+| `C.int` / `C.int32` / `C.int64` | `int` / `int32_t` / `int64_t` |
+| `C.float` / `C.double` | `double` |
+| `C.char_ptr` / `C.void_ptr` | `char*` / `void*` |
+| `C.XXX`（结构体） | `XXX*` |
+
 ---
 
 ## 3. 开发流程

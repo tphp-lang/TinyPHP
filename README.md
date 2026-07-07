@@ -226,7 +226,7 @@ TCC 亚秒编译，GCC/Clang -O2 带来 3-10 倍额外提速。`compat.h` 统一
 
 ### C 互操作（PHPC）
 
-完整的 PHP ↔ C 双向互操作：`C->function(args)` 直接调用 C 函数，`C->CONST` 直接访问 C 枚举/宏常量，`c_int/c_str` 类型桥接，数组/对象/回调互操作。详见下方 PHPC 章节。
+完整的 PHP ↔ C 双向互操作：`C->function(args)` 直接调用 C 函数，`C->CONST` 直接访问 C 枚举/宏常量，`C.Type` 类型注解支持 C 类型作为函数参数/返回值，`c_int/c_str` 类型桥接，数组/对象/回调互操作。详见下方 PHPC 章节。
 
 ### 扩展系统
 
@@ -247,7 +247,7 @@ class Main {
 
 ## C 互操作（PHPC）
 
-> 完整实现：`include/phpc.h`（~180 行），通过 `#include`/`#flag`/`C->call`/`C->CONST`/`c_*`/`php_*`/`phpc_*` 实现 PHP ↔ C 双向互操作。所有 phpc 函数为**全局函数**，不受命名空间 mangle。测试：`test/phpc/`。
+> 完整实现：`include/phpc.h`（~240 行），通过 `#include`/`#flag`/`C->call`/`C->CONST`/`C.Type`/`c_*`/`php_*`/`phpc_*` 实现 PHP ↔ C 双向互操作。所有 phpc 函数为**全局函数**，不受命名空间 mangle。测试：`test/phpc/`。
 
 ### 编译控制
 
@@ -294,8 +294,10 @@ class Main {
 |------|------|------|
 | `#flag` | **Shell 元字符阻断** | `` ` `` `$` `\|` `;` `&` `>` `<` `\n` `\\` 直接报错 |
 | | **Flag 前缀白名单** | 仅 `-I` `-L` `-l` `-D` `-U` `-O` `-W` `-std` `-m` `-f` `-g` `-pthread` `-static` `-shared` `-B` |
+| | **危险 Flag 黑名单** | `-fplugin` / `-specs` / `-wrapper` / `-ld=` 直接报错（防 GCC 插件注入） |
 | | **路径规范化** | `-I`/`-L` 路径经 `realpath()` 消解 `../` |
-| `#include` | **realpath + 边界校验** | 路径经 `realpath()` 解析后验证在项目根目录内 |
+| `#include` | **realpath + 边界校验** | 项目头路径经 `realpath()` 解析后验证在项目根目录内 |
+| | **系统头白名单** | `#include <...>` 仅允许标准 C 库 + 常见 POSIX/Windows 头（防任意引入系统 API） |
 | `#import` | **扩展名白名单** | 正则 `\w[\w\-]*` 仅接受字母/数字/下划线/连字符 |
 | | **工作区边界校验** | `realpath()` 后验证路径在 `ext/` 目录内 |
 
@@ -304,11 +306,51 @@ class Main {
 ### 基础类型桥接
 
 ```
-PHP → C:                  C → PHP:
-c_int($x)   → int32_t     php_int(v)   → t_int
-c_float($x) → double      php_float(v) → t_float
-c_str($s)   → const char*  php_str(s)  → t_string (深拷贝)
+PHP → C:                   C → PHP:
+c_int($x)   → int32_t      php_int(v)      → t_int
+c_float($x) → double       php_float(v)    → t_float
+c_str($s)   → const char*  php_str(s)      → t_string (深拷贝，复用 C 内存)
+                            php_str_clone(s) → t_string (深拷贝，明确克隆语义)
 ```
+
+### C 类型注解
+
+借鉴 vlang 的 `C.Type` 命名空间设计，函数参数和返回值可直接使用 C 类型注解，编译期映射为对应 C 类型：
+
+```php
+#include "include/demo.h"
+
+// C.Point 返回类型 → Point*
+function create_origin(): C.Point {
+    return C->point_origin();
+}
+
+// C.Point 参数 + C.double 返回 → Point* / double
+function get_point_x(C.Point $p): C.double {
+    return C->point_get_x($p);
+}
+
+// C.char_ptr 参数 + C.int 返回 → char* / int
+function square_name(string $name): int {
+    return php_int(C->int_square(c_int(42)));
+}
+```
+
+| C 类型注解 | 映射为 C 类型 | 说明 |
+|-----------|--------------|------|
+| `C.int` | `int` | C int |
+| `C.int32` / `C.int64` | `int32_t` / `int64_t` | 固定宽度整数 |
+| `C.uint32` / `C.uint64` | `uint32_t` / `uint64_t` | 无符号整数 |
+| `C.float` / `C.double` | `double` | 浮点数 |
+| `C.char` | `char` | 单字符 |
+| `C.bool` | `bool` | 布尔值 |
+| `C.void` | `void` | 无返回值 |
+| `C.void_ptr` | `void*` | 通用指针 |
+| `C.char_ptr` | `char*` | C 字符串指针 |
+| `C.int_ptr` / `C.float_ptr` | `int*` / `double*` | 整数/浮点指针 |
+| `C.XXX` | `XXX*` | 结构体指针（默认，如 `C.FILE` → `FILE*`） |
+
+> `C.Type` 注解让 C 边界在函数签名中一目了然，编译器自动处理类型映射，无需手动 `c_int` / `php_int` 转换。
 
 直接 C 调用：`C->function(args)` → 生成原生 `function(args)`，无 `tphp_fn_` 前缀。
 
@@ -328,7 +370,7 @@ class Main {
 
 ### 数组互操作
 
-**严格 C 风格**：`phpc_arr_int($arr)` 要求所有元素为 `TYPE_INT`，否则 `error()` 退出。`phpc_arr_dbl` 接受 `int` 或 `float`。
+**严格 C 风格**：`phpc_arr_int($arr)` 要求所有元素为 `TYPE_INT`，否则抛 `tp_throw` 异常（可被 try-catch 捕获）。`phpc_arr_dbl` 接受 `int` 或 `float`。
 
 ```php
 // 模式: 提取 → C 操作 → 释放
@@ -368,8 +410,9 @@ function obj_read_x(MyPoint $p): float {
 
 | 函数 | 方向 | 说明 |
 |------|------|------|
-| `phpc_obj($obj)` | PHP→C | 提取底层 C 结构体指针（`void*`） |
-| `phpc_new_obj(ptr, vtable)` | C→PHP | 包裹 C 指针为 PHP 对象（vtable 管理析构） |
+| `phpc_obj($obj)` | PHP→C | 提取底层 C 结构体指针（`void*`，借用语义） |
+| `phpc_new_obj(ptr, vtable)` | C→PHP | 包裹 C 指针为 PHP 对象（vtable 管理析构，接管语义） |
+| `phpc_unregister_obj($ptr)` | 双向 | 解除对象注册（C 库自行 free 时调用，防 double-free） |
 
 ### 回调互操作
 
@@ -410,6 +453,20 @@ C->fold_dbl($data, $len, phpc_thunk('fold_cb', $fn));  // 按签名生成 thunk
 
 所有 PHPC 函数按所有权分三类，**搞错会导致 double-free 或内存泄漏**。
 
+#### 错误处理
+
+`phpc_arr_*` 类型不匹配时抛 `tp_throw` 异常（基于 setjmp/longjmp），可被 TinyPHP 的 `try-catch` 捕获，不再 `exit(1)` 强制退出：
+
+```php
+try {
+    $data = phpc_arr_int([1, "two", 3]);  // 元素 "two" 不是 int
+} catch (\Throwable $e) {
+    echo "Caught: " . $e->getMessage();   // 捕获异常
+}
+```
+
+> `C->func()` 段错误不可恢复，仍会导致进程崩溃。C 函数返回 NULL/错误码时需调用方手动检查，无统一约定。
+
 #### PHP → C（调用方负责释放）
 
 | 函数 | 返回类型 | 所有权 |
@@ -431,9 +488,11 @@ C->fold_dbl($data, $len, phpc_thunk('fold_cb', $fn));  // 按签名生成 thunk
 | `php_int(v)` | `t_int` | 值拷贝 |
 | `php_float(v)` | `t_float` | 值拷贝 |
 | `php_str(s)` | `t_string` | **深拷贝**，字符串池自动释放 |
+| `php_str_clone(s)` | `t_string` | **深拷贝**，明确克隆语义（与 `c_str` 对照） |
 | `phpc_new_arr_*(src, n)` | `t_array*` | 引用计数，自动 GC |
 | `phpc_new_arr()` | `t_array*` | 引用计数，自动 GC |
 | `phpc_new_obj(ptr, cls)` | `void*` | TinyPHP 析构链管理 |
+| `phpc_unregister_obj(ptr)` | `void` | 解除注册（C 库自行 free 后调用） |
 | `phpc_new_fn(func)` | `t_callback` | 值拷贝 |
 | `phpc_new_fn_env(fn, env)` | `t_callback` | 值拷贝 |
 

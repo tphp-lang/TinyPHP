@@ -48,6 +48,10 @@ typedef enum {
 typedef int64_t t_int;
 typedef double  t_float;
 typedef bool    t_bool;
+// t_ptr: 通用 C 指针类型，用于 phpc 互操作
+//   与 t_int（int64_t）区分，避免指针被当作整数参与算术运算
+//   sizeof(t_ptr) == sizeof(void*) == 8（64 位平台）
+typedef void* t_ptr;
 
 #define null ((void *)0)
 

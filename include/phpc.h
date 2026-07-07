@@ -2,14 +2,24 @@
 // ============================================================
 // phpc.h — PHP ↔ C 互操作（原名 p2c，已统一命名为 phpc）
 //
-//   基础类型：tphp_fn_c_int / tphp_fn_c_float / tphp_fn_c_str / tphp_fn_php_int / tphp_fn_php_float / tphp_fn_php_str
-//   数组：    tphp_fn_phpc_arr_*   — 严格 C 风格，类型不匹配即 error() 退出
-//   对象：    tphp_fn_phpc_obj / tphp_fn_phpc_new_obj   — PHP 对象 ↔ C 结构体指针
-//   回调：    tphp_fn_phpc_fn / tphp_fn_phpc_new_fn     — PHP 闭包 ↔ C 函数指针
+//   基础类型：tphp_fn_c_int / tphp_fn_c_float / tphp_fn_c_str
+//             tphp_fn_php_int / tphp_fn_php_float / tphp_fn_php_str / tphp_fn_php_str_clone
+//   数组：    tphp_fn_phpc_arr_*   — 严格 C 风格，类型不匹配抛 tp_throw 异常
+//   对象：    tphp_fn_phpc_obj / tphp_fn_phpc_new_obj / tphp_fn_phpc_unregister_obj
+//   回调：    tphp_fn_phpc_fn / tphp_fn_phpc_new_fn
+//   释放：    tphp_fn_phpc_free / tphp_fn_phpc_free_str_arr
+//
+// 安全设计（借鉴 vlang）：
+//   - tphp_fn_phpc_arr_* 失败抛 tp_throw 异常，可被 try-catch 捕获，不再 exit(1)
+//   - tphp_fn_phpc_obj 返回 NULL 时安全（无段错误）
+//   - tphp_fn_phpc_new_obj 可通过 phpc_unregister_obj 解除注册，防止 double-free
+//   - tphp_fn_php_str_clone 提供字符串深拷贝（C→PHP 拥有所有权），区别于 php_str 复用
 // ============================================================
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include "object/try.h"
 
 // ── 1. 基础类型：PHP → C ──────────────────────────────────
 
@@ -21,11 +31,20 @@ static inline const char* tphp_fn_c_str(t_string v) { return STR_PTR(v); }
 
 static inline t_int   tphp_fn_php_int(int32_t v)   { return (t_int)v; }
 static inline t_float tphp_fn_php_float(double v)  { return (t_float)v; }
+
+// php_str: 复用 C 内存（深拷贝到 arena，C 端原指针仍由 C 管理）
+//   适用：C 函数返回的栈字符串/静态字符串/调用方不持有所有权的字符串
 static inline t_string tphp_fn_php_str(const char* s) {
     return s ? tphp_rt_str_dup((t_string){(char*)s, (int)strlen(s)}) : (t_string){.data = NULL, .length = 0, .is_local = false};
 }
 
-// ── 3. 数组：PHP → C（严格类型检查，不匹配即 error()）────
+// php_str_clone: 同 php_str（语义别名，明确表示"克隆"语义）
+//   与 c_str() 形成对照：c_str() 复用 PHP 内存给 C，php_str_clone() 复制 C 内存给 PHP
+static inline t_string tphp_fn_php_str_clone(const char* s) {
+    return tphp_fn_php_str(s);
+}
+
+// ── 3. 数组：PHP → C（严格类型检查，不匹配抛 tp_throw 异常）────
 //   返回 malloc 的 C 数组指针，长度通过 count($arr) 获取
 //   调用方负责 free()
 
@@ -37,9 +56,9 @@ static inline int32_t* tphp_fn_phpc_arr_int(t_array* a) {
     for (int i = 0; i < a->length; i++) {
         if (a->entries[i].val.type != TYPE_INT) {
             free(out);
-            tphp_rt_free_all();
-            fprintf(stderr, "\nFatal error: phpc_arr_int(): element %d is not int (type=%d)\n\n", i, a->entries[i].val.type);
-            exit(1);
+            char _buf[128];
+            snprintf(_buf, sizeof(_buf), "phpc_arr_int(): element %d is not int (type=%d)", i, a->entries[i].val.type);
+            tp_throw(_buf);
         }
         out[i] = (int32_t)a->entries[i].val.value._int;
     }
@@ -58,9 +77,9 @@ static inline double* tphp_fn_phpc_arr_dbl(t_array* a) {
             out[i] = a->entries[i].val.value._float;
         else {
             free(out);
-            tphp_rt_free_all();
-            fprintf(stderr, "\nFatal error: phpc_arr_dbl(): element %d is not numeric (type=%d)\n\n", i, a->entries[i].val.type);
-            exit(1);
+            char _buf[128];
+            snprintf(_buf, sizeof(_buf), "phpc_arr_dbl(): element %d is not numeric (type=%d)", i, a->entries[i].val.type);
+            tp_throw(_buf);
         }
     }
     return out;
@@ -75,9 +94,9 @@ static inline char** tphp_fn_phpc_arr_str(t_array* a) {
         if (a->entries[i].val.type != TYPE_STRING) {
             for (int j = 0; j < i; j++) free(out[j]);
             free(out);
-            tphp_rt_free_all();
-            fprintf(stderr, "\nFatal error: phpc_arr_str(): element %d is not string (type=%d)\n\n", i, a->entries[i].val.type);
-            exit(1);
+            char _buf[128];
+            snprintf(_buf, sizeof(_buf), "phpc_arr_str(): element %d is not string (type=%d)", i, a->entries[i].val.type);
+            tp_throw(_buf);
         }
         t_string s = a->entries[i].val.value._string;
         out[i] = (char*)malloc((size_t)(s.length + 1));
@@ -126,12 +145,15 @@ static inline t_array* tphp_fn_phpc_new_arr(void) {
 // ── 5. 对象：PHP ↔ C 结构体指针 ──────────────────────────
 //   TinyPHP 对象 = t_object 头部 + 用户字段，结构体指针即对象首地址
 
-// PHP 对象 → 底层 C 结构体指针（类型安全由调用方保证）
+// PHP 对象 → 底层 C 结构体指针（借用语义，不转移所有权）
+//   返回 NULL 时安全（C 端应自行检查）
 static inline void* tphp_fn_phpc_obj(void* obj) {
-    return obj;
+    return obj;  // NULL 透传，调用方负责检查
 }
 
-// C 结构体指针 → PHP 对象（class descriptor 控制析构生命周期）
+// C 结构体指针 → PHP 对象（接管语义，class descriptor 控制析构生命周期）
+//   注意：ptr 由 TinyPHP 注册管理，C 端不应再自行 free
+//   如需 C 端自行管理生命周期，请先调 phpc_unregister_obj 解除注册
 static inline void* tphp_fn_phpc_new_obj(void* ptr, const t_class* cls) {
     if (!ptr || !cls) return NULL;
     t_object* obj = (t_object*)ptr;
@@ -139,6 +161,12 @@ static inline void* tphp_fn_phpc_new_obj(void* ptr, const t_class* cls) {
     obj->refcount = 1;
     tphp_rt_register(ptr, 0);  // register for error() cleanup
     return obj;
+}
+
+// 解除对象注册 — 当 C 库自行释放对象内存时调用，防止 tphp_rt_free_all double-free
+//   典型用法：C->point_free(phpc_obj($p)); phpc_unregister_obj(phpc_obj($p));
+static inline void tphp_fn_phpc_unregister_obj(void* ptr) {
+    if (ptr) tphp_rt_unregister(ptr);
 }
 
 // ── 6. 回调：PHP ↔ C 函数指针 ────────────────────────────
@@ -178,6 +206,8 @@ static inline phpc_fn_f64_t tphp_fn_phpc_fn_f64(t_callback cb) { return (phpc_fn
 // ── 7. 内存释放 ───────────────────────────────────────────
 //   phpc_arr_* 返回的 malloc 指针必须通过以下函数释放
 
+// phpc_free: 释放 C 内存（不置零，调用方自行管理指针生命周期）
+//   注意：phpc_free 后请勿再使用该指针（use-after-free 风险）
 static inline void tphp_fn_phpc_free(void* ptr) {
     if (ptr) free(ptr);
 }

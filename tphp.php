@@ -451,8 +451,40 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         foreach ($allIncludes as $inc) {
             $fileName = is_array($inc) ? $inc['file'] : $inc;
             $isQuoted = is_array($inc) ? ($inc['quoted'] ?? true) : true;
-            // System headers (#include <math.h>) skip resolution — pass through directly
-            if (!$isQuoted) continue;
+            // System headers (#include <math.h>) — 白名单校验
+            if (!$isQuoted) {
+                // 安全加固: 系统头文件白名单（防止任意引入系统 API）
+                // 允许标准 C 库头文件 + 常见系统头
+                $allowedSystemHeaders = [
+                    // C 标准库
+                    'stdio.h','stdlib.h','string.h','math.h','ctype.h','time.h',
+                    'stdint.h','stddef.h','stdbool.h','stdarg.h','limits.h','float.h',
+                    'errno.h','assert.h','locale.h','setjmp.h','signal.h','wchar.h',
+                    'wctype.h','iso646.h','fenv.h','inttypes.h','complex.h','tgmath.h',
+                    // POSIX 常用
+                    'unistd.h','fcntl.h','sys/stat.h','sys/types.h','sys/wait.h',
+                    'sys/time.h','sys/socket.h','sys/un.h','sys/mman.h','sys/resource.h',
+                    'netinet/in.h','netinet/tcp.h','arpa/inet.h','netdb.h','pthread.h',
+                    'dlfcn.h','poll.h','select.h','termios.h','pty.h','semaphore.h',
+                    'dirent.h','utime.h','sys/utsname.h','sys/file.h','sys/ioctl.h',
+                    // Windows 常用
+                    'windows.h','winsock2.h','ws2tcpip.h','io.h','process.h','direct.h',
+                    'conio.h','shlobj.h','shellapi.h','wincrypt.h','winreg.h',
+                    // C++ 兼容
+                    'cstring','cstdlib','cstdio','cmath','cstdint','vector','string','map',
+                ];
+                $cleanName = ltrim($fileName, '/');
+                if (!in_array($cleanName, $allowedSystemHeaders, true)) {
+                    // 允许 sys/ 和 net/ 和 arpa/ 和 netinet/ 前缀的系统头
+                    $isAllowedPrefix = preg_match('/^(sys|net|arpa|netinet|netpacket|protocols)\//', $cleanName);
+                    if (!$isAllowedPrefix) {
+                        die("Error: #include <{$fileName}> is not in the system header whitelist.\n"
+                          . "  Allowed: standard C library headers, common POSIX/Windows headers.\n"
+                          . "  If you need this header, add it to the whitelist in tphp.php.\n");
+                    }
+                }
+                continue;
+            }
             // Security: resolve via realpath, verify within project root (or PHAR fs root)
             $resolvedInclude = null;
             // Absolute path (from __INC__/__EXT__/__CMD__ expansion): resolve directly
@@ -526,6 +558,15 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             // Security: block shell metacharacters (prevent command injection)
             if (preg_match('/[`$|;&><\n\r\\\\]/', $flagsStr)) {
                 die("Error: #flag '{$flagsStr}' contains unsafe shell characters (backtick, $, |, ;, &, >, <, \\n, \\, newline)\n");
+            }
+
+            // Security: blacklist dangerous flag patterns
+            // -fplugin=/path → GCC 插件可执行任意代码
+            // -specs=/path    → GCC specs 文件可注入任意命令
+            // -wrapper       → 包装器可执行任意命令
+            // -ld=           → 链接器替换
+            if (preg_match('/-fplugin\s*=?|-specs\s*=?|-wrapper\s|-ld\s*=/', $flagsStr)) {
+                die("Error: #flag '{$flagsStr}' contains a blacklisted flag (-fplugin/-specs/-wrapper/-ld are not allowed for security)\n");
             }
 
             // Security: validate each individual flag token against whitelist

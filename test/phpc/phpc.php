@@ -128,3 +128,61 @@ function fold_double(array $arr, callable $fn): float
     phpc_free($data);
     return php_float($result);
 }
+
+// ── C 类型参数/返回值测试 ──
+// 借鉴 vlang 的 C.Type 设计：函数参数和返回值可直接使用 C 类型
+
+// C.Point 返回类型：直接返回 C 结构体指针
+function create_origin(): C.Point
+{
+    return C->point_origin();
+}
+
+// C.Point 参数 + C.double 返回
+function get_point_x(C.Point $p): C.double
+{
+    return C->point_get_x($p);
+}
+
+// C.char_ptr 参数 + C.char_ptr 返回
+function greet_name(string $name): string
+{
+    $result = C->greet(c_str($name));
+    return php_str($result);
+}
+
+// C.int 参数 + C.int 返回
+function square_int(int $x): int
+{
+    return php_int(C->int_square(c_int($x)));
+}
+
+// 错误路径：返回 NULL 的函数
+function create_null_point(): C.Point
+{
+    return C->point_create_null();
+}
+
+// 字符串数组互操作
+function join_string_array(array $arr): string
+{
+    $data = phpc_arr_str($arr);
+    $len = c_int(count($arr));
+    // 调用 C 函数拼接字符串数组
+    $result = C->join_strs($data, $len);
+    phpc_free_str_arr($data, $len);
+    return php_str($result);
+}
+
+// phpc_unregister_obj 测试：C 库自行释放对象
+function create_and_free_point(float $x, float $y): int
+{
+    $p = C->point_create(c_float($x), c_float($y));
+    if (!$p) {
+        return 0;
+    }
+    $valid = C->obj_valid($p);
+    C->point_free($p);
+    phpc_unregister_obj($p);
+    return php_int($valid);
+}

@@ -24,6 +24,7 @@ typedef struct _tp_ex_frame {
     jmp_buf                     jmp_buf;
     int32_t                     thrown;
     char                        msg_buf[256];
+    void                       *ex_obj;   // 抛出的 Exception 对象指针（tp_throw 时为 NULL）
     struct _tp_ex_frame        *prev;
 } tp_ex_frame;
 

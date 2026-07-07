@@ -12,6 +12,13 @@ use function Phpc\apply_square;
 use function Phpc\map_with_closure;
 use function Phpc\map_ints_noenv;
 use function Phpc\fold_double;
+use function Phpc\create_origin;
+use function Phpc\get_point_x;
+use function Phpc\greet_name;
+use function Phpc\square_int;
+use function Phpc\create_null_point;
+use function Phpc\join_string_array;
+use function Phpc\create_and_free_point;
 
 class MyPoint
 {
@@ -128,6 +135,37 @@ class Main
             function(int $idx, float $val) use ($factor): float { return $val * (float)$factor; }
         );
         echo "16. fold([10,20,30],×0.5)="; var_dump($halved); echo "\n";
+
+        // ═══════════════════════════════════════
+        // Part 5: C 类型参数/返回值
+        // ═══════════════════════════════════════
+        echo "\n-- Part 5: C Types --\n";
+
+        // 5a: C.Point 返回类型
+        $origin = create_origin();
+        echo "17. origin_x="; var_dump(get_point_x($origin)); echo "\n";
+        phpc_unregister_obj($origin);
+        C->point_free($origin);
+
+        // 5b: C.char_ptr 字符串
+        $greeting = greet_name("TinyPHP");
+        echo "18. greet="; var_dump($greeting); echo "\n";
+
+        // 5c: C.int 整数
+        $sq = square_int(12);
+        echo "19. square(12)="; var_dump($sq); echo "\n";
+
+        // 5d: 错误路径 — NULL 返回
+        $null_pt = create_null_point();
+        echo "20. null_point="; var_dump($null_pt == null ? 0 : 1); echo "\n";
+
+        // 5e: 字符串数组互操作
+        $joined = join_string_array(["apple", "banana", "cherry"]);
+        echo "21. join_strs="; var_dump($joined); echo "\n";
+
+        // 5f: phpc_unregister_obj — C 库自行释放对象
+        $freed_ok = create_and_free_point(5.0, 6.0);
+        echo "22. create_and_free="; var_dump($freed_ok); echo "\n";
 
         echo "\n=== All PHPC tests passed! ===\n";
     }
