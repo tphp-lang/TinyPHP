@@ -570,6 +570,21 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $extraFlags .= ' -Wno-implicit-function-declaration';
     }
 
+    // 分离 -L/-l 到 linkFlags：链接器单遍扫描，库必须在 .c 文件之后
+    // （TCC/Unix 链接器对顺序敏感；-L/-l 放在源文件之前会导致 unresolved reference）
+    $lateLinkFlags = '';
+    $extraFlagTokens = preg_split('/\s+/', trim($extraFlags));
+    $keptFlags = [];
+    foreach ($extraFlagTokens as $tok) {
+        if ($tok === '') continue;
+        if (str_starts_with($tok, '-L') || str_starts_with($tok, '-l')) {
+            $lateLinkFlags .= ' ' . $tok;
+        } else {
+            $keptFlags[] = $tok;
+        }
+    }
+    $extraFlags = !empty($keptFlags) ? ' ' . implode(' ', $keptFlags) : '';
+
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
 
     $gen   = new CodeGenerator();
@@ -735,16 +750,6 @@ if (PHP_OS_FAMILY === 'Darwin' && $isTCC) {
     $bFlag .= ' -I"' . $tccRoot . DIRECTORY_SEPARATOR . 'include' . '"';
 }
 
-// macOS + TCC: yield/generator 不支持
-if ($isTCC && PHP_OS_FAMILY === 'Darwin') {
-    foreach ($files as $f) {
-        if (str_contains(file_get_contents($f), 'yield')) {
-            die("[NO] Error: yield/generator is not supported on macOS + TCC.\n"
-              . "      Please use GCC or Clang instead: -cc gcc or -cc clang\n");
-        }
-    }
-}
-
 $allCFiles = array_unique(array_merge($userCFiles, $extraCFiles, $importCFiles));
 $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
 // Linux needs -lm for math functions (round, ceil, floor, sqrt, pow, etc.)
@@ -753,8 +758,8 @@ if (PHP_OS_FAMILY !== 'Windows' && ($targetOS === null || $targetOS !== 'windows
     $linkFlags .= ' -lm';
 }
 $cmd = sprintf(
-    '"%s" %s%s%s -I"%s" -o "%s" "%s"%s 2>&1',
-    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $extraSrcs
+    '"%s" %s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
+    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $extraSrcs, $lateLinkFlags
 );
 
 $tccOutput = [];
@@ -777,9 +782,103 @@ if ($execCwd !== false && @chdir($execCwd)) {
 }
 
 if ($retval !== 0 || !file_exists($outExe) || filesize($outExe) < 64) {
-    echo "[NO] Compile failed:\n";
-    if (!empty($tccOutput)) echo implode("\n", $tccOutput) . "\n";
-    exit(1);
+    // TCC fallback: 当 .a 静态库报 "invalid object file" 时（MinGW ar 长名表格式
+    // TCC ar 读取器解析有 bug），自动提取 .a 中的 .obj 文件并直接链接，绕过 .a 读取。
+    // 仅 TCC + Windows 触发，其他编译器保持原行为。
+    $tccOutputStr = implode("\n", $tccOutput);
+    if ($isTCC && str_contains($tccOutputStr, 'invalid object file')) {
+        $extractedObjs = [];
+        foreach ($allCFiles as $cf) {
+            // 仅处理 .a 文件（companion C 文件列表里可能混入 .a 路径，但通常不会）
+            // 这里从 $lateLinkFlags 中提取 -L 路径 + -l 名称推导 .a 路径
+        }
+        // 从 lateLinkFlags 解析 -L 和 -l，推导 .a 文件路径
+        preg_match_all('/-L"([^"]+)"/', $lateLinkFlags, $libDirs);
+        preg_match_all('/-l(\S+)/', $lateLinkFlags, $libNames);
+        $searchDirs = $libDirs[1] ?? [];
+        // 也加入 TCC 默认库路径
+        if (!empty($bFlag)) {
+            preg_match_all('/-B"([^"]+)"/', $bFlag, $bDirs);
+            foreach ($bDirs[1] ?? [] as $d) $searchDirs[] = $d;
+        }
+        $aFilesToExtract = [];
+        foreach ($libNames[1] ?? [] as $ln) {
+            // 跳过系统库（ws2_32, advapi32, m 等）— 只处理有对应 .a 的
+            foreach ($searchDirs as $dir) {
+                foreach (["lib{$ln}.a", "{$ln}.a", "lib{$ln}.lib"] as $cand) {
+                    $path = $dir . DIRECTORY_SEPARATOR . $cand;
+                    if (file_exists($path)) {
+                        $aFilesToExtract[] = $path;
+                        break 2;
+                    }
+                }
+            }
+        }
+        if (!empty($aFilesToExtract)) {
+            // 提取 .a 中的 .obj 文件到临时目录
+            $tmpDir = sys_get_temp_dir() . '/tphp_lib_extract_' . md5(implode('|', $aFilesToExtract));
+            if (!is_dir($tmpDir)) @mkdir($tmpDir, 0777, true);
+            $allObjs = [];
+            foreach ($aFilesToExtract as $aFile) {
+                $allObjs = array_merge($allObjs, extractArMembers($aFile, $tmpDir));
+            }
+            if (!empty($allObjs)) {
+                // 检测提取的 .obj 是否为 TCC 可链接格式（ELF）。
+                // TCC 在 Windows 上生成 ELF 目标文件，无法链接 MinGW 的 COFF .obj。
+                // 如果首个 .obj 不是 ELF 格式，跳过 fallback（避免误导性错误）。
+                $firstObj = $allObjs[0];
+                $objHead = @file_get_contents($firstObj, false, null, 0, 4);
+                $isElf = ($objHead !== false && substr($objHead, 0, 4) === "\x7fELF");
+                if (!$isElf) {
+                    echo "[NO] Compile failed:\n";
+                    if (!empty($tccOutput)) echo implode("\n", $tccOutput) . "\n";
+                    echo "[Hint] TCC uses ELF object format but '{$aFile}' contains COFF .obj files.\n";
+                    echo "       Rebuild the library with TCC: tcc -c ... && tcc -ar rcs lib<name>.a *.o\n";
+                    exit(1);
+                }
+                // 移除 -l<name> 对应的库（保留系统库如 -lws2_32）
+                // 简化：移除所有 -l 和 -L，把 .obj 文件加到 extraSrcs
+                $newLateLink = '';
+                foreach (preg_split('/\s+/', trim($lateLinkFlags)) as $tok) {
+                    if ($tok === '' || str_starts_with($tok, '-l') || str_starts_with($tok, '-L')) continue;
+                    $newLateLink .= ' ' . $tok;
+                }
+                $newExtraSrcs = $extraSrcs . ' "' . implode('" "', $allObjs) . '"';
+                $cmd2 = sprintf(
+                    '"%s" %s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
+                    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $newExtraSrcs, $newLateLink
+                );
+                if ($debugMode) echo "[DEBUG] TCC .a fallback, extracting .obj files...\n";
+                $tccOutput2 = [];
+                if ($execCwd !== false && @chdir($execCwd)) {
+                    exec($cmd2, $tccOutput2, $retval2);
+                    @chdir($savedCwd);
+                } else {
+                    exec($cmd2, $tccOutput2, $retval2);
+                }
+                if ($retval2 === 0 && file_exists($outExe) && filesize($outExe) >= 64) {
+                    $tccOutput = $tccOutput2;
+                    $retval = 0;
+                } else {
+                    echo "[NO] Compile failed (TCC .a fallback also failed):\n";
+                    if (!empty($tccOutput2)) echo implode("\n", $tccOutput2) . "\n";
+                    exit(1);
+                }
+            } else {
+                echo "[NO] Compile failed:\n";
+                if (!empty($tccOutput)) echo implode("\n", $tccOutput) . "\n";
+                exit(1);
+            }
+        } else {
+            echo "[NO] Compile failed:\n";
+            if (!empty($tccOutput)) echo implode("\n", $tccOutput) . "\n";
+            exit(1);
+        }
+    } else {
+        echo "[NO] Compile failed:\n";
+        if (!empty($tccOutput)) echo implode("\n", $tccOutput) . "\n";
+        exit(1);
+    }
 }
 
 echo "       [YES] {$outExe}\n";
@@ -816,6 +915,83 @@ if ($debugMode) {
         }
         echo "\n[PASS] All assertions matched.\n";
     }
+}
+
+// ============================================================
+/**
+ * 从 ar 归档（.a 静态库）提取成员到指定目录。
+ * 处理 BSD 长名表（//  成员）和 GNU 长名表（/N 索引）格式。
+ * 仅提取 COFF/ELF 目标文件（.obj/.o），跳过符号表和索引成员。
+ *
+ * @param string $aFile  .a 文件路径
+ * @param string $outDir 提取目录
+ * @return string[] 提取的 .obj 文件完整路径列表
+ */
+function extractArMembers(string $aFile, string $outDir): array
+{
+    if (!is_file($aFile)) return [];
+    $bytes = @file_get_contents($aFile);
+    if ($bytes === false || strlen($bytes) < 8) return [];
+    if (substr($bytes, 0, 8) !== "!<arch>\n") return [];
+
+    $len = strlen($bytes);
+    $pos = 8;
+    $longNames = null;
+    $members = []; // [name => [dataStart, size]]
+
+    // 第一遍：收集成员，识别长名表
+    while ($pos + 60 <= $len) {
+        $header = substr($bytes, $pos, 60);
+        $nameRaw = rtrim(substr($header, 0, 16));
+        $sizeStr = rtrim(substr($header, 48, 10));
+        if (!ctype_digit($sizeStr)) break;
+        $size = (int)$sizeStr;
+        $dataStart = $pos + 60;
+        if ($dataStart + $size > $len) break;
+
+        if ($nameRaw === '//') {
+            // BSD/GNU 长名表
+            $longNames = substr($bytes, $dataStart, $size);
+        } elseif ($nameRaw !== '/' && !str_starts_with($nameRaw, '/')) {
+            // 普通成员名（可能带尾部 /）
+            $members[] = [rtrim($nameRaw, '/'), $dataStart, $size];
+        } elseif (preg_match('/^\/(\d+)$/', $nameRaw, $m) && $longNames !== null) {
+            // GNU 长名引用：/N  → N 是 longNames 中的偏移
+            $offset = (int)$m[1];
+            $end = strpos($longNames, "\0", $offset);
+            if ($end === false) $end = strlen($longNames);
+            $realName = rtrim(substr($longNames, $offset, $end - $offset), '/');
+            $members[] = [$realName, $dataStart, $size];
+        }
+        // 符号表成员（nameRaw === '/'）跳过
+
+        $pos = $dataStart + $size;
+        if ($size % 2 === 1) $pos++; // 2 字节对齐
+    }
+
+    // 第二遍：提取目标文件成员
+    if (!is_dir($outDir)) @mkdir($outDir, 0777, true);
+    $extracted = [];
+    $usedNames = [];
+    foreach ($members as [$name, $dataStart, $size]) {
+        // 仅提取 .obj/.o 文件
+        if (!preg_match('/\.(obj|o)$/i', $name)) continue;
+        $base = basename($name);
+        // 避免重名
+        $outName = $base;
+        $i = 1;
+        while (isset($usedNames[$outName])) {
+            $outName = pathinfo($base, PATHINFO_FILENAME) . "_$i." . pathinfo($base, PATHINFO_EXTENSION);
+            $i++;
+        }
+        $usedNames[$outName] = true;
+        $outPath = $outDir . DIRECTORY_SEPARATOR . $outName;
+        $data = substr($bytes, $dataStart, $size);
+        if (@file_put_contents($outPath, $data) !== false) {
+            $extracted[] = $outPath;
+        }
+    }
+    return $extracted;
 }
 
 // ============================================================

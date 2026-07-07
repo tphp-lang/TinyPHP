@@ -1,16 +1,22 @@
 <?php
 // ext/libevent/src/event.php — libevent 事件循环扩展
 //
-// 本文件不做 phpc 桥接：所有 C 函数使用 tphp_fn_ 前缀直接封装 libevent API。
+// 本文件做 phpc 桥接：所有 C 函数直接封装 libevent API。
 // PHP 侧通过 $ptr 字段存储 C 指针（t_int = int64_t 可存 64 位指针）。
 // 返回 t_string 的函数（event_base_get_method, evbuffer_read, evbuffer_readln）
 // 已在 CodeGenerator.php 的 inferCallReturnType() 中注册返回类型。
 
-#include __EXT__ . "/libevent/src/event.h"
+#include "event.h"
 
 #flag -I__EXT__ . "/libevent/include"
 #flag -L__EXT__ . "/libevent/lib"
-#flag -levent_core
+// Linux/macOS: 三家编译器 (TCC/GCC/Clang) 共用 libevent_core.a (相同对象格式 + ABI)
+// Windows: TCC 生成 ELF 而 MinGW GCC/Clang 生成 COFF，格式不互兼容，TCC 需单独的 _tcc.a
+#flag Linux -levent_core
+#flag MacOS -levent_core
+#flag Windows GCC -levent_core
+#flag Windows Clang -levent_core
+#flag Windows TCC -levent_core_tcc
 #flag Windows -lws2_32
 #flag Windows -ladvapi32
 
@@ -22,24 +28,24 @@ class EventConfig
     public int $ptr = 0;
 
     public function __construct() {
-        $this->ptr = event_config_new();
+        $this->ptr = C->libevent_config_new();
     }
 
     public function avoidMethod(string $method): bool {
-        return (bool)event_config_avoid_method($this->ptr, $method);
+        return (bool)C->libevent_config_avoid_method($this->ptr, $method);
     }
 
     public function requireFeatures(int $feature): bool {
-        return (bool)event_config_require_features($this->ptr, $feature);
+        return (bool)C->libevent_config_require_features($this->ptr, $feature);
     }
 
     public function setFlag(int $flag): bool {
-        return (bool)event_config_set_flag($this->ptr, $flag);
+        return (bool)C->libevent_config_set_flag($this->ptr, $flag);
     }
 
     public function free(): void {
         if ($this->ptr != 0) {
-            event_config_free($this->ptr);
+            C->libevent_config_free($this->ptr);
             $this->ptr = 0;
         }
     }
@@ -53,44 +59,44 @@ class EventBase
     public int $ptr = 0;
 
     public function __construct() {
-        $this->ptr = event_base_new(0);
+        $this->ptr = C->libevent_base_new(0);
     }
 
     public function loop(int $flags = 0): int {
-        return event_base_loop($this->ptr, $flags);
+        return C->libevent_base_loop($this->ptr, $flags);
     }
 
     public function dispatch(): int {
-        return event_base_dispatch($this->ptr);
+        return C->libevent_base_dispatch($this->ptr);
     }
 
     public function exit(float $timeout = 0): void {
         if ($timeout <= 0) {
-            event_base_loopbreak($this->ptr);
+            C->libevent_base_loopbreak($this->ptr);
         } else {
-            event_base_loopexit($this->ptr, $timeout);
+            C->libevent_base_loopexit($this->ptr, $timeout);
         }
     }
 
     public function stop(): void {
-        event_base_loopbreak($this->ptr);
+        C->libevent_base_loopbreak($this->ptr);
     }
 
     public function getMethod(): string {
-        return event_base_get_method($this->ptr);
+        return C->libevent_base_get_method($this->ptr);
     }
 
     public function getFeatures(): int {
-        return event_base_get_features($this->ptr);
+        return C->libevent_base_get_features($this->ptr);
     }
 
     public function priorityInit(int $n): bool {
-        return (bool)event_base_priority_init($this->ptr, $n);
+        return (bool)C->libevent_base_priority_init($this->ptr, $n);
     }
 
     public function free(): void {
         if ($this->ptr != 0) {
-            event_base_free($this->ptr);
+            C->libevent_base_free($this->ptr);
             $this->ptr = 0;
         }
     }
@@ -104,40 +110,40 @@ class EventBuffer
     public int $ptr = 0;
 
     public function __construct() {
-        $this->ptr = evbuffer_new();
+        $this->ptr = C->libevbuffer_new();
     }
 
     public function add(string $data): bool {
-        return (bool)evbuffer_add($this->ptr, $data);
+        return (bool)C->libevbuffer_add($this->ptr, $data);
     }
 
     public function read(int $maxlen): string {
-        return evbuffer_read($this->ptr, $maxlen);
+        return C->libevbuffer_read($this->ptr, $maxlen);
     }
 
     public function drain(int $len): bool {
-        return (bool)evbuffer_drain($this->ptr, $len);
+        return (bool)C->libevbuffer_drain($this->ptr, $len);
     }
 
     public function prepend(string $data): bool {
-        return (bool)evbuffer_prepend($this->ptr, $data);
+        return (bool)C->libevbuffer_prepend($this->ptr, $data);
     }
 
     public function expand(int $len): bool {
-        return (bool)evbuffer_expand($this->ptr, $len);
+        return (bool)C->libevbuffer_expand($this->ptr, $len);
     }
 
     public function getLength(): int {
-        return evbuffer_get_length($this->ptr);
+        return C->libevbuffer_get_length($this->ptr);
     }
 
     public function readLine(int $eol): string {
-        return evbuffer_readln($this->ptr, $eol);
+        return C->libevbuffer_readln($this->ptr, $eol);
     }
 
     public function free(): void {
         if ($this->ptr != 0) {
-            evbuffer_free($this->ptr);
+            C->libevbuffer_free($this->ptr);
             $this->ptr = 0;
         }
     }

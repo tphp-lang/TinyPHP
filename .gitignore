@@ -8,3 +8,4 @@ build/
 tcc
 tcc-src/
 *.phar
+tmp/

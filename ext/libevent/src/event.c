@@ -36,34 +36,52 @@ static struct timeval _timeval_from_double(double timeout) {
 
 // ── EventConfig ──────────────────────────────────────────
 
-t_int tphp_fn_event_config_new(void) {
+t_int libevent_config_new(void) {
     struct event_config *cfg = event_config_new();
     return FROM_PTR(cfg);
 }
 
-void tphp_fn_event_config_free(t_int cfg) {
+void libevent_config_free(t_int cfg) {
     if (!cfg) return;
     event_config_free(TO_PTR(cfg, struct event_config *));
 }
 
-t_int tphp_fn_event_config_avoid_method(t_int cfg, t_string method) {
+t_int libevent_config_avoid_method(t_int cfg, t_string method) {
     if (!cfg) return -1;
     return (t_int)event_config_avoid_method(TO_PTR(cfg, struct event_config *), STR_PTR(method));
 }
 
-t_int tphp_fn_event_config_require_features(t_int cfg, t_int feature) {
+t_int libevent_config_require_features(t_int cfg, t_int feature) {
     if (!cfg) return -1;
     return (t_int)event_config_require_features(TO_PTR(cfg, struct event_config *), (int)feature);
 }
 
-t_int tphp_fn_event_config_set_flag(t_int cfg, t_int flag) {
+t_int libevent_config_set_flag(t_int cfg, t_int flag) {
     if (!cfg) return -1;
     return (t_int)event_config_set_flag(TO_PTR(cfg, struct event_config *), (int)flag);
 }
 
 // ── EventBase ────────────────────────────────────────────
 
-t_int tphp_fn_event_base_new(t_int cfg) {
+#ifdef _WIN32
+// Windows: libevent 内部 evsig_init_ 需要 WSAStartup，否则会输出
+// "[warn] evsig_init_: socketpair: WSAStartup 失败" 到 stderr。
+// 在首次创建 event_base 时初始化 Winsock，整个进程只需一次。
+static int _winsock_init(void) {
+    static int initialized = 0;
+    if (!initialized) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        initialized = 1;
+    }
+    return 0;
+}
+#endif
+
+t_int libevent_base_new(t_int cfg) {
+#ifdef _WIN32
+    _winsock_init();
+#endif
     struct event_base *base;
     if (cfg) {
         base = event_base_new_with_config(TO_PTR(cfg, struct event_config *));
@@ -73,27 +91,27 @@ t_int tphp_fn_event_base_new(t_int cfg) {
     return FROM_PTR(base);
 }
 
-void tphp_fn_event_base_free(t_int base) {
+void libevent_base_free(t_int base) {
     if (!base) return;
     event_base_free(TO_PTR(base, struct event_base *));
 }
 
-t_int tphp_fn_event_base_loop(t_int base, t_int flags) {
+t_int libevent_base_loop(t_int base, t_int flags) {
     if (!base) return -1;
     return (t_int)event_base_loop(TO_PTR(base, struct event_base *), (int)flags);
 }
 
-t_int tphp_fn_event_base_dispatch(t_int base) {
+t_int libevent_base_dispatch(t_int base) {
     if (!base) return -1;
     return (t_int)event_base_dispatch(TO_PTR(base, struct event_base *));
 }
 
-void tphp_fn_event_base_loopbreak(t_int base) {
+void libevent_base_loopbreak(t_int base) {
     if (!base) return;
     event_base_loopbreak(TO_PTR(base, struct event_base *));
 }
 
-t_int tphp_fn_event_base_loopexit(t_int base, double timeout) {
+t_int libevent_base_loopexit(t_int base, double timeout) {
     if (!base) return -1;
     if (timeout <= 0) {
         event_base_loopbreak(TO_PTR(base, struct event_base *));
@@ -103,24 +121,24 @@ t_int tphp_fn_event_base_loopexit(t_int base, double timeout) {
     return (t_int)event_base_loopexit(TO_PTR(base, struct event_base *), &tv);
 }
 
-t_string tphp_fn_event_base_get_method(t_int base) {
+t_string libevent_base_get_method(t_int base) {
     if (!base) return (t_string){.data = NULL, .length = 0, .is_local = false};
     return _mk_str(event_base_get_method(TO_PTR(base, struct event_base *)));
 }
 
-t_int tphp_fn_event_base_get_features(t_int base) {
+t_int libevent_base_get_features(t_int base) {
     if (!base) return -1;
     return (t_int)event_base_get_features(TO_PTR(base, struct event_base *));
 }
 
-t_int tphp_fn_event_base_priority_init(t_int base, t_int n) {
+t_int libevent_base_priority_init(t_int base, t_int n) {
     if (!base) return -1;
     return (t_int)event_base_priority_init(TO_PTR(base, struct event_base *), (int)n);
 }
 
 // ── Event (Phase 2 — 回调) ───────────────────────────────
 
-t_int tphp_fn_event_new(t_int base, t_int fd, t_int what, t_int cb_fn, t_int cb_arg) {
+t_int libevent_new(t_int base, t_int fd, t_int what, t_int cb_fn, t_int cb_arg) {
     if (!base || !cb_fn) return 0;
     struct event *ev = event_new(
         TO_PTR(base, struct event_base *),
@@ -132,12 +150,12 @@ t_int tphp_fn_event_new(t_int base, t_int fd, t_int what, t_int cb_fn, t_int cb_
     return FROM_PTR(ev);
 }
 
-void tphp_fn_event_free(t_int ev) {
+void libevent_free(t_int ev) {
     if (!ev) return;
     event_free(TO_PTR(ev, struct event *));
 }
 
-t_int tphp_fn_event_add(t_int ev, double timeout) {
+t_int libevent_add(t_int ev, double timeout) {
     if (!ev) return -1;
     if (timeout < 0) {
         return (t_int)event_add(TO_PTR(ev, struct event *), NULL);
@@ -146,24 +164,24 @@ t_int tphp_fn_event_add(t_int ev, double timeout) {
     return (t_int)event_add(TO_PTR(ev, struct event *), &tv);
 }
 
-t_int tphp_fn_event_del(t_int ev) {
+t_int libevent_del(t_int ev) {
     if (!ev) return -1;
     return (t_int)event_del(TO_PTR(ev, struct event *));
 }
 
 // ── EventBuffer ──────────────────────────────────────────
 
-t_int tphp_fn_evbuffer_new(void) {
+t_int libevbuffer_new(void) {
     struct evbuffer *buf = evbuffer_new();
     return FROM_PTR(buf);
 }
 
-void tphp_fn_evbuffer_free(t_int buf) {
+void libevbuffer_free(t_int buf) {
     if (!buf) return;
     evbuffer_free(TO_PTR(buf, struct evbuffer *));
 }
 
-t_int tphp_fn_evbuffer_add(t_int buf, t_string data) {
+t_int libevbuffer_add(t_int buf, t_string data) {
     if (!buf) return -1;
     const char *p = STR_PTR(data);
     int len = data.length;
@@ -171,7 +189,7 @@ t_int tphp_fn_evbuffer_add(t_int buf, t_string data) {
     return (t_int)evbuffer_add(TO_PTR(buf, struct evbuffer *), p, (size_t)len);
 }
 
-t_string tphp_fn_evbuffer_read(t_int buf, t_int maxlen) {
+t_string libevbuffer_read(t_int buf, t_int maxlen) {
     if (!buf || maxlen <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     int len = (int)maxlen;
     char *tmp = (char*)malloc(len + 1);
@@ -184,12 +202,12 @@ t_string tphp_fn_evbuffer_read(t_int buf, t_int maxlen) {
     return r;
 }
 
-t_int tphp_fn_evbuffer_drain(t_int buf, t_int len) {
+t_int libevbuffer_drain(t_int buf, t_int len) {
     if (!buf) return -1;
     return (t_int)evbuffer_drain(TO_PTR(buf, struct evbuffer *), (size_t)len);
 }
 
-t_int tphp_fn_evbuffer_prepend(t_int buf, t_string data) {
+t_int libevbuffer_prepend(t_int buf, t_string data) {
     if (!buf) return -1;
     const char *p = STR_PTR(data);
     int len = data.length;
@@ -197,17 +215,17 @@ t_int tphp_fn_evbuffer_prepend(t_int buf, t_string data) {
     return (t_int)evbuffer_prepend(TO_PTR(buf, struct evbuffer *), p, (size_t)len);
 }
 
-t_int tphp_fn_evbuffer_expand(t_int buf, t_int len) {
+t_int libevbuffer_expand(t_int buf, t_int len) {
     if (!buf) return -1;
     return (t_int)evbuffer_expand(TO_PTR(buf, struct evbuffer *), (size_t)len);
 }
 
-t_int tphp_fn_evbuffer_get_length(t_int buf) {
+t_int libevbuffer_get_length(t_int buf) {
     if (!buf) return 0;
     return (t_int)evbuffer_get_length(TO_PTR(buf, struct evbuffer *));
 }
 
-t_string tphp_fn_evbuffer_readln(t_int buf, t_int eol) {
+t_string libevbuffer_readln(t_int buf, t_int eol) {
     if (!buf) return (t_string){.data = NULL, .length = 0, .is_local = false};
     size_t n_read = 0;
     char *line = evbuffer_readln(TO_PTR(buf, struct evbuffer *), &n_read, (enum evbuffer_eol_style)eol);

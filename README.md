@@ -184,7 +184,7 @@ use MyApp\Models\User;
 |--------|----------|---------|------|
 | `callable` 参数传字符串函数名 | `gen(1, 3, "apply")` 可行 | 不可行，须用闭包 `gen(1, 3, fn($x) => apply($x))` | AOT 编译期无法将运行时字符串解析为函数符号 |
 | 实现机制 | Zend VM 内部 Generator 对象 | minicoro 协程（ASM/ucontext/Fiber） | AOT 无运行时 VM，需独立协程库 |
-| macOS + TCC | 正常 | **不支持**，编译时报错 | TCC 的 `ucontext_t` 布局与 Apple Silicon 不匹配；建议使用 `-cc gcc` 或 `-cc clang` |
+| macOS + TCC | 正常 | **pthread 线程模拟**（性能略低于协程） | TCC 的 ucontext/ASM 在 Apple Silicon 上不兼容，改用 pthread 线程模拟协程语义 |
 | 不使用 yield 的函数 | 无差异 | 零开销，编译为普通函数 | 双函数变换：生成器函数 → 协程入口 + 包装器，普通函数不受影响 |
 
 支持的 yield 形态：`yield $v`、`yield $k => $v`、`return $v`（配合 `getReturn()`）、`send($v)` 双向传值。详见 [FUNCTIONS.md](FUNCTIONS.md)。

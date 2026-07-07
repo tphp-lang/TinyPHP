@@ -13,7 +13,7 @@
 //   平台支持：
 //     Windows + GCC/Clang → ASM    |  Windows + TCC → Win32 Fiber
 //     Linux   + GCC/Clang → ASM    |  Linux   + TCC → ucontext
-//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → 不支持（CI 跳过）
+//     macOS   + GCC/Clang → ASM    |  macOS   + TCC → pthread（线程模拟）
 // ============================================================
 
 #include "object/object.h"
@@ -32,9 +32,269 @@
 /* 禁用 minicoro 调试日志——会写入 stdout，干扰 #debug 输出比对 */
 #define MCO_NO_DEBUG
 
+/* ────────────────────────────────────────────────────────────
+ * macOS + TCC: 用 pthread 线程模拟协程
+ *
+ * 根因：TCC 在 macOS 定义 __GNUC__=2（<3），minicoro 走 ucontext 路径，
+ *       但 TCC 的 ucontext_t 布局与 Apple Silicon ABI 不匹配 → 段错误。
+ *       强制 ASM 路径也有问题（TCC 的 ARM64 内联汇编器/独立 .s 编译均不稳定）。
+ *
+ * 解法：完全绕过 minicoro 的 ASM/ucontext，用 pthread 线程模拟协程语义。
+ *       每个 generator 对应一个线程，主线程与 generator 线程通过
+ *       mutex + condition variables 来回切换。保持 mco_* API 完全兼容。
+ *
+ * 零开销：仅在 __APPLE__ + __TINYC__ 时启用，其他平台走原 minicoro 逻辑。
+ * ──────────────────────────────────────────────────────────── */
+#if defined(__APPLE__) && defined(__TINYC__)
+  #define MCO_USE_PTHREAD
+#endif
+
+#ifdef MCO_USE_PTHREAD
+
+#include <pthread.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define MCO_MAGIC_NUMBER 0x7E3CB1A9
+#define MCO_DEFAULT_STORAGE_SIZE 4096
+
+typedef enum {
+    MCO_SUCCESS = 0, MCO_GENERIC_ERROR = -1, MCO_INVALID_POINTER = -2,
+    MCO_INVALID_COROUTINE = -3, MCO_NOT_RUNNING = -4, MCO_NOT_SUSPENDED = -5,
+    MCO_MAKE_CONTEXT_ERROR = -6, MCO_SWITCH_CONTEXT_ERROR = -7,
+    MCO_NOT_ENOUGH_SPACE = -8, MCO_OUT_OF_MEMORY = -9,
+    MCO_INVALID_ARGUMENTS = -10, MCO_INVALID_OPERATION = -11,
+    MCO_STACK_OVERFLOW = -12
+} mco_result;
+
+typedef enum { MCO_DEAD = 0, MCO_RUNNING = 1, MCO_SUSPENDED = 2, MCO_NORMAL = 3 } mco_state;
+
+typedef struct mco_coro mco_coro;
+
+typedef struct mco_desc {
+    void (*func)(mco_coro* co);
+    void* user_data;
+    void* (*malloc_cb)(size_t size, void* allocator_data);
+    void  (*free_cb)(void* ptr, void* allocator_data);
+    void* allocator_data;
+    size_t storage_size;
+    size_t coro_size;
+    size_t stack_size;
+} mco_desc;
+
+struct mco_coro {
+    mco_state state;
+    void (*func)(mco_coro* co);
+    void* user_data;
+    void* allocator_data;
+    void (*free_cb)(void* ptr, void* allocator_data);
+    /* pthread 同步 */
+    pthread_t thread;
+    pthread_mutex_t mutex;
+    pthread_cond_t main_cv;   /* 主线程等待此 CV */
+    pthread_cond_t gen_cv;    /* generator 线程等待此 CV */
+    bool gen_resume;          /* 主线程 → generator：可以继续 */
+    bool main_resume;         /* generator → 主线程：可以继续 */
+    bool thread_started;
+    /* 存储（push/pop） */
+    unsigned char* storage;
+    size_t bytes_stored;
+    size_t storage_size;
+    size_t magic_number;
+};
+
+/* TLS：当前运行的协程（generator 线程内通过 pthread_setspecific 设置） */
+static pthread_key_t _mco_current_key;
+static pthread_once_t _mco_once = PTHREAD_ONCE_INIT;
+
+static void _mco_init_tls(void) {
+    pthread_key_create(&_mco_current_key, NULL);
+}
+
+mco_coro* mco_running(void) {
+    pthread_once(&_mco_once, _mco_init_tls);
+    return (mco_coro*)pthread_getspecific(_mco_current_key);
+}
+
+/* generator 线程入口 */
+static void* _mco_thread_entry(void* arg) {
+    mco_coro* co = (mco_coro*)arg;
+    pthread_once(&_mco_once, _mco_init_tls);
+    pthread_setspecific(_mco_current_key, co);
+
+    /* 等待首次 resume */
+    pthread_mutex_lock(&co->mutex);
+    while (!co->gen_resume) {
+        pthread_cond_wait(&co->gen_cv, &co->mutex);
+    }
+    co->gen_resume = false;
+    pthread_mutex_unlock(&co->mutex);
+
+    /* 执行 generator 函数（其中会 mco_yield 来回切换） */
+    co->func(co);
+
+    /* 函数结束 → 设置 DEAD 并通知主线程 */
+    pthread_mutex_lock(&co->mutex);
+    co->state = MCO_DEAD;
+    co->main_resume = true;
+    pthread_cond_signal(&co->main_cv);
+    pthread_mutex_unlock(&co->mutex);
+
+    return NULL;
+}
+
+mco_desc mco_desc_init(void (*func)(mco_coro* co), size_t stack_size) {
+    (void)stack_size; /* pthread 线程栈由 OS 管理，忽略 */
+    mco_desc desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.func = func;
+    desc.storage_size = MCO_DEFAULT_STORAGE_SIZE;
+    desc.coro_size = sizeof(mco_coro);
+    desc.stack_size = 0;
+    desc.malloc_cb = (void*(*)(size_t, void*))malloc;
+    desc.free_cb = (void(*)(void*, void*))free;
+    return desc;
+}
+
+mco_result mco_create(mco_coro** out_co, mco_desc* desc) {
+    if (!out_co) return MCO_INVALID_POINTER;
+    if (!desc || !desc->func) { *out_co = NULL; return MCO_INVALID_ARGUMENTS; }
+
+    mco_coro* co = (mco_coro*)calloc(1, sizeof(mco_coro));
+    if (!co) { *out_co = NULL; return MCO_OUT_OF_MEMORY; }
+
+    co->state = MCO_SUSPENDED;
+    co->func = desc->func;
+    co->user_data = desc->user_data;
+    co->allocator_data = desc->allocator_data;
+    co->free_cb = desc->free_cb;
+    co->storage_size = desc->storage_size ? desc->storage_size : MCO_DEFAULT_STORAGE_SIZE;
+    co->storage = (unsigned char*)calloc(1, co->storage_size);
+    co->magic_number = MCO_MAGIC_NUMBER;
+
+    pthread_mutex_init(&co->mutex, NULL);
+    pthread_cond_init(&co->main_cv, NULL);
+    pthread_cond_init(&co->gen_cv, NULL);
+
+    if (pthread_create(&co->thread, NULL, _mco_thread_entry, co) != 0) {
+        pthread_mutex_destroy(&co->mutex);
+        pthread_cond_destroy(&co->main_cv);
+        pthread_cond_destroy(&co->gen_cv);
+        free(co->storage);
+        free(co);
+        *out_co = NULL;
+        return MCO_MAKE_CONTEXT_ERROR;
+    }
+    co->thread_started = true;
+
+    *out_co = co;
+    return MCO_SUCCESS;
+}
+
+mco_result mco_destroy(mco_coro* co) {
+    if (!co) return MCO_INVALID_COROUTINE;
+
+    /* 如果仍处于 SUSPENDED，先唤醒 generator 线程让它退出 */
+    if (co->state == MCO_SUSPENDED && co->thread_started) {
+        pthread_mutex_lock(&co->mutex);
+        co->state = MCO_DEAD;
+        co->gen_resume = true;
+        pthread_cond_signal(&co->gen_cv);
+        pthread_mutex_unlock(&co->mutex);
+        pthread_join(co->thread, NULL);
+        co->thread_started = false;
+    } else if (co->thread_started) {
+        pthread_join(co->thread, NULL);
+        co->thread_started = false;
+    }
+
+    pthread_mutex_destroy(&co->mutex);
+    pthread_cond_destroy(&co->main_cv);
+    pthread_cond_destroy(&co->gen_cv);
+
+    free(co->storage);
+    if (co->free_cb) {
+        co->free_cb(co, co->allocator_data);
+    } else {
+        free(co);
+    }
+    return MCO_SUCCESS;
+}
+
+mco_result mco_resume(mco_coro* co) {
+    if (!co) return MCO_INVALID_COROUTINE;
+    if (co->state != MCO_SUSPENDED) return MCO_NOT_SUSPENDED;
+
+    pthread_mutex_lock(&co->mutex);
+    co->state = MCO_RUNNING;
+    co->gen_resume = true;
+    pthread_cond_signal(&co->gen_cv);
+    /* 等待 generator yield 或结束 */
+    while (!co->main_resume) {
+        pthread_cond_wait(&co->main_cv, &co->mutex);
+    }
+    co->main_resume = false;
+    /* state 已由 generator 线程设置（SUSPENDED 或 DEAD） */
+    pthread_mutex_unlock(&co->mutex);
+    return MCO_SUCCESS;
+}
+
+mco_result mco_yield(mco_coro* co) {
+    if (!co) return MCO_INVALID_COROUTINE;
+    if (co->state != MCO_RUNNING) return MCO_NOT_RUNNING;
+
+    pthread_mutex_lock(&co->mutex);
+    co->state = MCO_SUSPENDED;
+    co->main_resume = true;
+    pthread_cond_signal(&co->main_cv);
+    /* 等待主线程再次 resume */
+    while (!co->gen_resume) {
+        pthread_cond_wait(&co->gen_cv, &co->mutex);
+    }
+    co->gen_resume = false;
+    co->state = MCO_RUNNING;
+    pthread_mutex_unlock(&co->mutex);
+    return MCO_SUCCESS;
+}
+
+mco_state mco_status(mco_coro* co) {
+    return co ? co->state : MCO_DEAD;
+}
+
+void* mco_get_user_data(mco_coro* co) {
+    return co ? co->user_data : NULL;
+}
+
+mco_result mco_push(mco_coro* co, const void* src, size_t len) {
+    if (!co) return MCO_INVALID_COROUTINE;
+    if (len == 0) return MCO_SUCCESS;
+    if (co->bytes_stored + len > co->storage_size) return MCO_NOT_ENOUGH_SPACE;
+    if (!src) return MCO_INVALID_POINTER;
+    memcpy(&co->storage[co->bytes_stored], src, len);
+    co->bytes_stored += len;
+    return MCO_SUCCESS;
+}
+
+mco_result mco_pop(mco_coro* co, void* dest, size_t len) {
+    if (!co) return MCO_INVALID_COROUTINE;
+    if (len == 0) return MCO_SUCCESS;
+    if (len > co->bytes_stored) return MCO_NOT_ENOUGH_SPACE;
+    co->bytes_stored -= len;
+    if (dest) memcpy(dest, &co->storage[co->bytes_stored], len);
+    return MCO_SUCCESS;
+}
+
+size_t mco_get_bytes_stored(mco_coro* co) {
+    return co ? co->bytes_stored : 0;
+}
+
+#else /* !MCO_USE_PTHREAD — 正常 minicoro 路径 */
+
 /* 单 TU 编译：在此定义 MINICORO_IMPL 以包含实现 */
 #define MINICORO_IMPL
 #include "minicoro.h"
+
+#endif /* MCO_USE_PTHREAD */
 
 /* ── yield 协议结构体 ──────────────────────────────────── */
 typedef struct {

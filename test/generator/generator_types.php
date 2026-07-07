@@ -1,4 +1,4 @@
-<?php // @skip:macos+tcc
+<?php
 #debug string(5) "hello"
 #debug float(3.14)
 #debug int(42)
