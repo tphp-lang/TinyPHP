@@ -26,3 +26,4 @@
 #include "os/file_obj.h"         // File 类（Resource 子类，替代 fopen resource）
 #include "os/password.h"        // password_hash / password_verify
 #include "phpc.h"
+#include "filter.h"

@@ -25,7 +25,7 @@
 
 | #  | 扩展                           | 复杂度   | 依赖             | 函数数 |
 | -- | ---------------------------- | ----- | -------------- | --- |
-| 2  | [filter\_var](#2-filter_var) | ⭐⭐    | 无              | 2   |
+| 2  | filter\_var ✅ 已完成 | ⭐⭐    | 无              | 2   |
 | 3  | [calendar](#3-calendar)      | ⭐⭐⭐   | 无              | 18  |
 | 4  | [zlib (gzip)](#4-zlib-gzip)  | ⭐⭐⭐   | zlib           | 6   |
 | 6  | [SQLite](#6-sqlite)          | ⭐⭐⭐⭐  | sqlite3        | 6   |
@@ -41,128 +41,9 @@
 
 ***
 
-## 2. filter\_var
+## 2. filter\_var ✅ 已完成
 
-### 推荐参考库
-
-| 库                            | 说明                                                               | 链接                                 |
-| ---------------------------- | ---------------------------------------------------------------- | ---------------------------------- |
-| **PHP 源码** **`ext/filter/`** | 完整实现，含 `filter.c` + `logical_filters.c` + `sanitizing_filters.c` | 3 个文件合计 \~150KB                    |
-| **`libcidr`**                | IP/CIDR 验证                                                       | github.com/nickwhitman1993/libcidr |
-| **RFC 5321**                 | email 格式规范                                                       | tools.ietf.org/html/rfc5321        |
-| **RFC 3986**                 | URL 格式规范                                                         | tools.ietf.org/html/rfc3986        |
-
-### 完整 API
-
-```php
-// ================================================================
-// 过滤器常量 — 验证过滤器
-// ================================================================
-const FILTER_VALIDATE_INT = 257;      // 验证整数
-const FILTER_VALIDATE_BOOL = 258;     // 验证布尔值 ("1"/"true"/"on"/"yes")
-const FILTER_VALIDATE_FLOAT = 259;    // 验证浮点数
-const FILTER_VALIDATE_REGEXP = 272;   // 验证正则匹配 (需 PCRE2)
-const FILTER_VALIDATE_URL = 273;      // 验证 URL (RFC 3986)
-const FILTER_VALIDATE_EMAIL = 274;    // 验证 Email (RFC 5321)
-const FILTER_VALIDATE_IP = 275;       // 验证 IP 地址
-const FILTER_VALIDATE_MAC = 276;      // 验证 MAC 地址
-const FILTER_VALIDATE_DOMAIN = 277;   // 验证域名
-
-// ================================================================
-// 净化过滤器 (sanitize)
-// ================================================================
-const FILTER_SANITIZE_STRING = 513;          // 去除 HTML 标签/编码
-const FILTER_SANITIZE_ENCODED = 514;         // URL 编码
-const FILTER_SANITIZE_SPECIAL_CHARS = 515;   // HTML 转义 <>"'&
-const FILTER_SANITIZE_EMAIL = 517;           // 去除 email 非法字符
-const FILTER_SANITIZE_URL = 518;             // 去除 URL 非法字符
-const FILTER_SANITIZE_NUMBER_INT = 519;      // 去除非数字/+- 以外字符
-const FILTER_SANITIZE_NUMBER_FLOAT = 520;    // 去除非数字/+-.,eE 以外字符
-const FILTER_SANITIZE_ADD_SLASHES = 523;     // 调用 addslashes()
-const FILTER_SANITIZE_FULL_SPECIAL_CHARS = 522; // 完整 HTML 实体
-
-// ================================================================
-// 标志位 (flags, 组合使用)
-// ================================================================
-const FILTER_FLAG_NONE = 0;                // 无标志
-const FILTER_FLAG_ALLOW_OCTAL = 1;         // INT: 允许八进制 "0" 前缀
-const FILTER_FLAG_ALLOW_HEX = 2;           // INT: 允许十六进制 "0x" 前缀
-const FILTER_FLAG_STRIP_LOW = 4;           // STRING: 去除 < 32 的字符
-const FILTER_FLAG_STRIP_HIGH = 8;          // STRING: 去除 > 127 的字符
-const FILTER_FLAG_ENCODE_LOW = 16;         // STRING: 编码 < 32 字符
-const FILTER_FLAG_ENCODE_HIGH = 32;        // STRING: 编码 > 127 字符
-const FILTER_FLAG_ENCODE_AMP = 64;         // STRING: 编码 &
-const FILTER_FLAG_NO_ENCODE_QUOTES = 128;  // STRING: 不编码引号
-const FILTER_FLAG_EMPTY_STRING_NULL = 256; // STRING: 空串→NULL
-const FILTER_FLAG_ALLOW_FRACTION = 4096;   // INT: 允许小数点
-const FILTER_FLAG_ALLOW_THOUSAND = 8192;   // INT: 允许千分位 ','
-const FILTER_FLAG_ALLOW_SCIENTIFIC = 16384; // INT: 允许科学计数法
-const FILTER_FLAG_PATH_REQUIRED = 0x100000;  // URL: 必须含 path
-const FILTER_FLAG_QUERY_REQUIRED = 0x200000; // URL: 必须含 query
-const FILTER_FLAG_IPV4 = 0x100000;         // IP: 仅 IPv4
-const FILTER_FLAG_IPV6 = 0x200000;         // IP: 仅 IPv6
-const FILTER_FLAG_NO_RES_RANGE = 0x400000; // IP: 排除保留/私有地址
-const FILTER_FLAG_NO_PRIV_RANGE = 0x800000; // IP: 排除私有地址
-const FILTER_FLAG_EMAIL_UNICODE = 0x100000; // EMAIL: 允许 Unicode
-const FILTER_FLAG_HOSTNAME = 0x100000;     // URL: 要求 hostname
-
-// ================================================================
-// 函数
-// ================================================================
-
-/**
- * filter_var(mixed $value, int $filter, array|int $options = 0): mixed
- *
- * 用指定过滤器验证/净化单个变量。
- *
- * @param mixed $value 输入值
- * @param int $filter 过滤器常量, FILTER_VALIDATE_* 或 FILTER_SANITIZE_*
- * @param array|int $options 选项: 可以是 flags (int) 或关联数组
- *                           关联数组支持键:
- *                           "options" → 子选项数组 (如 "min_range"/"max_range" 用于 INT)
- *                           "flags" → 标志位组合
- * @return mixed 验证通过 → 原值或处理后值; 验证失败 → NULL
- *
- * @example
- * filter_var("42", FILTER_VALIDATE_INT);                  // int(42)
- * filter_var("abc", FILTER_VALIDATE_INT);                 // NULL
- * filter_var("user@example.com", FILTER_VALIDATE_EMAIL);  // "user@example.com"
- */
-function filter_var(mixed $value, int $filter, array|int $options = 0): mixed;
-
-/**
- * filter_var_array(array $data, array|int $definition, bool $add_empty = true): array
- *
- * 批量过滤数组中的多个值。
- *
- * @param array $data 输入数组
- * @param array|int $definition 过滤器定义:
- *                             若为 int: 对所有元素应用同一过滤器
- *                             若为 array: 每个键映射到 filterspec 数组
- *                             filterspec: ["filter"=>FILTER, "flags"=>int, "options"=>array]
- * @param bool $add_empty 是否在结果中包含不存在的键
- * @return array 过滤后的数组
- */
-function filter_var_array(array $data, array|int $definition, bool $add_empty = true): array;
-
-/**
- * filter_list(): array
- *
- * 返回所有支持的过滤器名称列表。
- * (可选实现, ~20行)
- */
-function filter_list(): array;
-
-/**
- * filter_id(string $name): int|false
- *
- * 根据过滤器名称返回 ID。
- *
- * @example
- * filter_id("int"); // 257
- */
-function filter_id(string $name): int|false;
-```
+> 已实现于 `include/filter.h`（内置功能，非 ext/ 扩展），文档见 FUNCTIONS.md "ext/filter — 过滤器" 章节。
 
 ***
 
@@ -2278,7 +2159,7 @@ void tphp_fn_imagejpeg(gdImagePtr im, t_string path, t_int quality) {
 | #  | 扩展             | 行数     | 难度         | 依赖             | 函数数 | 典型耗时  |
 | -- | -------------- | ------ | ---------- | -------------- | --- | ----- |
 | 1  | bcrypt         | \~350  | ⭐⭐ ✅ 已完成   | 无              | 2   | ✅ 已完成 |
-| 2  | filter\_var    | \~400  | ⭐⭐         | 无              | 4   | 1 天   |
+| 2  | filter\_var    | \~400  | ⭐⭐ ✅ 已完成   | 无              | 4   | ✅ 已完成 |
 | 3  | calendar       | \~1000 | ⭐⭐⭐        | 无              | 18  | 2-3 天 |
 | 4  | zlib           | \~200  | ⭐⭐⭐        | zlib           | 6   | 半天    |
 | 5  | PCRE2 preg\_\* | \~1500 | ⭐⭐⭐⭐ ✅ 已完成 | vlang pcre VM  | 8   | ✅ 已完成 |

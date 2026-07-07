@@ -24,11 +24,12 @@
 | `ext/pcntl` | `ext/pcntl/` | 7 |
 | `ext/posix` | `ext/posix/` | 14 |
 | `ext/pcre` | `ext/pcre/` | 8 |
+| `include/filter` | `filter.h` | 3 |
 | `include/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | C 互操作 (PHPC) | `phpc.h` | 27 |
-| **合计** | | **248+** |
+| **合计** | | **251+** |
 
 ---
 
@@ -583,6 +584,101 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
+## ext/filter — 过滤器
+
+> 文件: `include/filter.h`（内置功能，非 ext/ 扩展）
+
+### 函数
+
+| 函数 | 说明 |
+|------|------|
+| `filter_var(mixed $value, int $filter, array\|int $options = 0): mixed` | 用指定过滤器验证/净化单个变量 |
+| `filter_list(): array` | 返回所有支持的过滤器名称列表（string 数组） |
+| `filter_id(string $name): int` | 根据过滤器名称返回 ID，未知名称返回 -1 |
+
+### 验证过滤器（FILTER_VALIDATE_*）
+
+验证失败返回 `NULL`，成功返回原值或类型转换后的值。
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `FILTER_VALIDATE_INT` | 257 | 验证整数（支持 `FILTER_FLAG_ALLOW_OCTAL` / `FILTER_FLAG_ALLOW_HEX`） |
+| `FILTER_VALIDATE_BOOL` | 258 | 验证布尔值（"1"/"true"/"on"/"yes" → true，"0"/"false"/"off"/"no" → false） |
+| `FILTER_VALIDATE_FLOAT` | 259 | 验证浮点数（支持 `FILTER_FLAG_ALLOW_THOUSAND` / `FILTER_FLAG_ALLOW_SCIENTIFIC`） |
+| `FILTER_VALIDATE_REGEXP` | 272 | 正则验证（需用 `preg_*` 代替） |
+| `FILTER_VALIDATE_URL` | 273 | 验证 URL（要求 scheme://host 格式） |
+| `FILTER_VALIDATE_EMAIL` | 274 | 验证 Email（RFC 5321 简化版，ASCII only） |
+| `FILTER_VALIDATE_IP` | 275 | 验证 IP（IPv4 / IPv6） |
+| `FILTER_VALIDATE_MAC` | 276 | 验证 MAC 地址（xx:xx:xx:xx:xx:xx 或 - 分隔） |
+| `FILTER_VALIDATE_DOMAIN` | 277 | 验证域名 |
+
+### 净化过滤器（FILTER_SANITIZE_*）
+
+返回处理后的字符串。
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `FILTER_SANITIZE_STRING` | 513 | 去除 HTML 标签 |
+| `FILTER_SANITIZE_ENCODED` | 514 | URL 编码（rawurlencode 规则） |
+| `FILTER_SANITIZE_SPECIAL_CHARS` | 515 | HTML 转义 `<>"'&` |
+| `FILTER_SANITIZE_EMAIL` | 517 | 去除 email 非法字符 |
+| `FILTER_SANITIZE_URL` | 518 | 去除 URL 非法字符 |
+| `FILTER_SANITIZE_NUMBER_INT` | 519 | 仅保留数字和 `+-` |
+| `FILTER_SANITIZE_NUMBER_FLOAT` | 520 | 仅保留数字和 `+-.,eE` |
+| `FILTER_SANITIZE_ADD_SLASHES` | 523 | addslashes |
+| `FILTER_SANITIZE_FULL_SPECIAL_CHARS` | 522 | 完整 HTML 实体转义 |
+
+### 标志位（FILTER_FLAG_*）
+
+| 常量 | 值 | 适用过滤器 |
+|------|-----|----------|
+| `FILTER_FLAG_ALLOW_OCTAL` | 1 | INT |
+| `FILTER_FLAG_ALLOW_HEX` | 2 | INT |
+| `FILTER_FLAG_STRIP_LOW` | 4 | STRING |
+| `FILTER_FLAG_STRIP_HIGH` | 8 | STRING |
+| `FILTER_FLAG_ENCODE_LOW` | 16 | STRING |
+| `FILTER_FLAG_ENCODE_HIGH` | 32 | STRING |
+| `FILTER_FLAG_ENCODE_AMP` | 64 | STRING |
+| `FILTER_FLAG_NO_ENCODE_QUOTES` | 128 | STRING / SPECIAL_CHARS |
+| `FILTER_FLAG_EMPTY_STRING_NULL` | 256 | STRING |
+| `FILTER_FLAG_ALLOW_THOUSAND` | 8192 | FLOAT |
+| `FILTER_FLAG_ALLOW_SCIENTIFIC` | 16384 | FLOAT |
+| `FILTER_FLAG_PATH_REQUIRED` | 0x100000 | URL |
+| `FILTER_FLAG_QUERY_REQUIRED` | 0x200000 | URL |
+| `FILTER_FLAG_IPV4` | 0x100000 | IP |
+| `FILTER_FLAG_IPV6` | 0x200000 | IP |
+
+### options 数组
+
+`filter_var` 第三参数可传关联数组，支持以下键：
+
+| 键 | 适用过滤器 | 说明 |
+|----|----------|------|
+| `"flags"` | 所有 | 标志位组合（等价于 int 形式的第三参数） |
+| `"min_range"` | INT | 最小值（含） |
+| `"max_range"` | INT | 最大值（含） |
+
+### 示例
+
+```php
+filter_var("42", FILTER_VALIDATE_INT);                     // int(42)
+filter_var("abc", FILTER_VALIDATE_INT);                    // NULL
+filter_var("user@example.com", FILTER_VALIDATE_EMAIL);     // "user@example.com"
+filter_var("127.0.0.1", FILTER_VALIDATE_IP);              // "127.0.0.1"
+filter_var("<b>hi</b>", FILTER_SANITIZE_SPECIAL_CHARS);    // "&lt;b&gt;hi&lt;/b&gt;"
+
+// INT 范围验证
+$opts = ["min_range" => 10, "max_range" => 100];
+filter_var("50", FILTER_VALIDATE_INT, $opts);              // int(50)
+filter_var("5", FILTER_VALIDATE_INT, $opts);               // NULL
+
+// 八进制/十六进制
+filter_var("077", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL);  // int(63)
+filter_var("0xff", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX);   // int(255)
+```
+
+---
+
 ## 异常
 
 > 文件: `object/try.h`
@@ -766,7 +862,6 @@ var_dump($gen->send(100));   // 101
 | `array_multisort / natsort` | 专用场景 |
 | `usort / uasort / uksort` | 需闭包回调 |
 | `array_filter / array_map / array_reduce` | 需闭包回调 |
-| `filter_var` 完整版 | ~600行，延后 |
 | `calendar` 全套 | ~1000行 sdncal，延后 |
 
 ---

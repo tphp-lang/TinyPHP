@@ -1392,6 +1392,7 @@ class CodeGenerator implements ASTVisitor
                 case 'preg_match':
                 case 'preg_split':
                 case 'preg_grep':
+                case 'filter_list':
                     $this->arrElementTypes[$var] = 't_string';
                     break;
                 case 'preg_match_all':
@@ -1616,6 +1617,8 @@ class CodeGenerator implements ASTVisitor
             if ($expr->name === 'mb_strlen') return 't_int';
             if ($expr->name === 'mb_substr') return 't_string';
             if ($expr->name === 'filter_var') return 't_var';
+            if ($expr->name === 'filter_list') return 't_array*';
+            if ($expr->name === 'filter_id')   return 't_int';
             // phpc 互操作函数返回类型
             if ($expr->name === 'c_int' || $expr->name === 'php_int')   return 't_int';
             if ($expr->name === 'c_float' || $expr->name === 'php_float') return 't_float';
@@ -2967,6 +2970,31 @@ class CodeGenerator implements ASTVisitor
                     throw new \RuntimeException("Unknown callback: #callback {$cbName} not declared");
                 }
                 return 'tphp_fn_' . $shortN . '(' . implode(', ', $a) . ')';
+            }
+
+            // filter_var(mixed $value, int $filter, array|int $options = 0): mixed
+            // - 第一参数 mixed → wrapVar 包成 t_var
+            // - 第三参数 array|int 联合：array → tphp_fn_filter_var_opt；int/省略 → tphp_fn_filter_var
+            if ($shortN === 'filter_var') {
+                $valVar = $this->wrapVar($node->args[0]);
+                $filterCode = $a[1] ?? '0';
+                if (isset($node->args[2])) {
+                    $optType = $this->inferType($node->args[2]);
+                    if ($optType === 't_array*' || $node->args[2] instanceof ArrayLiteralExpr) {
+                        $optCode = $a[2];
+                        return "tphp_fn_filter_var_opt({$valVar}, {$filterCode}, {$optCode})";
+                    }
+                }
+                $optCode = $a[2] ?? '0';
+                return "tphp_fn_filter_var({$valVar}, {$filterCode}, {$optCode})";
+            }
+            // filter_list(): array → tphp_fn_filter_list()
+            if ($shortN === 'filter_list') {
+                return 'tphp_fn_filter_list()';
+            }
+            // filter_id(string $name): int → tphp_fn_filter_id(name)
+            if ($shortN === 'filter_id') {
+                return 'tphp_fn_filter_id(' . implode(', ', $a) . ')';
             }
 
             // 通用回退：tphp_fn_函数名(参数) — C 编译器兜底
