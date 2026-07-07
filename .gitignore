@@ -9,3 +9,4 @@ tcc
 tcc-src/
 *.phar
 tmp/
+_test_fio.txt

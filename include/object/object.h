@@ -27,6 +27,7 @@ typedef struct _t_class {
     const char            *name;             // debug
     const struct _t_class *parent;           // NULL for root
     uint32_t               instance_size;    // sizeof(struct)
+    uint32_t               exception_offset; // offset of Exception sub-object (for throw/catch); 0 if N/A
     void                  *dtor;             // void (*dtor)(struct*)
     void                 **vtable;           // [N] function pointers
     uint32_t               vtable_len;       // number of slots

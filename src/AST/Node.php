@@ -408,17 +408,17 @@ class GotoStmtNode extends StmtNode
     }
 }
 
-// try { ... } catch ($e) { ... } finally { ... }
+// try { ... } catch (Type $e) { ... } finally { ... }
+//   支持多 catch 子句：catchClauses = [['type' => 'Exception', 'var' => 'e', 'body' => [...]], ...]
 class TryStmtNode extends StmtNode
 {
     /** @param StmtNode[] $tryBody */
-    /** @param StmtNode[] $catchBody */
+    /** @param array<array{type:string, var:string, body:StmtNode[]}> $catchClauses */
     /** @param StmtNode[] $finallyBody */
     public function __construct(
         public readonly array $tryBody,
-        public readonly array $catchBody,
+        public readonly array $catchClauses,
         public readonly array $finallyBody,
-        public readonly string $catchVar = 'e',
     ) {}
     public function accept(ASTVisitor $visitor): string { return $visitor->visitTryStmt($this); }
 }

@@ -1,7 +1,7 @@
 <?php
 #debug -- 1. Math --
-#debug pi=float(3.14159)
-#debug deg2rad=float(3.14159)
+#debug pi=float(3.1415926535898)
+#debug deg2rad=float(3.1415926535898)
 #debug rad2deg=float(180)
 #debug intdiv=int(3)
 #debug pow=int(8)

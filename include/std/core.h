@@ -41,7 +41,7 @@ static void tphp_fn_var_dump_rec(t_var v, int depth) {
         fprintf(stdout, "int(%lld)", (long long)v.value._int);
         break;
     case TYPE_FLOAT:
-        fprintf(stdout, "float(%g)", v.value._float);
+        fprintf(stdout, "float(%.14g)", v.value._float);
         break;
     case TYPE_STRING: {
         int len = (v.value._string.length > 0) ? v.value._string.length : 0;
@@ -57,7 +57,14 @@ static void tphp_fn_var_dump_rec(t_var v, int depth) {
         if (obj == NULL || obj->cls == NULL) {
             fputs("NULL", stdout);
         } else {
-            fprintf(stdout, "object(%s)", obj->cls->name ? obj->cls->name : "?");
+            const t_class* cls = obj->cls;
+            const char* cname = cls->name ? cls->name : "?";
+            // 简化类名：去掉 tphp_class_ 前缀
+            const char* shortn = cname;
+            if (strncmp(cname, "tphp_class_", 11) == 0) shortn = cname + 11;
+            // 计算属性数量（沿继承链枚举 ownProps - 这里用 instance_size 粗略估算不行，
+            // 直接用 vtable_len=0 表示无属性信息，输出 id 即可）
+            fprintf(stdout, "object(%s)#%d", shortn, (int)(obj->refcount & 0xFFFF));
         }
         break;
     }
@@ -112,6 +119,98 @@ static void tphp_fn_var_dump_rec(t_var v, int depth) {
 // ============================================================
 static inline void tphp_fn_exit(t_int code) {
     exit((int)code);
+}
+
+// ============================================================
+// tphp_fn_print_r — PHP print_r 等价实现
+//   PHP: print_r($x); print_r($x, true);  // 第二参数返回字符串
+//   不递归引用检测（AOT 简化版）
+// ============================================================
+static void tphp_fn_print_r_rec(t_var v, int depth, FILE* out);
+
+static inline void tphp_fn_print_r_indent(int depth, FILE* out) {
+    for (int i = 0; i < depth; i++) fputs("    ", out);
+}
+
+static inline void tphp_fn_print_r(t_var v) {
+    tphp_fn_print_r_rec(v, 0, stdout);
+}
+
+static void tphp_fn_print_r_rec(t_var v, int depth, FILE* out) {
+    switch (v.type) {
+    case TYPE_NULL:
+        fputs("", out);
+        break;
+    case TYPE_BOOL:
+        fputs(v.value._bool ? "1" : "", out);
+        break;
+    case TYPE_INT:
+        fprintf(out, "%lld", (long long)v.value._int);
+        break;
+    case TYPE_FLOAT:
+        fprintf(out, "%.14g", v.value._float);
+        break;
+    case TYPE_STRING: {
+        int len = (v.value._string.length > 0) ? v.value._string.length : 0;
+        if (len > 0 && STR_PTR_V(v.value._string) != NULL) {
+            fwrite(STR_PTR_V(v.value._string), 1, (size_t)len, out);
+        }
+        break;
+    }
+    case TYPE_OBJECT: {
+        const t_object* obj = (const t_object*)v.value._object;
+        if (obj == NULL || obj->cls == NULL) {
+            fputs("", out);
+        } else {
+            const char* cname = obj->cls->name ? obj->cls->name : "?";
+            if (strncmp(cname, "tphp_class_", 11) == 0) cname += 11;
+            fprintf(out, "%s Object\n", cname);
+        }
+        break;
+    }
+    case TYPE_CALLBACK:
+        fputs("Closure", out);
+        break;
+    case TYPE_ARRAY: {
+        t_array* a = v.value._array;
+        int count = tphp_fn_arr_count(a);
+        fputs("Array\n", out);
+        tphp_fn_print_r_indent(depth, out);
+        fputs("(\n", out);
+        if (a != NULL) {
+            for (int i = 0; i < count; i++) {
+                t_var* key = &a->entries[i].key;
+                t_var* val = &a->entries[i].val;
+
+                tphp_fn_print_r_indent(depth + 1, out);
+
+                if (key->type == TYPE_INT) {
+                    fprintf(out, "[%lld] => ", (long long)key->value._int);
+                } else if (key->type == TYPE_STRING) {
+                    int klen = (key->value._string.length > 0) ? key->value._string.length : 0;
+                    fprintf(out, "[%.*s] => ",
+                        klen,
+                        (STR_PTR_V(key->value._string) != NULL && klen > 0) ? STR_PTR_V(key->value._string) : "");
+                } else {
+                    fputs("[?] => ", out);
+                }
+
+                if (val->type == TYPE_ARRAY || val->type == TYPE_OBJECT) {
+                    fputc('\n', out);
+                    tphp_fn_print_r_rec(*val, depth + 2, out);
+                } else {
+                    tphp_fn_print_r_rec(*val, 0, out);
+                }
+                fputc('\n', out);
+            }
+        }
+        tphp_fn_print_r_indent(depth, out);
+        fputc(')', out);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 // ============================================================
@@ -376,6 +475,41 @@ static inline t_string tphp_fn_str_replace(t_string search, t_string replace, t_
     }
     buf[new_len] = '\0';
     return (t_string){buf, new_len};
+}
+
+// str_replace 数组变体：search/replace 为 t_array*，subject 为 t_string
+// PHP 语义：search[i] → replace[i]（replace 较短时用空字符串补齐）
+static inline t_string tphp_fn_str_replace_arr(t_array* search, t_array* replace, t_string subject) {
+    if (search == NULL || search->length == 0 || STR_PTR(subject) == NULL || subject.length <= 0) {
+        return tphp_rt_str_dup(subject);
+    }
+    t_string cur = tphp_rt_str_dup(subject);
+    for (int i = 0; i < search->length; i++) {
+        t_string s = tphp_fn_arr_item_str(search, i);
+        t_string r;
+        if (replace != NULL && i < replace->length) {
+            r = tphp_fn_arr_item_str(replace, i);
+        } else {
+            r = (t_string){.data = NULL, .length = 0, .is_local = false};
+        }
+        t_string next = tphp_fn_str_replace(s, r, cur);
+        cur = next;
+    }
+    return cur;
+}
+
+// str_replace 数组变体：search 为 t_array*，replace 为 t_string（同一替换串）
+static inline t_string tphp_fn_str_replace_arr_str(t_array* search, t_string replace, t_string subject) {
+    if (search == NULL || search->length == 0 || STR_PTR(subject) == NULL || subject.length <= 0) {
+        return tphp_rt_str_dup(subject);
+    }
+    t_string cur = tphp_rt_str_dup(subject);
+    for (int i = 0; i < search->length; i++) {
+        t_string s = tphp_fn_arr_item_str(search, i);
+        t_string next = tphp_fn_str_replace(s, replace, cur);
+        cur = next;
+    }
+    return cur;
 }
 
 /* ============================================================

@@ -22,6 +22,7 @@ static const t_class _class_tphp_class_Exception = {
     .name          = "Exception",
     .parent        = NULL,
     .instance_size = sizeof(tphp_class_Exception),
+    .exception_offset = 0,
     .dtor          = (void*)tphp_class_Exception___destruct,
     .vtable        = _vtable_tphp_class_Exception,
     .vtable_len    = 0,

@@ -228,6 +228,73 @@ static inline void json_skip_ws(json_parser *p) {
 static t_var json_parse_value(json_parser *p);
 
 /** 解析 JSON 字符串（含转义） */
+
+// 解析 4 位十六进制，返回 codepoint；p->cur 指向 'u' 之后的第一个 hex
+static uint32_t json_hex4(const char *s) {
+    uint32_t cp = 0;
+    for (int i = 0; i < 4; i++) {
+        char c = s[i];
+        cp <<= 4;
+        if (c >= '0' && c <= '9') cp |= (uint32_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') cp |= (uint32_t)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') cp |= (uint32_t)(c - 'A' + 10);
+        else return 0xFFFFFFFF; // 非法
+    }
+    return cp;
+}
+
+// 返回 codepoint 的 UTF-8 编码字节数（1-4）
+static int json_utf8_len(uint32_t cp) {
+    if (cp < 0x80) return 1;
+    if (cp < 0x800) return 2;
+    if (cp < 0x10000) return 3;
+    return 4;
+}
+
+// 将 codepoint 编码为 UTF-8 写入 buf，返回写入字节数
+static int json_utf8_encode(uint32_t cp, char *buf) {
+    if (cp < 0x80) {
+        buf[0] = (char)cp;
+        return 1;
+    } else if (cp < 0x800) {
+        buf[0] = (char)(0xC0 | (cp >> 6));
+        buf[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    } else if (cp < 0x10000) {
+        buf[0] = (char)(0xE0 | (cp >> 12));
+        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    } else {
+        buf[0] = (char)(0xF0 | (cp >> 18));
+        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = (char)(0x80 | (cp & 0x3F));
+        return 4;
+    }
+}
+
+// 解析 \uXXXX（可能跟 surrogate pair），返回 codepoint；advance p->cur 越过整个 \uXXXX[+low surrogate]
+// p->cur 进入时指向 'u'；成功返回 codepoint，失败返回 0xFFFFFFFF
+static uint32_t json_parse_u(json_parser *p) {
+    // p->cur 指向 'u'，需要后面 4 hex
+    if (p->cur + 5 > p->end) return 0xFFFFFFFF;
+    uint32_t cp = json_hex4(p->cur + 1);
+    if (cp == 0xFFFFFFFF) return 0xFFFFFFFF;
+    p->cur += 5; // 跳过 u+4hex
+    // high surrogate → 尝试读 low surrogate
+    if (cp >= 0xD800 && cp <= 0xDBFF) {
+        if (p->cur + 6 <= p->end && p->cur[0] == '\\' && p->cur[1] == 'u') {
+            uint32_t lo = json_hex4(p->cur + 2);
+            if (lo != 0xFFFFFFFF && lo >= 0xDC00 && lo <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                p->cur += 6; // 跳过 \uXXXX (low surrogate)
+            }
+        }
+    }
+    return cp;
+}
+
 static t_var json_parse_string(json_parser *p) {
     if (p->cur >= p->end || *p->cur != '"') return VAR_NULL();
     p->cur++; // skip opening "
@@ -240,8 +307,13 @@ static t_var json_parse_string(json_parser *p) {
             if (p->cur >= p->end) return VAR_NULL();
             switch (*p->cur) {
             case '"': case '\\': case '/': len++; break;
-            case 'n': case 'r': case 't': len++; break;
-            case 'u': p->cur += 4; len++; break;
+            case 'n': case 'r': case 't': case 'b': case 'f': len++; break;
+            case 'u': {
+                uint32_t cp = json_parse_u(p);
+                if (cp == 0xFFFFFFFF) return VAR_NULL();
+                len += json_utf8_len(cp);
+                continue; // json_parse_u 已 advance p->cur，跳过循环末尾 p->cur++
+            }
             default: len += 2; break;
             }
         } else {
@@ -265,7 +337,14 @@ static t_var json_parse_string(json_parser *p) {
             case 'n':  buf[pos++] = '\n'; break;
             case 'r':  buf[pos++] = '\r'; break;
             case 't':  buf[pos++] = '\t'; break;
-            case 'u':  buf[pos++] = '?'; p->cur += 4; continue;
+            case 'b':  buf[pos++] = '\b'; break;
+            case 'f':  buf[pos++] = '\f'; break;
+            case 'u': {
+                uint32_t cp = json_parse_u(p);
+                if (cp == 0xFFFFFFFF) { /* 容错：写占位 */ buf[pos++] = '?'; continue; }
+                pos += json_utf8_encode(cp, buf + pos);
+                continue; // json_parse_u 已 advance p->cur
+            }
             default:   buf[pos++] = '\\'; buf[pos++] = *p->cur; break;
             }
         } else {
