@@ -171,7 +171,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — 字符串函数
+## standard — 字符串函数
 
 > 文件: `std/core.h`
 
@@ -237,7 +237,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — HTML / Base64 / URL
+## standard — HTML / Base64 / URL
 
 > 文件: `std/html.h`
 
@@ -255,7 +255,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — 数组函数
+## standard — 数组函数
 
 > 文件: `array.h` + `std/array_extra.h`
 
@@ -340,7 +340,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — 数学函数
+## standard — 数学函数
 
 > 文件: `std/math.h` + `tphp_math.h`
 
@@ -387,7 +387,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — 进制转换
+## standard — 进制转换
 
 > 文件: `conv.h` + `std/math.h`
 
@@ -403,7 +403,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — 断言
+## standard — 断言
 
 > 文件: `std/ctrl.h`
 
@@ -417,7 +417,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/random — 随机数
+## random — 随机数
 
 > 文件: `rand.h`
 
@@ -432,7 +432,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/password — 密码哈希
+## password — 密码哈希
 
 > 文件: `os/password.h`
 
@@ -453,7 +453,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/ctype — 字符检测
+## ctype — 字符检测
 
 > 文件: `std/ctrl.h`
 
@@ -475,7 +475,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/json
+## json
 
 > 文件: `os/json.h`
 
@@ -487,7 +487,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/hash
+## hash
 
 > 文件: `hash.h`
 
@@ -503,7 +503,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/date — 时间函数
+## date — 时间函数
 
 > 文件: `os/times.h`
 
@@ -521,7 +521,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/file — 文件 I/O
+## file — 文件 I/O
 
 > 文件: `os/file.h`
 
@@ -533,7 +533,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/mbstring (UTF-8)
+## mbstring (UTF-8)
 
 > 文件: `std/utf8.h`
 
@@ -545,7 +545,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/iconv — 字符集转换
+## iconv — 字符集转换
 
 > 文件: `include/iconv.h`（内置，非 `#import` 按需引入）
 >
@@ -574,7 +574,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/pcntl — 进程控制
+## pcntl — 进程控制
 
 > 文件: `ext/pcntl/`，POSIX 专属，按需引入 `#import pcntl`
 
@@ -590,7 +590,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/posix — POSIX 系统
+## posix — POSIX 系统
 
 > 文件: `ext/posix/`，POSIX 专属，按需引入 `#import posix`
 
@@ -613,7 +613,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/pcre — 正则表达式
+## pcre — 正则表达式
 
 > 文件: `ext/pcre/`，NFA VM 引擎（移植自 vlang `vlib/regex/pcre/regex.v`），按需引入 `#import pcre`
 
@@ -661,9 +661,9 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/filter — 过滤器
+## filter — 过滤器
 
-> 文件: `include/filter.h`（内置功能，非 ext/ 扩展）
+> 文件: `include/filter.h`（内置功能）
 
 ### 函数
 
