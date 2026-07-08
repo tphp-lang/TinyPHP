@@ -476,6 +476,7 @@ phpc 提供 4 个安全辅助函数处理 C 指针生命周期边界问题。修
 - 所有 TCC 特殊处理用 `#ifdef __TINYC__` 隔离
 - 避免 for 循环内声明变量（`for (int i=...)`）
 - `static inline` 函数间不要交叉引用（必要时加前置声明）
+- 系统头链式包含缺失时（如 TCC macOS 的 `<iconv.h>` → `<wchar.h>` → `<stdarg.h>` 缺失），用 `#ifdef __TINYC__` 手动前向声明替代 `#include`（参考 `include/iconv.h`）
 
 ### 分支预测
 

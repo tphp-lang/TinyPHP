@@ -2,7 +2,7 @@
 #debug ===== Int Switch (fall-through) =====
 #debug int(3)
 #debug
-#debug ===== String Switch (no fall-through) =====
+#debug ===== String Switch (fall-through) =====
 #debug int(10)
 #debug
 #debug ===== Int Switch (normal break) =====
@@ -38,19 +38,19 @@ class Main
         var_dump($count);  // 1 + 2 = 3
         echo "\n";
 
-        // string switch 不支持穿透（转 if-elseif 链）
-        echo "===== String Switch (no fall-through) =====\n";
+        // string switch 穿透测试（现已支持，通过 if-goto 标签链实现）
+        echo "===== String Switch (fall-through) =====\n";
         string $s = "a";
         int $sc = 0;
         switch ($s) {
             case "a":
                 $sc = $sc + 1;
-                // 即使无 break，字符串 switch 也不会穿透
+                // 无 break，穿透到 case "b"
             case "b":
                 $sc = $sc + 9;
                 break;
         }
-        var_dump($sc);  // 仅 +1 = 1？还是 +10 = 10？
+        var_dump($sc);  // 1 + 9 = 10 (穿透发生)
         echo "\n";
 
         // int switch 正常 break

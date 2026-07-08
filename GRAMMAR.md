@@ -216,11 +216,11 @@ return_type:
 class_const_decl:
     visibility 'const' type IDENTIFIER '=' expr ';'  ✅ (type required, no auto-deduction)
 
-> 类常量必须写类型声明，`const X = 1` 会被拒绝。全局/命名空间常量自动推导类型：
+> 类常量必须写类型声明，`const X = 1` 会被拒绝。全局/命名空间常量类型**可选**（省略时自动推导）：
 >
 > ```
 > global_const_decl:
->     'const' IDENTIFIER '=' expr ';'       ✅ (int/float/string/bool, type auto-deduced)
+>     'const' type? IDENTIFIER '=' expr ';'  ✅ (type 可选；省略时按字面量推导 int/float/string/bool)
 > ```
 ```
 
@@ -298,7 +298,7 @@ statement:
   | goto_stmt                  ✅
   | try_stmt                   ✅ (COS setjmp/longjmp)
   | throw_stmt                 ✅ (Exception 类)
-  | assign_stmt                ✅
+  | assign_stmt                ✅ (支持可选类型标记: `type? '$' IDENTIFIER '=' expr ';'`)
   | array_push_stmt            🔧 ($a[] = expr — TinyPHP 内联语法糖)
   | compound_assign            ✅ (+= -= *= /= .=)
   | list_destructure           ✅ (含键名 "key"=>$var)
@@ -331,6 +331,10 @@ foreach_stmt:
 
 switch_stmt:
     'switch' '(' expr ')' '{' case* default? '}'   ✅
+
+> **fall-through 语义**：所有 switch（int/bool/string）均遵循 C switch 的穿透语义。
+> case 体未以 `break` 结尾时，执行流穿透到下一个 case。
+> 字符串 switch 通过 `if-goto` 标签链实现（C 原生 switch 不支持字符串），保留与 int/bool switch 一致的穿透行为。
 
 match_stmt:
     'match' '(' expr ')' '{' arm (',' arm)* ','? '}'   ✅

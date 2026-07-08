@@ -761,7 +761,7 @@ function mime_content_type(string $filename): string|false;
 ## 10. iconv ✅ 已完成
 
 > **实现状态**: 已作为内置库直接集成在 `include/iconv.h`（非 ext 按需引入）。
-> 跨平台策略: POSIX 用系统 `<iconv.h>`；Windows 用 Win32 `MultiByteToWideChar`/`WideCharToMultiByte`。
+> 跨平台策略: POSIX 用系统 `<iconv.h>`（**TCC 下改用手动前向声明** `iconv_t`/`iconv_open`/`iconv`/`iconv_close`，避开 TCC macOS 包缺失 `stdarg.h` 的链式包含问题；GCC/Clang 仍用系统 `<iconv.h>`）；Windows 用 Win32 `MultiByteToWideChar`/`WideCharToMultiByte`。macOS 链接自动添加 `-liconv`。
 > AOT 单返回类型契约: 失败统一 `tp_throw`（不返回 `false`）；`iconv_strpos` 未找到返回 `-1`（非 `false`）。
 
 ### 推荐参考库
@@ -787,78 +787,78 @@ const ICONV_VERSION = "2.39";  // 实现版本
 // ================================================================
 
 /**
- * iconv_strlen(string $str, string $charset = "UTF-8"): int|false
+ * iconv_strlen(string $str, string $charset = "UTF-8"): int
  *
  * 返回字符串的字符数（按指定编码）。
- * UTF-8 可复用 mb_strlen 实现。
+ * UTF-8 可复用 mb_strlen 实现。失败 tp_throw。
  */
-function iconv_strlen(string $str, string $charset = "UTF-8"): int|false;
+function iconv_strlen(string $str, string $charset = "UTF-8"): int;
 
 /**
  * iconv_strpos(string $haystack, string $needle, int $offset = 0,
- *              string $charset = "UTF-8"): int|false
+ *              string $charset = "UTF-8"): int
  *
  * 在字符串中查找子串位置（按字符偏移）。
- * 等于 mb_strpos 的 iconv 版本。
+ * 等于 mb_strpos 的 iconv 版本。未找到返回 -1（非 false）。
  */
 function iconv_strpos(string $haystack, string $needle, int $offset = 0,
-                      string $charset = "UTF-8"): int|false;
+                      string $charset = "UTF-8"): int;
 
 /**
  * iconv_substr(string $str, int $offset, int $length = 0,
- *              string $charset = "UTF-8"): string|false
+ *              string $charset = "UTF-8"): string
  *
  * 截取子串（按字符偏移）。
- * 等于 mb_substr 的 iconv 版本。
+ * 等于 mb_substr 的 iconv 版本。失败 tp_throw。
  */
 function iconv_substr(string $str, int $offset, int $length = 0,
-                      string $charset = "UTF-8"): string|false;
+                      string $charset = "UTF-8"): string;
 
 /**
- * iconv(string $from_encoding, string $to_encoding, string $str): string|false
+ * iconv(string $from_encoding, string $to_encoding, string $str): string
  *
- * 字符串编码转换。最核心的函数。
+ * 字符串编码转换。最核心的函数。失败 tp_throw。
  * 后缀 "//IGNORE": 忽略无法转换的字符
  * 后缀 "//TRANSLIT": 转换为近似字符
  *
  * @example
  * iconv("UTF-8", "ISO-8859-1//TRANSLIT", "café"); // "caf'e"
  */
-function iconv(string $from_encoding, string $to_encoding, string $str): string|false;
+function iconv(string $from_encoding, string $to_encoding, string $str): string;
 
 /**
- * iconv_get_encoding(string $type = "all"): array|string|false
+ * iconv_get_encoding(string $type = "all"): array
  *
- * 获取 iconv 内部配置。
+ * 获取 iconv 内部配置。始终返回 3 元素关联数组。
  * $type: "all" → 全部, "input_encoding" → 输入编码, "output_encoding" → 输出编码,
  *        "internal_encoding" → 内部编码
  */
-function iconv_get_encoding(string $type = "all"): array|string|false;
+function iconv_get_encoding(string $type = "all"): array;
 
 /**
  * iconv_set_encoding(string $type, string $encoding): bool
  *
- * 设置 iconv 内部配置。
+ * 设置 iconv 内部配置。未知 type 时 tp_throw。
  */
 function iconv_set_encoding(string $type, string $encoding): bool;
 
 /**
  * iconv_mime_encode(string $field_name, string $field_value,
- *                   array $prefs = []): string|false
+ *                   array $prefs = []): string
  *
- * 创建 MIME 编码的邮件头字段。
+ * 创建 MIME 编码的邮件头字段。失败 tp_throw。
  * $prefs 可选键: "scheme" (B/Q), "input-charset", "output-charset",
  *               "line-length", "line-break-chars"
  */
 function iconv_mime_encode(string $field_name, string $field_value,
-                           array $prefs = []): string|false;
+                           array $prefs = []): string;
 
 /**
- * iconv_mime_decode(string $str, int $mode = 0, string $charset = "UTF-8"): string|false
+ * iconv_mime_decode(string $str, int $mode = 0, string $charset = "UTF-8"): string
  *
- * 解码 MIME 头字段。如 "=?UTF-8?B?...?=" 格式。
+ * 解码 MIME 头字段。如 "=?UTF-8?B?...?=" 格式。失败 tp_throw。
  */
-function iconv_mime_decode(string $str, int $mode = 0, string $charset = "UTF-8"): string|false;
+function iconv_mime_decode(string $str, int $mode = 0, string $charset = "UTF-8"): string;
 ```
 
 ***

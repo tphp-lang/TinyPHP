@@ -507,7 +507,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `include/iconv.h`（内置，非 `#import` 按需引入）
 >
-> 跨平台: POSIX 用系统 `<iconv.h>`；Windows 用 Win32 `MultiByteToWideChar`/`WideCharToMultiByte`。
+> 跨平台: POSIX 用系统 `<iconv.h>`（TCC 下改用手动前向声明，避开 macOS stdarg.h 缺失问题）；Windows 用 Win32 `MultiByteToWideChar`/`WideCharToMultiByte`。macOS 链接自动添加 `-liconv`。
 > AOT 单返回类型: 失败统一 `tp_throw`（不返回 `false`）；`iconv_strpos` 未找到返回 `-1`。
 
 **常量**

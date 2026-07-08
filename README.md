@@ -146,14 +146,14 @@ use MyApp\Models\User;
 
 | 类别 | 特性 |
 |------|------|
-| 控制流 | `if/elseif/else`、`while`、`do-while`、`for`、`foreach`、`switch`、`match`、`break/continue/goto` |
+| 控制流 | `if/elseif/else`、`while`、`do-while`、`for`、`foreach`、`switch`（含字符串 switch，全部支持 fall-through 穿透语义）、`match`、`break/continue/goto` |
 | OOP | `class`、`extends`、`abstract`、`interface`、`implements`、`trait+use`、`enum`、`__construct(public $x)`、`__destruct`、`static/final/readonly`、`instanceof`、`self::`、`$this`、链式调用、`?->` 空安全 |
 | 闭包 | `function() use($x) {}`、`fn($x) => expr`、多捕获、嵌套闭包 |
 | 异常 | `try/catch(Exception $e)/finally`、`throw new Exception()`、`never` 返回类型 |
-| 类型 | `int` `float` `string` `bool` `array` `callable` `void` `mixed` `self` 类类型 |
+| 类型 | `int` `float` `string` `bool` `array` `callable` `void` `mixed` `self` 类类型、局部变量/全局常量可选类型标记（类属性/类常量必填） |
 | 运算符 | 完整 15 级优先级：算术/比较/逻辑/位/三元 `?:`/空合并 `??`/太空船 `<=>`/自增自减/类型转换 |
 | 命名空间 | `namespace A\B`、`use A\{B,C}` 分组导入、`use function A\{f1,f2}` 组合式函数导入、`use const A\{C1,C2}` 组合式常量导入、`use A\{B, function f, const C}` 混合导入 |
-| 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
+| 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、`int $x = 42;` 局部变量可选类型标记、`const int MAX = 100;` 全局常量可选类型标记、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
 | Generator | `yield`、`yield $k => $v`、`send()`、`getReturn()`、`return`、foreach 迭代（基于 minicoro 协程，不使用 yield 时零开销） |
 
 ### ❌ 不支持（AOT 物理不可行）
