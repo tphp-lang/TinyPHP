@@ -636,7 +636,7 @@ static inline t_string tphp_fn_strrev(t_string s) {
 static inline t_string tphp_fn_str_repeat(t_string s, t_int n) {
     if (STR_PTR(s) == NULL || s.length <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (n < 0) {
-        tphp_fn_error((t_string){"str_repeat(): Argument #2 ($times) must be greater than or equal to 0", 71}, "<php>", 0);
+        tp_throw("str_repeat(): Argument #2 ($times) must be greater than or equal to 0");
         return (t_string){.data = NULL, .length = 0, .is_local = false};
     }
     if (n == 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
@@ -653,11 +653,11 @@ static inline t_string tphp_fn_str_repeat(t_string s, t_int n) {
 // str_split($s, $chunk?) — 分割字符串为数组，默认 chunk=1
 static inline t_array* tphp_fn_str_split(t_string s, t_int chunk) {
     if (chunk < 1) {
-        tphp_fn_error((t_string){"str_split(): Argument #2 ($length) must be greater than 0", 56}, "<php>", 0);
+        tp_throw("str_split(): Argument #2 ($length) must be greater than 0");
         return NULL;
     }
     t_array* out = tphp_fn_arr_create(0);
-    if (out == NULL) return NULL;
+    if (out == NULL) { tp_throw("str_split(): out of memory"); return NULL; }
     tphp_rt_register((void*)out, 1);
     if (STR_PTR(s) == NULL || s.length <= 0) return out;
     int pieces = (s.length + (int)chunk - 1) / (int)chunk;
@@ -798,19 +798,19 @@ static int _hexval(char x); // 前置声明
 static inline t_string tphp_fn_hex2bin(t_string s) {
     if (STR_PTR(s) == NULL || s.length == 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (s.length % 2 != 0) {
-        tphp_fn_error((t_string){"hex2bin(): Hexadecimal input string must have an even length", 58}, "<php>", 0);
-        return (t_string){.data = NULL, .length = 0, .is_local = false};
+        tp_throw("hex2bin(): Hexadecimal input string must have an even length");
+        return (t_string){0};
     }
     // validate characters
     for (int i = 0; i < s.length; i++) {
         if (!_is_hex(STR_PTR(s)[i])) {
-            tphp_fn_error((t_string){"hex2bin(): Input string must be hexadecimal string", 50}, "<php>", 0);
-            return (t_string){.data = NULL, .length = 0, .is_local = false};
+            tp_throw("hex2bin(): Input string must be hexadecimal string");
+            return (t_string){0};
         }
     }
     int outlen = s.length / 2;
     char *d = str_pool_alloc(outlen);
-    if (d == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (d == NULL) { tp_throw("hex2bin(): out of memory"); return (t_string){0}; }
     for (int i = 0; i < outlen; i++) {
         int hi = _hexval(STR_PTR(s)[i*2]), lo = _hexval(STR_PTR(s)[i*2+1]);
         d[i] = (char)((hi << 4) | lo);
@@ -1166,9 +1166,8 @@ static inline t_array* tphp_fn_explode(t_string delim, t_string s) {
 // ── max/min ──────────────────────────────────────────────────
 static inline t_var tphp_fn_max(t_array *a) {
     if (unlikely(a == NULL || a->length == 0)) {
-        tphp_rt_free_all();
-        fputs("\nFatal error: max(): Array must contain at least one element\n\n", stderr);
-        exit(1);
+        tp_throw("max(): Array must contain at least one element");
+        return VAR_NULL();
     }
     t_var result; bool found = false;
     for (int i = 0; i < a->length; i++) {
@@ -1190,9 +1189,8 @@ static inline t_var tphp_fn_max(t_array *a) {
 
 static inline t_var tphp_fn_min(t_array *a) {
     if (unlikely(a == NULL || a->length == 0)) {
-        tphp_rt_free_all();
-        fputs("\nFatal error: min(): Array must contain at least one element\n\n", stderr);
-        exit(1);
+        tp_throw("min(): Array must contain at least one element");
+        return VAR_NULL();
     }
     t_var result; bool found = false;
     for (int i = 0; i < a->length; i++) {
@@ -1291,14 +1289,14 @@ static inline t_bool tphp_fn_ctype_xdigit(t_string s) { _TPHP_CTYPE_CHECK(isxdig
 static inline t_string tphp_fn_random_bytes(t_int length) {
     if (length <= 0) return (t_string){NULL, 0};
     if (length > 1048576) {
-        tphp_fn_error(STR_LIT("random_bytes(): length must be <= 1048576"), "<php>", 0);
+        tp_throw("random_bytes(): length must be <= 1048576");
         return (t_string){NULL, 0};
     }
     unsigned char* buf = (unsigned char*)malloc((size_t)length);
     if (!buf) return (t_string){NULL, 0};
     if (_tphp_random_bytes(buf, (size_t)length) != 0) {
         free(buf);
-        tphp_fn_error(STR_LIT("random_bytes(): unable to generate random bytes"), "<php>", 0);
+        tp_throw("random_bytes(): unable to generate random bytes");
         return (t_string){NULL, 0};
     }
     t_string s = tphp_rt_str_dup((t_string){(char*)buf, (int)length});

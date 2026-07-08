@@ -32,7 +32,7 @@
 | 7  | [cURL](#7-curl)              | ⭐⭐⭐⭐  | libcurl        | 8   |
 | 8  | [OpenSSL](#8-openssl)        | ⭐⭐⭐⭐⭐ | openssl        | 8   |
 | 9  | [fileinfo](#9-fileinfo)      | ⭐⭐⭐   | libmagic       | 4   |
-| 10 | [iconv](#10-iconv)           | ⭐⭐⭐   | libiconv/系统    | 3   |
+| 10 | [iconv](#10-iconv) ✅ 已完成 | ⭐⭐⭐   | libiconv/系统    | 8   |
 | 11 | [exif](#11-exif)             | ⭐⭐⭐   | 无(纯解析)         | 6   |
 | 12 | [ZIP](#12-zip)               | ⭐⭐⭐⭐  | libzip+zlib    | 8   |
 | 13 | [MySQL](#13-mysql)           | ⭐⭐⭐⭐⭐ | libmysqlclient | 16  |
@@ -758,7 +758,11 @@ function mime_content_type(string $filename): string|false;
 
 ***
 
-## 10. iconv
+## 10. iconv ✅ 已完成
+
+> **实现状态**: 已作为内置库直接集成在 `include/iconv.h`（非 ext 按需引入）。
+> 跨平台策略: POSIX 用系统 `<iconv.h>`；Windows 用 Win32 `MultiByteToWideChar`/`WideCharToMultiByte`。
+> AOT 单返回类型契约: 失败统一 `tp_throw`（不返回 `false`）；`iconv_strpos` 未找到返回 `-1`（非 `false`）。
 
 ### 推荐参考库
 
@@ -2167,7 +2171,7 @@ void tphp_fn_imagejpeg(gdImagePtr im, t_string path, t_int quality) {
 | 7  | cURL           | \~300  | ⭐⭐⭐⭐       | libcurl        | 8   | 2-3 天 |
 | 8  | OpenSSL        | \~500  | ⭐⭐⭐⭐⭐      | openssl        | 8   | 3-5 天 |
 | 9  | fileinfo       | \~200  | ⭐⭐⭐        | libmagic       | 6   | 1 天   |
-| 10 | iconv          | \~200  | ⭐⭐⭐        | libiconv/系统    | 7   | 1 天   |
+| 10 | iconv          | \~500  | ⭐⭐⭐ ✅ 已完成 | libiconv/系统    | 8   | ✅ 已完成 |
 | 11 | exif           | \~800  | ⭐⭐⭐        | 无(纯解析)         | 4   | 2-3 天 |
 | 12 | ZIP            | \~400  | ⭐⭐⭐⭐       | libzip+zlib    | 12  | 2-3 天 |
 | 13 | MySQL          | \~600  | ⭐⭐⭐⭐⭐      | libmariadb     | 16  | 3-5 天 |

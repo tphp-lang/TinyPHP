@@ -28,12 +28,12 @@ static inline t_float tphp_fn_rad2deg(t_float rad) {
     return rad * (180.0 / M_PI);
 }
 
-// ── intdiv($a, $b) — 整数除法（零除 → error） ──────────────
-// NOTE: tphp_fn_error defined in runtime.h (included before math.h in common.h)
+// ── intdiv($a, $b) — 整数除法（零除 → tp_throw） ───────────
+// NOTE: tp_throw defined in object/try.h (included before math.h in common.h)
 
 static inline t_int tphp_fn_intdiv(t_int a, t_int b) {
     if (unlikely(b == 0)) {
-        tphp_fn_error((t_string){"Division by zero", 16}, "<php>", 0);
+        tp_throw("Division by zero");
         return 0;
     }
     return a / b;

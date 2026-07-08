@@ -29,9 +29,8 @@ static inline void _tphp_rng_init(void) {
 // ── 快速范围随机 (krng) — rand / mt_rand / shuffle ──
 static inline t_int tphp_fn_rand_int(t_int min, t_int max) {
     if (min > max) {
-        tphp_rt_free_all();
-        fputs("\nFatal error: rand(): min must be <= max\n\n", stderr);
-        exit(1);
+        tp_throw("rand(): min must be <= max");
+        return 0;
     }
     _tphp_rng_init();
     uint64_t range = (uint64_t)(max - min) + 1;
@@ -63,9 +62,9 @@ static inline int _tphp_random_bytes(unsigned char* buf, size_t n) {
 }
 
 static inline t_int tphp_fn_random_int(t_int min, t_int max) {
-    if (min>max) { tphp_fn_error(STR_LIT("random_int(): min must be <= max"),"<php>",0); return 0; }
+    if (min>max) { tp_throw("random_int(): min must be <= max"); return 0; }
     uint64_t range=(uint64_t)(max-min)+1; unsigned char buf[8];
-    if(_tphp_random_bytes(buf,8)!=0){tphp_rt_free_all();fputs("\nFatal error: CSPRNG failure\n\n",stderr);exit(1);}
+    if(_tphp_random_bytes(buf,8)!=0){ tp_throw("random_int(): CSPRNG failure"); return 0; }
     uint64_t val=((uint64_t)buf[0])|((uint64_t)buf[1]<<8)|((uint64_t)buf[2]<<16)|((uint64_t)buf[3]<<24)
                |((uint64_t)buf[4]<<32)|((uint64_t)buf[5]<<40)|((uint64_t)buf[6]<<48)|((uint64_t)buf[7]<<56);
     return min+(t_int)(val%range);

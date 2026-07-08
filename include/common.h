@@ -11,13 +11,13 @@
 #include "object/object.h"     // tp_obj_alloc/release — runtime.h 需要
 #include "array.h"             // arr_freelist/tphp_fn_arr_* — runtime.h 需要
 #include "runtime.h"           // tphp_fn_error 定义在此
-#include "rand.h"               // CSPRNG (builtin.h 需要)
+#include "object/exception.h"   // tphp_class_Exception — tp_throw 需要 (前置以供后续内函数使用)
+#include "object/try.h"         // tp_throw 宏 — 前置以供 rand.h / builtin.h 内函数使用
+#include "rand.h"               // CSPRNG (builtin.h 需要，内部用 tp_throw)
 #include "builtin.h"
 #include "tphp_math.h"         // TinyPHP math 扩展
 #include "conv.h"
 #include "hash.h"
-#include "object/exception.h"
-#include "object/try.h"
 #include "object/generator.h"    // Generator 类（基于 minicoro 协程）
 #include "object/resource.h"     // Resource 基类（资源对象化根）
 #include "os/times.h"
@@ -27,3 +27,4 @@
 #include "os/password.h"        // password_hash / password_verify
 #include "phpc.h"
 #include "filter.h"
+#include "iconv.h"

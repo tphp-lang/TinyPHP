@@ -74,6 +74,7 @@ class CodeGenerator implements ASTVisitor
         'intdiv' => 't_int', 'ord' => 't_int', 'bindec' => 't_int', 'hexdec' => 't_int', 'octdec' => 't_int',
         'array_key_first' => 't_int', 'array_key_last' => 't_int', 'strtotime' => 't_int', 'mktime' => 't_int',
         'substr_count' => 't_int', 'crc32' => 't_int', 'preg_last_error' => 't_int',
+        'iconv_strlen' => 't_int', 'iconv_strpos' => 't_int',
         // ── t_string ──
         'date' => 't_string', 'implode' => 't_string', 'join' => 't_string', 'json_encode' => 't_string',
         'htmlspecialchars' => 't_string', 'nl2br' => 't_string', 'base64_encode' => 't_string',
@@ -90,11 +91,15 @@ class CodeGenerator implements ASTVisitor
         'strtr' => 't_string', 'preg_replace' => 't_string', 'preg_quote' => 't_string',
         'preg_last_error_msg' => 't_string', 'php_str' => 't_string', 'php_str_clone' => 't_string',
         'random_bytes' => 't_string', 'gettype' => 't_string',
+        // ── iconv (内置) ──
+        'iconv' => 't_string', 'iconv_substr' => 't_string',
+        'iconv_mime_encode' => 't_string', 'iconv_mime_decode' => 't_string',
         // ── t_bool ──
         'shuffle' => 't_bool', 'json_validate' => 't_bool', 'password_verify' => 't_bool',
         'in_array' => 't_bool', 'array_key_exists' => 't_bool', 'str_contains' => 't_bool',
         'boolval' => 't_bool', 'str_starts_with' => 't_bool', 'str_ends_with' => 't_bool',
         'array_is_list' => 't_bool', 'file_put_contents' => 't_bool',
+        'iconv_set_encoding' => 't_bool',
         // ── t_float ──
         'sin' => 't_float', 'cos' => 't_float', 'tan' => 't_float', 'asin' => 't_float', 'acos' => 't_float',
         'atan' => 't_float', 'exp' => 't_float', 'log' => 't_float', 'log10' => 't_float', 'fmod' => 't_float',
@@ -110,6 +115,7 @@ class CodeGenerator implements ASTVisitor
         'filter_list' => 't_array*', 'str_split' => 't_array*', 'parse_url' => 't_array*',
         'parse_str' => 't_array*', 'preg_match' => 't_array*', 'preg_match_all' => 't_array*',
         'preg_split' => 't_array*', 'preg_grep' => 't_array*',
+        'iconv_get_encoding' => 't_array*',
         'phpc_new_arr_int' => 't_array*', 'phpc_new_arr_dbl' => 't_array*',
         'phpc_new_arr_str' => 't_array*', 'phpc_new_arr' => 't_array*',
         // ── t_var ──
@@ -3018,6 +3024,45 @@ class CodeGenerator implements ASTVisitor
             // filter_id(string $name): int → tphp_fn_filter_id(name)
             if ($shortN === 'filter_id') {
                 return 'tphp_fn_filter_id(' . implode(', ', $a) . ')';
+            }
+
+            // ── iconv 系列内置函数 (含可选参数 → C 函数不支持默认值，需分发) ──
+            // iconv_strlen($str, $charset="UTF-8")
+            if ($shortN === 'iconv_strlen') {
+                $args = [ $a[0], $a[1] ?? 'STR_LIT("UTF-8")' ];
+                return 'tphp_fn_iconv_strlen(' . implode(', ', $args) . ')';
+            }
+            // iconv_strpos($h, $n, $offset=0, $charset="UTF-8")
+            if ($shortN === 'iconv_strpos') {
+                $args = [ $a[0], $a[1], $a[2] ?? '0', $a[3] ?? 'STR_LIT("UTF-8")' ];
+                return 'tphp_fn_iconv_strpos(' . implode(', ', $args) . ')';
+            }
+            // iconv_substr($str, $offset, $length=0, $charset="UTF-8")
+            if ($shortN === 'iconv_substr') {
+                $args = [ $a[0], $a[1], $a[2] ?? '0', $a[3] ?? 'STR_LIT("UTF-8")' ];
+                return 'tphp_fn_iconv_substr(' . implode(', ', $args) . ')';
+            }
+            // iconv_get_encoding($type="all") — 始终返回完整数组，type 参数被忽略
+            if ($shortN === 'iconv_get_encoding') {
+                return 'tphp_fn_iconv_get_encoding(' . ($a[0] ?? 'STR_LIT("all")') . ')';
+            }
+            // iconv_set_encoding($type, $encoding)
+            if ($shortN === 'iconv_set_encoding') {
+                return 'tphp_fn_iconv_set_encoding(' . implode(', ', $a) . ')';
+            }
+            // iconv($from, $to, $str)
+            if ($shortN === 'iconv') {
+                return 'tphp_fn_iconv(' . implode(', ', $a) . ')';
+            }
+            // iconv_mime_encode($field_name, $field_value, $prefs=[])
+            if ($shortN === 'iconv_mime_encode') {
+                $args = [ $a[0], $a[1], $a[2] ?? 'NULL' ];
+                return 'tphp_fn_iconv_mime_encode(' . implode(', ', $args) . ')';
+            }
+            // iconv_mime_decode($str, $mode=0, $charset="UTF-8")
+            if ($shortN === 'iconv_mime_decode') {
+                $args = [ $a[0], $a[1] ?? '0', $a[2] ?? 'STR_LIT("UTF-8")' ];
+                return 'tphp_fn_iconv_mime_decode(' . implode(', ', $args) . ')';
             }
 
             // 通用回退：tphp_fn_函数名(参数) — C 编译器兜底

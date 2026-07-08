@@ -461,6 +461,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                     'stdint.h','stddef.h','stdbool.h','stdarg.h','limits.h','float.h',
                     'errno.h','assert.h','locale.h','setjmp.h','signal.h','wchar.h',
                     'wctype.h','iso646.h','fenv.h','inttypes.h','complex.h','tgmath.h',
+                    'iconv.h',
                     // POSIX 常用
                     'unistd.h','fcntl.h','sys/stat.h','sys/types.h','sys/wait.h',
                     'sys/time.h','sys/socket.h','sys/un.h','sys/mman.h','sys/resource.h',

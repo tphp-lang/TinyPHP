@@ -15,17 +15,18 @@ static inline t_bool tphp_fn_unlink(t_string path) {
     return remove(pbuf) == 0;
 }
 
-/** file_get_contents — 读入整个文件到 t_string */
+/** file_get_contents — 读入整个文件到 t_string
+ *  失败 (路径为空 / 无法打开 / 读取错误) 抛 tp_throw，保证单返回类型 t_string */
 static inline t_string tphp_fn_file_get_contents(const char *path) {
-    if (path == NULL || *path == '\0') return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (path == NULL || *path == '\0') { tp_throw("file_get_contents(): empty path"); return (t_string){0}; }
     FILE *fp = fopen(path, "rb");
-    if (fp == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (fp == NULL) { tp_throw("file_get_contents(): failed to open file"); return (t_string){0}; }
     fseek(fp, 0, SEEK_END);
     int64_t size = ftell(fp);
-    if (size <= 0) { fclose(fp); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
+    if (size <= 0) { fclose(fp); tp_throw("file_get_contents(): empty or unreadable file"); return (t_string){0}; }
     fseek(fp, 0, SEEK_SET);
     char *buf = str_pool_alloc((int)size);
-    if (buf == NULL) { fclose(fp); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
+    if (buf == NULL) { fclose(fp); tp_throw("file_get_contents(): out of memory"); return (t_string){0}; }
     size_t n = fread(buf, 1, (size_t)size, fp);
     fclose(fp);
     buf[n] = '\0';

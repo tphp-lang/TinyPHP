@@ -358,8 +358,14 @@ static char* BF_crypt(const char *key, const char *setting, char *output, BF_wor
 
 static inline t_string tphp_fn_password_hash(t_string password, t_int algo, t_array *options) {
     (void)options;
-    if (algo != PASSWORD_BCRYPT || STR_PTR(password) == NULL || password.length == 0)
+    if (algo != PASSWORD_BCRYPT) {
+        tp_throw("password_hash(): unsupported algorithm (only PASSWORD_BCRYPT is supported)");
         return (t_string){NULL, 0};
+    }
+    if (STR_PTR(password) == NULL || password.length == 0) {
+        tp_throw("password_hash(): password must not be empty");
+        return (t_string){NULL, 0};
+    }
     
     char setting[30], output[61];
     BF_word salt[4] = {0};
@@ -390,6 +396,7 @@ static inline t_string tphp_fn_password_hash(t_string password, t_int algo, t_ar
     // 调用BF_crypt生成哈希
     char *r = BF_crypt(STR_PTR(password), setting, output, 4);  // min cost = 4
     if (r == NULL) {
+        tp_throw("password_hash(): invalid cost or setting");
         return (t_string){NULL, 0};
     }
     

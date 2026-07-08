@@ -19,6 +19,7 @@
 | `include/date` | `os/times.h` | 9 |
 | `include/ctype` | `std/ctrl.h` | 11 |
 | `include/mbstring` (UTF-8) | `std/utf8.h` | 3 |
+| `include/iconv` (字符集转换) | `iconv.h` | 8 |
 | `ext/pcntl` | `ext/pcntl/` | 7 |
 | `ext/posix` | `ext/posix/` | 14 |
 | `ext/pcre` | `ext/pcre/` | 8 |
@@ -27,7 +28,7 @@
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | C 互操作 (PHPC) | `phpc.h` | 31 |
-| **合计** | | **254+** |
+| **合计** | | **262+** |
 
 ---
 
@@ -499,6 +500,35 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `mb_strlen($s)` | UTF-8 字节解码计数 | O(n) |
 | `mb_substr($s,$start,$len)` | UTF-8 字符边界对齐 | O(n) |
 | `mb_strpos($h,$n)` | 字节级搜索 (UTF-8 兼容) | O(n×m) |
+
+---
+
+## ext/iconv — 字符集转换
+
+> 文件: `include/iconv.h`（内置，非 `#import` 按需引入）
+>
+> 跨平台: POSIX 用系统 `<iconv.h>`；Windows 用 Win32 `MultiByteToWideChar`/`WideCharToMultiByte`。
+> AOT 单返回类型: 失败统一 `tp_throw`（不返回 `false`）；`iconv_strpos` 未找到返回 `-1`。
+
+**常量**
+
+| 常量 | 值 | 说明 |
+|------|----|------|
+| `ICONV_IMPL` | `"iconv"` | 实现名称 |
+| `ICONV_VERSION` | `"1.0"` | 版本号 |
+
+**函数**
+
+| 函数 | C 实现 | 说明 |
+|------|--------|------|
+| `iconv($from,$to,$str)` | 系统 iconv / Win32 API | 核心编码转换，失败 tp_throw |
+| `iconv_strlen($str,$charset="UTF-8")` | UTF-8 快路径 + 转换 | 返回字符数 |
+| `iconv_strpos($h,$n,$offset=0,$charset="UTF-8")` | UTF-8 字符偏移搜索 | 未找到返回 -1 |
+| `iconv_substr($str,$offset,$length=0,$charset="UTF-8")` | UTF-8 字符边界截取 | length=0 表示到末尾 |
+| `iconv_get_encoding($type="all")` | 返回关联数组 | 始终返回 3 元素: input/output/internal_encoding |
+| `iconv_set_encoding($type,$encoding)` | 修改内部编码状态 | 返回 bool，未知 type 时 tp_throw |
+| `iconv_mime_encode($field,$value,$prefs=[])` | base64 + MIME 头 | 生成 `Name: =?charset?B?...?=` |
+| `iconv_mime_decode($str,$mode=0,$charset="UTF-8")` | 解析 MIME 编码段 | 支持 B/Q 编码，失败 tp_throw |
 
 ---
 
