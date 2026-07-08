@@ -579,21 +579,25 @@ class CodeGenerator implements ASTVisitor
             if ($cc->value instanceof StringLiteralExpr) {
                 $this->symbols->addConst($fullName, 't_string', $vis);
                 $this->constTypes[$fullName] = 't_string';
+                $this->constTypes[$cname] = 't_string';
                 $val = str_replace('"', '\\"', $cc->value->value);
                 $o[] = "#define {$cname} STR_LIT(\"{$val}\")";
             } elseif ($cc->value instanceof IntLiteralExpr) {
                 $this->symbols->addConst($fullName, 't_int', $vis);
                 $this->constTypes[$fullName] = 't_int';
+                $this->constTypes[$cname] = 't_int';
                 $o[] = "#define {$cname} {$cc->value->value}";
             } elseif ($cc->value instanceof FloatLiteralExpr) {
                 $this->symbols->addConst($fullName, 't_float', $vis);
                 $this->constTypes[$fullName] = 't_float';
+                $this->constTypes[$cname] = 't_float';
                 $fv = $cc->value->value;
                 $o[] = '#define ' . $cname . ' ' .
                     (($fv == (float)(int)$fv) ? sprintf('%.1f', $fv) : rtrim(rtrim(sprintf('%.15g', $fv), '0'), '.'));
             } elseif ($cc->value instanceof BoolLiteralExpr) {
                 $this->symbols->addConst($fullName, 't_bool', $vis);
                 $this->constTypes[$fullName] = 't_bool';
+                $this->constTypes[$cname] = 't_bool';
                 $o[] = "#define {$cname} " . ($cc->value->value ? 'true' : 'false');
             } elseif ($cc->value instanceof ArrayLiteralExpr) {
                 // 数组常量：static 变量

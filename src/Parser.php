@@ -243,13 +243,33 @@ class Parser
         return $name;
     }
 
-    /** use X\Y\Z; | use function X\Y; | use X\{ A, B, function F }; */
+    /** use X\Y\Z; | use function X\Y; | use X\{ A, B, function F }; | use function X\{ f1, f2 }; */
     private function parseUseDecl(): void
     {
         // use function ... ?
         if ($this->match(TokenType::FUNCTION)) {
-            $fqName = $this->parseQualifiedName();
-            $this->parseUseAlias(function: true, fqName: $fqName);
+            // 读取命名空间前缀（至少一个 segment，遇到 { 前停止）
+            $base = $this->consume(TokenType::IDENTIFIER, 'Expected identifier')->lexeme;
+            while ($this->check(TokenType::NS_SEP) && $this->peek(1)->type === TokenType::IDENTIFIER) {
+                $this->advance(); // skip \
+                $base .= '\\' . $this->consume(TokenType::IDENTIFIER, 'Expected identifier')->lexeme;
+            }
+            // use function X\{ f1, f2, f3 }; → 组合式函数导入
+            if ($this->check(TokenType::NS_SEP) && $this->peek(1)->type === TokenType::LBRACE) {
+                $this->advance(); // skip \
+                $this->advance(); // skip {
+                do {
+                    // 允许尾部逗号 (PHP 7.3+)
+                    if ($this->check(TokenType::RBRACE)) break;
+                    $fnName = $this->consume(TokenType::IDENTIFIER, 'Expected function name')->lexeme;
+                    $this->parseUseAlias(function: true, fqName: $base . '\\' . $fnName, alias: $fnName);
+                } while ($this->match(TokenType::COMMA));
+                $this->consume(TokenType::RBRACE, 'Expected }');
+                $this->consume(TokenType::SEMICOLON, 'Expected ;');
+                return;
+            }
+            // use function X\Y; | use function X\Y as Z; → 单函数导入
+            $this->parseUseAlias(function: true, fqName: $base);
             $this->consume(TokenType::SEMICOLON, 'Expected ;');
             return;
         }

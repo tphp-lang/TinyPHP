@@ -53,8 +53,23 @@ foreach ($testFiles as $i => $f) {
     $out    = $logDir . DIRECTORY_SEPARATOR . 'test_' . $base . (PHP_OS_FAMILY === 'Windows' ? '.exe' : '');
     $log    = $logDir . DIRECTORY_SEPARATOR . 'test_' . $base . '.log';
 
+    // 解析 @multi @with 注解，收集辅助文件
+    $fileArgs = escapeshellarg($f);
+    $srcContent = file_get_contents($f);
+    if ($srcContent !== false && preg_match('/@multi\s+@with\s+([^\s*]+)/', $srcContent, $m)) {
+        $dir = dirname($f);
+        foreach (explode(',', $m[1]) as $extra) {
+            $extra = trim($extra);
+            if ($extra === '') continue;
+            $extraPath = $dir . DIRECTORY_SEPARATOR . $extra;
+            if (is_file($extraPath)) {
+                $fileArgs .= ' ' . escapeshellarg($extraPath);
+            }
+        }
+    }
+
     $cmd = escapeshellarg($phpExe) . ' ' . escapeshellarg($tphp) . ' '
-         . escapeshellarg($f) . ' --debug ' . $ccFlag
+         . $fileArgs . ' --debug ' . $ccFlag
          . ' -o ' . escapeshellarg($out)
          . ' >' . escapeshellarg($log) . ' 2>&1';
     system($cmd, $ret);

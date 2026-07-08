@@ -152,7 +152,7 @@ use MyApp\Models\User;
 | 异常 | `try/catch(Exception $e)/finally`、`throw new Exception()`、`never` 返回类型 |
 | 类型 | `int` `float` `string` `bool` `array` `callable` `void` `mixed` `self` 类类型 |
 | 运算符 | 完整 15 级优先级：算术/比较/逻辑/位/三元 `?:`/空合并 `??`/太空船 `<=>`/自增自减/类型转换 |
-| 命名空间 | `namespace A\B`、`use A\{B,C}` 分组导入、`use function` |
+| 命名空间 | `namespace A\B`、`use A\{B,C}` 分组导入、`use function A\{f1,f2}` 组合式函数导入、`use A\{B, function f}` 混合导入 |
 | 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
 | Generator | `yield`、`yield $k => $v`、`send()`、`getReturn()`、`return`、foreach 迭代（基于 minicoro 协程，不使用 yield 时零开销） |
 

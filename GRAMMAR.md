@@ -109,8 +109,14 @@ name:
 use_decl:
     'use' name ';'                          ✅ (类导入)
   | 'use' 'function' name ';'              ✅
+  | 'use' 'function' name 'as' IDENTIFIER ';'  ✅
   | 'use' name 'as' IDENTIFIER ';'         ✅
   | 'use' group_use                        ✅ (use A\{B, C})
+  | 'use' 'function' name '\' '{' fn_use (',' fn_use)* ','? ';'  ✅ (use function A\{f1, f2})
+
+fn_use:
+    IDENTIFIER                              ✅
+  | IDENTIFIER 'as' IDENTIFIER              ✅
 ```
 
 ---
@@ -590,7 +596,7 @@ phpc_memory:
 | `function` `closure` `fn =>` `use($x)` | 全部闭包形态 |
 | 完整 15 级运算符优先级 | 含 `<=>` `??` `?:` `?->` `**` `&|^~` `<<>>` |
 | `(int)` `(float)` `(string)` `(bool)` 类型转换 | — |
-| `namespace A\B` `use A\{B,C}` `use function` | 分组导入 |
+| `namespace A\B` `use A\{B,C}` `use function A\{f1,f2}` `use A\{B, function f}` | 分组导入 |
 | `list()/$a[] =` 解构 | 含键名 `"key"=>$v` |
 | `int &$x` 引用传参 | 全类型支持（int/float/bool/string/array/对象） |
 | `self::CONST` `Class::CONST` `self::method()` | — |

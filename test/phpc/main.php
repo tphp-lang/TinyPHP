@@ -1,29 +1,31 @@
 <?php
 
-use function Phpc\calc_distance;
-use function Phpc\calc_factorial;
-use function Phpc\sum_array_int;
-use function Phpc\sum_array_dbl;
-use function Phpc\double_each_value;
-use function Phpc\obj_is_valid;
-use function Phpc\obj_read_x;
-use function Phpc\obj_read_y;
-use function Phpc\apply_square;
-use function Phpc\map_with_closure;
-use function Phpc\map_ints_noenv;
-use function Phpc\fold_double;
-use function Phpc\create_origin;
-use function Phpc\get_point_x;
-use function Phpc\greet_name;
-use function Phpc\square_int;
-use function Phpc\create_null_point;
-use function Phpc\join_string_array;
-use function Phpc\create_and_free_point;
-use function Phpc\steal_and_free_point;
-use function Phpc\test_assert_null_ptr;
-use function Phpc\test_arr_type_mismatch;
-use function Phpc\test_free_zeroes_var;
-use function Phpc\test_env_pin;
+use function Phpc\{
+    calc_distance,
+    calc_factorial,
+    sum_array_int,
+    sum_array_dbl,
+    double_each_value,
+    obj_is_valid,
+    obj_read_x,
+    obj_read_y,
+    apply_square,
+    map_with_closure,
+    map_ints_noenv,
+    fold_double,
+    create_origin,
+    get_point_x,
+    greet_name,
+    square_int,
+    create_null_point,
+    join_string_array,
+    create_and_free_point,
+    steal_and_free_point,
+    test_assert_null_ptr,
+    test_arr_type_mismatch,
+    test_free_zeroes_var,
+    test_env_pin
+};
 
 class MyPoint
 {
