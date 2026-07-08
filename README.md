@@ -148,7 +148,7 @@ use MyApp\Models\User;
 |------|------|
 | 控制流 | `if/elseif/else`、`while`、`do-while`、`for`、`foreach`、`switch`（含字符串 switch，全部支持 fall-through 穿透语义）、`match`、`break/continue/goto` |
 | OOP | `class`、`extends`、`abstract`、`interface`、`implements`、`trait+use`、`enum`、`__construct(public $x)`、`__destruct`、`static/final/readonly`、`instanceof`、`self::`、`$this`、链式调用、`?->` 空安全 |
-| 闭包 | `function() use($x) {}`、`fn($x) => expr`、多捕获、嵌套闭包 |
+| 闭包 | `function() use($x) {}`、`fn($x): T => expr` 单表达式、`fn($x): T => { stmts; return expr; }` 块体、多捕获、嵌套闭包 |
 | 异常 | `try/catch(Exception $e)/finally`、`throw new Exception()`、`never` 返回类型 |
 | 类型 | `int` `float` `string` `bool` `array` `callable` `void` `mixed` `self` 类类型、局部变量/全局常量可选类型标记（类属性/类常量必填） |
 | 运算符 | 完整 15 级优先级：算术/比较/逻辑/位/三元 `?:`/空合并 `??`/太空船 `<=>`/自增自减/类型转换 |

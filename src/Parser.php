@@ -1787,7 +1787,8 @@ class Parser
     }
 
     /** 匿名函数: function ( params? ) use (vars?) : type? { body } */
-    /** fn($x, $y): int => expr  → 闭包语法糖 */
+    /** fn($x, $y): int => expr  → 闭包语法糖（单表达式） */
+    /** fn($x, $y): int => { stmts; return expr; }  → 闭包语法糖（块体，须 return） */
     private function parseArrowFunction(): ClosureExpr
     {
         $this->consume(TokenType::LPAREN, 'Expected (' );
@@ -1808,9 +1809,33 @@ class Parser
         $this->consume(TokenType::COLON, 'Arrow function requires return type declaration');
         $retType = $this->parseType();
         $this->consume(TokenType::DOUBLE_ARROW, 'Expected =>');
+        // 块体语法: fn(...): type => { stmts; return expr; }
+        if ($this->check(TokenType::LBRACE)) {
+            $this->advance(); // 消费 '{'
+            $this->genStack[] = false;
+            $body = $this->parseBlock();
+            array_pop($this->genStack);
+            $this->consume(TokenType::RBRACE, 'Expected }');
+            // 校验块体必须包含 return 语句（void 返回类型除外）
+            if ($retType !== 'void' && !$this->blockHasReturn($body)) {
+                $this->error("Arrow function block body with non-void return type must contain a return statement");
+            }
+            return new ClosureExpr($params, $retType, $body, []);
+        }
+        // 单表达式语法: fn(...): type => expr
         $bodyExpr = $this->parseExpr();
         $body = [new ReturnStmtNode($bodyExpr)];
         return new ClosureExpr($params, $retType, $body, []);
+    }
+
+    /** 检查语句块是否包含 return 语句 */
+    private function blockHasReturn(array $body): bool
+    {
+        foreach ($body as $stmt) {
+            if ($stmt instanceof ReturnStmtNode) return true;
+            // 嵌套块也检查（但 if/for 等分支中的 return 不算保证返回，这里简化处理）
+        }
+        return false;
     }
 
     /** 检查当前 token 是否为类型关键字（排除 $var） */

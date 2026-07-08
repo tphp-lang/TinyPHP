@@ -252,7 +252,8 @@ function_decl:
 
 closure:
     'function' '(' params ')' use_vars? return_type? body    ✅
-  | 'fn' '(' typed_params ')' ':' type '=>' expr             ✅ (箭头函数，强制参数+返回类型)
+  | 'fn' '(' typed_params ')' ':' type '=>' expr             ✅ (箭头函数单表达式，强制参数+返回类型)
+  | 'fn' '(' typed_params ')' ':' type '=>' '{' stmts '}'    ✅ (箭头函数块体，须含 return；void 类型除外)
 
 use_vars:
     'use' '(' var_list ')'   ✅
