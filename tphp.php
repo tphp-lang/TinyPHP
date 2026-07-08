@@ -799,6 +799,10 @@ $linkFlags = '';
 if (PHP_OS_FAMILY !== 'Windows' && ($targetOS === null || $targetOS !== 'windows')) {
     $linkFlags .= ' -lm';
 }
+// macOS: iconv 在独立 libiconv 中 (TCC 不会自动链接 libSystem 的 iconv 符号)
+if ($targetOS === 'darwin' || ($targetOS === null && PHP_OS_FAMILY === 'Darwin')) {
+    $linkFlags .= ' -liconv';
+}
 $cmd = sprintf(
     '"%s" %s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
     $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $extraSrcs, $lateLinkFlags
