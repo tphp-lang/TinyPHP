@@ -38,6 +38,8 @@ class Parser
     private array $classImports = [];
     /** use 函数导入: 短名 → 完全限定名 (如 myDemoFn → Demo\myDemoFn) */
     private array $functionImports = [];
+    /** use const 导入: 短名 → 完全限定名 (如 NS_FOO → Lib\NS_FOO) */
+    private array $constImports = [];
     /** 生成器检测栈：解析函数/方法/闭包体时压入 bool，遇到 yield 设为 true */
     private array $genStack = [];
     /** use 枚举导入: 短名 → 完全限定名 (如 Color → Enums\Color) */
@@ -243,7 +245,7 @@ class Parser
         return $name;
     }
 
-    /** use X\Y\Z; | use function X\Y; | use X\{ A, B, function F }; | use function X\{ f1, f2 }; */
+    /** use X\Y\Z; | use function X\Y; | use const X\Y; | use X\{ A, B, function F }; | use function X\{ f1, f2 }; */
     private function parseUseDecl(): void
     {
         // use function ... ?
@@ -274,6 +276,32 @@ class Parser
             return;
         }
 
+        // use const ... ?
+        if ($this->match(TokenType::CONST_KW)) {
+            $base = $this->consume(TokenType::IDENTIFIER, 'Expected identifier')->lexeme;
+            while ($this->check(TokenType::NS_SEP) && $this->peek(1)->type === TokenType::IDENTIFIER) {
+                $this->advance(); // skip \
+                $base .= '\\' . $this->consume(TokenType::IDENTIFIER, 'Expected identifier')->lexeme;
+            }
+            // use const X\{ A, B }; → 组合式常量导入
+            if ($this->check(TokenType::NS_SEP) && $this->peek(1)->type === TokenType::LBRACE) {
+                $this->advance(); // skip \
+                $this->advance(); // skip {
+                do {
+                    if ($this->check(TokenType::RBRACE)) break;
+                    $cName = $this->consume(TokenType::IDENTIFIER, 'Expected constant name')->lexeme;
+                    $this->parseUseAlias(function: false, fqName: $base . '\\' . $cName, alias: $cName, isConst: true);
+                } while ($this->match(TokenType::COMMA));
+                $this->consume(TokenType::RBRACE, 'Expected }');
+                $this->consume(TokenType::SEMICOLON, 'Expected ;');
+                return;
+            }
+            // use const X\Y; | use const X\Y as Z; → 单常量导入
+            $this->parseUseAlias(function: false, fqName: $base, isConst: true);
+            $this->consume(TokenType::SEMICOLON, 'Expected ;');
+            return;
+        }
+
         // 读取第一部分标识符
         $base = $this->consume(TokenType::IDENTIFIER, 'Expected identifier')->lexeme;
 
@@ -287,6 +315,9 @@ class Parser
                 if ($this->match(TokenType::FUNCTION)) {
                     $fnName = $this->consume(TokenType::IDENTIFIER, 'Expected function name')->lexeme;
                     $this->parseUseAlias(function: true, fqName: $base . '\\' . $fnName, alias: $fnName);
+                } elseif ($this->match(TokenType::CONST_KW)) {
+                    $cName = $this->consume(TokenType::IDENTIFIER, 'Expected constant name')->lexeme;
+                    $this->parseUseAlias(function: false, fqName: $base . '\\' . $cName, alias: $cName, isConst: true);
                 } else {
                     $itemName = $this->consume(TokenType::IDENTIFIER, 'Expected identifier')->lexeme;
                     $this->parseUseAlias(function: false, fqName: $base . '\\' . $itemName, alias: $itemName);
@@ -323,18 +354,20 @@ class Parser
     }
 
     /** 注册 use 别名 */
-    private function parseUseAlias(bool $function, string $fqName, string $alias = ''): void
+    private function parseUseAlias(bool $function, string $fqName, string $alias = '', bool $isConst = false): void
     {
         if ($this->match(TokenType::AS_KW)) {
             $alias = $this->consume(TokenType::IDENTIFIER, 'Expected alias')->lexeme;
         }
         $key = ($alias !== '') ? $alias : substr(strrchr($fqName, '\\') ?: ('\\' . $fqName), 1);
-        // 全大写/下划线名称 → 常量导入检测
-        if (!$function && self::isConstantName($key)) {
-            $this->error("Cross-namespace constant import not supported: 'use {$fqName}' (constants can only be used within their defining namespace)");
+        // 全大写/下划线名称 → 常量导入检测（仅对非 use const 路径生效）
+        if (!$function && !$isConst && self::isConstantName($key)) {
+            $this->error("Cross-namespace constant import not supported: 'use {$fqName}' (use 'use const {$fqName}' instead)");
         }
         if ($function) {
             $this->functionImports[$key] = $fqName;
+        } elseif ($isConst) {
+            $this->constImports[$key] = $fqName;
         } else {
             $this->classImports[$key] = $fqName;
         }

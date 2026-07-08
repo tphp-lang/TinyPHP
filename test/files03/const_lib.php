@@ -3,6 +3,7 @@
 
 namespace Lib;
 
+// 命名空间常量，只能同一个命名空间使用，并非全局常量
 const NS_VERSION = "2.0.0";
 const NS_MAX     = 100;
 
@@ -23,11 +24,13 @@ class Config
 
 class App
 {
-    public const array PORTS = [8080, 8443];
+    public const string ENV = "production";
+    public const int PORT = 8080;
     private const array TAGS = ["web", "api"];
+}
 
-    public function info(): void
-    {
-        echo "  App constants defined OK\n";
-    }
+function myLibFn(): void
+{
+    var_dump(NS_VERSION);
+    echo "Hello, Function Lib!\n";
 }
