@@ -20,7 +20,17 @@
 
 // POSIX 使用系统 iconv；Windows 使用 Win32 API
 #ifndef _WIN32
-    #include <iconv.h>
+    // TCC (尤其 macOS) 自带的 <iconv.h> 会链式拉入 <wchar.h> → <_wchar.h> → <stdarg.h>，
+    // 而 TCC macOS 包缺失 stdarg.h 导致编译失败。改用手动前向声明避开此问题。
+    // GCC/Clang 仍使用系统 <iconv.h> 以获取完整定义。
+    #ifdef __TINYC__
+        typedef void* iconv_t;
+        extern iconv_t iconv_open(const char*, const char*);
+        extern size_t  iconv(iconv_t, char**, size_t*, char**, size_t*);
+        extern int     iconv_close(iconv_t);
+    #else
+        #include <iconv.h>
+    #endif
 #else
     #include <windows.h>
 #endif
