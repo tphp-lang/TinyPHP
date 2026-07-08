@@ -493,17 +493,29 @@ try {
 | `phpc_new_arr()` | `t_array*` | 引用计数，自动 GC |
 | `phpc_new_obj(ptr, cls)` | `void*` | TinyPHP 析构链管理 |
 | `phpc_unregister_obj(ptr)` | `void` | 解除注册（C 库自行 free 后调用） |
+| `phpc_obj_steal(obj)` | `void` | 标记对象"已分离"，C 库可安全 free（防 double-free） |
 | `phpc_new_fn(func)` | `t_callback` | 值拷贝 |
 | `phpc_new_fn_env(fn, env)` | `t_callback` | 值拷贝 |
+| `phpc_env_pin(cb)` | `void*` | 固定闭包 env（异步回调安全） |
+| `phpc_env_unpin(env)` | `void` | 解除固定 |
 
 #### 释放函数
 
 | 函数 | 说明 |
 |------|------|
-| `phpc_free(ptr)` | `free(ptr)`，NULL 安全 |
-| `phpc_free_str_arr(strs, len)` | 先 `free` 每个字符串，再 `free` 指针数组 |
+| `phpc_free(ptr)` | `free(ptr)`，NULL 安全，**自动置零变量**防 UAF |
+| `phpc_free_str_arr(strs, len)` | 先 `free` 每个字符串，再 `free` 指针数组，**自动置零** |
 
-> ⚠ **记忆口诀**：`phpc_arr_*`（提取）→ malloc → **你必须 phpc_free**。`phpc_new_*`（创建）→ TinyPHP GC → **你别管**。`c_str` / `phpc_obj` → 借用 → **别 free**。
+#### 安全辅助 API
+
+| 函数 | 说明 |
+|------|------|
+| `phpc_assert_ptr(ptr, name)` | 断言指针非 NULL，NULL 时抛 `tp_throw` 异常（可 try-catch） |
+| `phpc_obj_steal(obj)` | 标记对象"已分离"（refcount=-1），C 库可安全 free 防 double-free |
+| `phpc_env_pin(cb)` | 固定闭包 env 防止 PHP 侧释放（异步回调安全） |
+| `phpc_env_unpin(env)` | 解除固定（C 库不再需要回调时调用） |
+
+> ⚠ **记忆口诀**：`phpc_arr_*`（提取）→ malloc → **你必须 phpc_free**。`phpc_new_*`（创建）→ TinyPHP GC → **你别管**。`c_str` / `phpc_obj` → 借用 → **别 free**。C 库要 free 借用指针 → **先 `phpc_obj_steal`**。异步回调 → **先 `phpc_env_pin`**。
 
 ## 性能
 

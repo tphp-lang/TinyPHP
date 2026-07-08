@@ -129,6 +129,11 @@ const char* join_strs(char** strs, int len) {
     return buf;
 }
 
+// 返回 NULL 指针（用于 phpc_assert_ptr 测试）
+void* get_null_ptr(void) {
+    return NULL;
+}
+
 // ── 对象互操作 ─────────────────────────────────────────
 // 验证 phpc_obj 提取的指针有效（非 NULL）
 int obj_valid(void* obj) { return (obj != NULL) ? 1 : 0; }

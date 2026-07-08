@@ -121,12 +121,14 @@ class CodeGenerator implements ASTVisitor
         'print_r' => 'void', 'var_dump' => 'void', 'sort' => 'void', 'rsort' => 'void',
         'asort' => 'void', 'arsort' => 'void', 'ksort' => 'void', 'krsort' => 'void',
         'putenv' => 'void', 'phpc_unregister_obj' => 'void', 'phpc_free' => 'void', 'phpc_free_str_arr' => 'void',
+        'phpc_obj_steal' => 'void', 'phpc_env_unpin' => 'void',
         // ── t_object / t_callback / null (指针/无返回) ──
         'phpc_new_obj' => 't_object',
         'phpc_new_fn' => 't_callback', 'phpc_new_fn_env' => 't_callback',
         'phpc_arr_int' => 'null', 'phpc_arr_dbl' => 'null', 'phpc_arr_str' => 'null', 'phpc_obj' => 'null',
         'phpc_fn' => 'null', 'phpc_env' => 'null', 'phpc_fn_i32' => 'null', 'phpc_fn_i64' => 'null', 'phpc_fn_f64' => 'null',
         'phpc_thunk' => 'null',
+        'phpc_assert_ptr' => 'null', 'phpc_env_pin' => 'null',
         // ── phpc 互操作 ──
         'c_int' => 't_int', 'php_int' => 't_int', 'c_float' => 't_float', 'php_float' => 't_float',
         'c_str' => 't_string', 'php_str' => 't_string',
@@ -2961,7 +2963,8 @@ class CodeGenerator implements ASTVisitor
                         'phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
                         'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_free','phpc_free_str_arr',
                         'phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
-                        'phpc_new_fn','phpc_new_fn_env','phpc_thunk'];
+                        'phpc_new_fn','phpc_new_fn_env','phpc_thunk',
+                        'phpc_assert_ptr','phpc_obj_steal','phpc_env_pin','phpc_env_unpin'];
             $shortN = strrchr($n, '\\') !== false ? substr(strrchr($n, '\\'), 1) : $n;
             if (in_array($shortN, $phpcFns, true)) {
                 // phpc_thunk 特殊处理：按 #callback 声明生成 thunk
@@ -2971,6 +2974,19 @@ class CodeGenerator implements ASTVisitor
                         return $this->generateThunk($cbName, $node->args[1]);
                     }
                     throw new \RuntimeException("Unknown callback: #callback {$cbName} not declared");
+                }
+                // phpc_free / phpc_free_str_arr: 释放后自动置零变量，防 use-after-free
+                // 仅当第一参数是简单变量时置零（避免对表达式置零）
+                if ($shortN === 'phpc_free' && count($node->args) >= 1
+                    && $node->args[0] instanceof VariableExpr) {
+                    $varName = $this->visitVariable($node->args[0]);
+                    return '(tphp_fn_phpc_free(' . $varName . '), (' . $varName . ' = NULL))';
+                }
+                if ($shortN === 'phpc_free_str_arr' && count($node->args) >= 2
+                    && $node->args[0] instanceof VariableExpr) {
+                    $varName = $this->visitVariable($node->args[0]);
+                    $lenArg = $a[1];
+                    return '(tphp_fn_phpc_free_str_arr(' . $varName . ', (int)(' . $lenArg . ')), (' . $varName . ' = NULL))';
                 }
                 return 'tphp_fn_' . $shortN . '(' . implode(', ', $a) . ')';
             }
@@ -3089,7 +3105,8 @@ class CodeGenerator implements ASTVisitor
                 'phpc_obj','phpc_new_obj','phpc_unregister_obj',
                 'phpc_fn','phpc_env','phpc_new_fn','phpc_new_fn_env',
                 'phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
-                'phpc_free','phpc_free_str_arr'];
+                'phpc_free','phpc_free_str_arr',
+                'phpc_assert_ptr','phpc_obj_steal','phpc_env_pin','phpc_env_unpin'];
             if (in_array($baseName, $phpcFns, true)) {
                 return $baseName . '(' . implode(', ', $args) . ')';
             }

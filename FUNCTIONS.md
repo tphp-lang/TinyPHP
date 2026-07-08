@@ -26,7 +26,7 @@
 | `include/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
-| C 互操作 (PHPC) | `phpc.h` | 27 |
+| C 互操作 (PHPC) | `phpc.h` | 31 |
 | **合计** | | **254+** |
 
 ---
@@ -826,6 +826,11 @@ var_dump($gen->send(100));   // 101
 | `phpc_obj` / `phpc_fn` / `phpc_env` | 双向 | 对象/函数/环境指针（借用语义） |
 | `phpc_new_obj` | C→PHP | 包裹 C 指针为 PHP 对象（接管语义） |
 | `phpc_unregister_obj` | 双向 | 解除对象注册（C 库自行 free 时调用，防 double-free） |
+| `phpc_obj_steal` | 双向 | 标记对象"已分离"（refcount=-1），C 库可安全 free（防 double-free） |
+| `phpc_assert_ptr` | 安全 | 断言指针非 NULL，NULL 时抛 tp_throw 异常（可 try-catch） |
+| `phpc_env_pin` / `phpc_env_unpin` | 安全 | 固定/解除固定闭包 env（异步回调安全） |
+| `phpc_free` | 释放 | free + **自动置零变量**防 UAF |
+| `phpc_free_str_arr` | 释放 | 释放字符串数组 + **自动置零** |
 | `phpc_thunk('name', $fn)` | no-env 回调 | 按 #callback 生成 thunk |
 
 ---

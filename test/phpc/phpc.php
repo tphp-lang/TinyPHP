@@ -186,3 +186,64 @@ function create_and_free_point(float $x, float $y): int
     phpc_unregister_obj($p);
     return php_int($valid);
 }
+
+// ── 安全 API 测试 ──
+
+// phpc_obj_steal 测试：标记对象分离后 C 库 free，防 double-free
+function steal_and_free_point(float $x, float $y): int
+{
+    $p = C->point_create(c_float($x), c_float($y));
+    if (!$p) {
+        return 0;
+    }
+    $valid = C->obj_valid($p);
+    phpc_obj_steal($p);   // 标记分离，防止 GC double-free
+    C->point_free($p);    // C 库释放
+    return php_int($valid);
+}
+
+// phpc_assert_ptr 测试：NULL 指针断言
+function test_assert_null_ptr(): int
+{
+    $ptr = C->get_null_ptr();
+    try {
+        phpc_assert_ptr($ptr, "test_ptr");
+        return 0;  // 没抛异常 = 失败
+    } catch (\Throwable $e) {
+        return 1;  // 捕获到异常 = 成功
+    }
+}
+
+// phpc_arr_int 类型不匹配 → tp_throw 异常路径
+function test_arr_type_mismatch(): int
+{
+    $arr = [1, "two", 3];  // 混合类型
+    try {
+        $data = phpc_arr_int($arr);
+        phpc_free($data);
+        return 0;  // 没抛异常 = 失败
+    } catch (\Throwable $e) {
+        return 1;  // 捕获到异常 = 成功
+    }
+}
+
+// phpc_free 自动置零验证
+function test_free_zeroes_var(): int
+{
+    $data = phpc_arr_int([10, 20, 30]);
+    phpc_free($data);
+    // phpc_free 后 $data 应被自动置 NULL
+    return ($data == null) ? 1 : 0;
+}
+
+// phpc_env_pin / phpc_env_unpin 测试（需要有捕获的闭包才能产生 env）
+function test_env_pin(int $captured): int
+{
+    $fn = function(int $x) use ($captured): int { return $x * $captured; };
+    $env = phpc_env_pin($fn);
+    if ($env == 0) {
+        return 0;  // 无 env（闭包未捕获变量）
+    }
+    phpc_env_unpin($env);
+    return 1;
+}

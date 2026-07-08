@@ -19,6 +19,11 @@ use function Phpc\square_int;
 use function Phpc\create_null_point;
 use function Phpc\join_string_array;
 use function Phpc\create_and_free_point;
+use function Phpc\steal_and_free_point;
+use function Phpc\test_assert_null_ptr;
+use function Phpc\test_arr_type_mismatch;
+use function Phpc\test_free_zeroes_var;
+use function Phpc\test_env_pin;
 
 class MyPoint
 {
@@ -166,6 +171,31 @@ class Main
         // 5f: phpc_unregister_obj — C 库自行释放对象
         $freed_ok = create_and_free_point(5.0, 6.0);
         echo "22. create_and_free="; var_dump($freed_ok); echo "\n";
+
+        // ═══════════════════════════════════════
+        // Part 6: 安全 API
+        // ═══════════════════════════════════════
+        echo "\n-- Part 6: Safety API --\n";
+
+        // 6a: phpc_obj_steal 防止 double-free
+        $steal_ok = steal_and_free_point(7.0, 8.0);
+        echo "23. steal_and_free="; var_dump($steal_ok); echo "\n";
+
+        // 6b: phpc_assert_ptr 捕获 NULL 指针
+        $assert_ok = test_assert_null_ptr();
+        echo "24. assert_null_caught="; var_dump($assert_ok); echo "\n";
+
+        // 6c: phpc_arr_int 类型不匹配抛异常
+        $mismatch_ok = test_arr_type_mismatch();
+        echo "25. arr_type_mismatch_caught="; var_dump($mismatch_ok); echo "\n";
+
+        // 6d: phpc_free 自动置零
+        $zero_ok = test_free_zeroes_var();
+        echo "26. free_zeroes_var="; var_dump($zero_ok); echo "\n";
+
+        // 6e: phpc_env_pin / phpc_env_unpin（有捕获闭包才有 env）
+        $pin_ok = test_env_pin(42);
+        echo "27. env_pin_unpin="; var_dump($pin_ok); echo "\n";
 
         echo "\n=== All PHPC tests passed! ===\n";
     }

@@ -34,14 +34,16 @@ static inline t_float tphp_fn_php_float(double v)  { return (t_float)v; }
 
 // php_str: 复用 C 内存（深拷贝到 arena，C 端原指针仍由 C 管理）
 //   适用：C 函数返回的栈字符串/静态字符串/调用方不持有所有权的字符串
-static inline t_string tphp_fn_php_str(const char* s) {
+//   参数为 t_int（指针值），内部 cast 为 const char*，兼容 C->func() 返回值
+static inline t_string tphp_fn_php_str(t_int ptr) {
+    const char* s = (const char*)ptr;
     return s ? tphp_rt_str_dup((t_string){(char*)s, (int)strlen(s)}) : (t_string){.data = NULL, .length = 0, .is_local = false};
 }
 
 // php_str_clone: 同 php_str（语义别名，明确表示"克隆"语义）
 //   与 c_str() 形成对照：c_str() 复用 PHP 内存给 C，php_str_clone() 复制 C 内存给 PHP
-static inline t_string tphp_fn_php_str_clone(const char* s) {
-    return tphp_fn_php_str(s);
+static inline t_string tphp_fn_php_str_clone(t_int ptr) {
+    return tphp_fn_php_str(ptr);
 }
 
 // ── 3. 数组：PHP → C（严格类型检查，不匹配抛 tp_throw 异常）────
@@ -205,9 +207,9 @@ static inline phpc_fn_f64_t tphp_fn_phpc_fn_f64(t_callback cb) { return (phpc_fn
 
 // ── 7. 内存释放 ───────────────────────────────────────────
 //   phpc_arr_* 返回的 malloc 指针必须通过以下函数释放
+//   CodeGenerator 会在调用后自动置零变量，防止 use-after-free
 
-// phpc_free: 释放 C 内存（不置零，调用方自行管理指针生命周期）
-//   注意：phpc_free 后请勿再使用该指针（use-after-free 风险）
+// phpc_free: 释放 C 内存（CodeGenerator 会在调用后自动置零变量）
 static inline void tphp_fn_phpc_free(void* ptr) {
     if (ptr) free(ptr);
 }
@@ -217,4 +219,64 @@ static inline void tphp_fn_phpc_free_str_arr(char** strs, int len) {
     if (!strs) return;
     for (int i = 0; i < len; i++) free(strs[i]);
     free(strs);
+}
+
+// ── 8. 安全辅助 API ──────────────────────────────────────
+
+// phpc_assert_ptr: 断言指针非 NULL，NULL 时抛 tp_throw 异常
+//   用法：phpc_assert_ptr($ptr, "ptr_name"); C->func($ptr);
+//   防止 C->func(NULL) 导致段错误
+//   参数: ptr 为 t_int（指针值），name 为 t_string（变量名字符串）
+static inline t_int tphp_fn_phpc_assert_ptr(t_int ptr, t_string name) {
+    if (!ptr) {
+        char _buf[128];
+        snprintf(_buf, sizeof(_buf), "phpc_assert_ptr(): '%s' is NULL", STR_PTR(name));
+        tp_throw(_buf);
+    }
+    return ptr;
+}
+
+// phpc_obj_steal: 标记对象为"已分离"（refcount = -1），防止 tp_obj_release double-free
+//   用法：phpc_obj_steal(phpc_obj($p)); C->point_free(phpc_obj($p));
+//   调用后 C 库可安全释放对象内存，PHP 侧 $p 不再被 GC 释放
+//   注意：steal 后请勿再访问 $p 的任何字段（内存可能已被 C 库释放）
+static inline void tphp_fn_phpc_obj_steal(void* obj) {
+    if (obj) {
+        t_object* o = (t_object*)obj;
+        o->refcount = -1;  // immortal: tp_obj_release 检测 refcount <= 0 时跳过释放
+    }
+}
+
+// ── 9. 闭包 env 生命周期管理（异步回调安全） ─────────────
+//   问题：C 库持有回调 env 期间，PHP 侧闭包可能超出作用域被释放
+//   方案：pin 将 env 注册到全局表防止释放；unpin 恢复正常生命周期
+
+#define PHPC_ENV_PIN_MAX 64
+typedef struct { void* env; } phpc_env_slot;
+static phpc_env_slot _phpc_pinned_envs[PHPC_ENV_PIN_MAX];
+
+// phpc_env_pin: 固定闭包 env，防止 PHP 侧释放（C 库持有回调期间使用）
+//   返回 env 指针，C 库可安全持有
+//   用法：$env = phpc_env_pin($fn); C->async_call(..., $env);
+static inline void* tphp_fn_phpc_env_pin(t_callback cb) {
+    if (!cb.env) return NULL;
+    for (int i = 0; i < PHPC_ENV_PIN_MAX; i++) {
+        if (_phpc_pinned_envs[i].env == NULL) {
+            _phpc_pinned_envs[i].env = cb.env;
+            return cb.env;
+        }
+    }
+    return cb.env;  // 表满时仍返回 env（降级，不阻塞）
+}
+
+// phpc_env_unpin: 解除固定（C 库不再需要回调时调用）
+//   用法：C->async_cancel(handle); phpc_env_unpin($env);
+static inline void tphp_fn_phpc_env_unpin(void* env) {
+    if (!env) return;
+    for (int i = 0; i < PHPC_ENV_PIN_MAX; i++) {
+        if (_phpc_pinned_envs[i].env == env) {
+            _phpc_pinned_envs[i].env = NULL;
+            return;
+        }
+    }
 }

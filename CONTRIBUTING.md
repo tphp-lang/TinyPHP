@@ -169,7 +169,7 @@ ExprNode（抽象，含 line/column）
 | `array.h` | `tphp_fn_arr_` | PHP 数组（128 槽复用池 + sort + 1.5× 增长） |
 | `runtime.h` | `tphp_rt_` | 运行时（128KB 字符串池 + Arena、资源追踪、error） |
 | `builtin.h` + `std/*.h` | `tphp_fn_` | 内置函数入口 (8个子文件, 230+ 函数) |
-| `phpc.h` | `phpc_` `c_` `php_` | PHP↔C 互操作 |
+| `phpc.h` | `phpc_` `c_` `php_` | PHP↔C 互操作（类型桥/数组/对象/回调/thunk/C 类型注解/安全 API：`phpc_free` 自动置零、`phpc_assert_ptr`、`phpc_obj_steal`、`phpc_env_pin`/`phpc_env_unpin`） |
 | `tphp_math.h` | `tphp_fn_` | 扩展数学函数 |
 | `conv.h` | `tphp_fn_` | 进制转换 |
 | `hash.h` | `tphp_fn_` | MD5/SHA1/CRC32 |
@@ -437,6 +437,19 @@ class Main {
 
 方法入口生成零值 return（`zeroReturn()` 按返回类型生成 `return 0;` / `return NULL;` / `return (t_string){0};` 等），兼容 TCC/GCC/Clang。
 
+### PHPC 安全 API
+
+phpc 提供 4 个安全辅助函数处理 C 指针生命周期边界问题。修改 `include/phpc.h` 或 CodeGenerator 的 phpc 分支时必须保持这些不变量：
+
+| API | 不变量 | 实现要点 |
+|-----|--------|---------|
+| `phpc_free($var)` | 释放后调用方变量自动置 NULL | CodeGenerator 检测首参为 `VariableExpr` 时改写为 `(tphp_fn_phpc_free(var), (var = NULL))` 逗号表达式；非变量参数走原路径 |
+| `phpc_assert_ptr($ptr, $name)` | NULL 时抛 `tp_throw` 异常（可 try-catch） | `include/phpc.h` 中 `tphp_fn_phpc_assert_ptr` 检测 NULL 后 `tp_throw` |
+| `phpc_obj_steal($obj)` | 标记对象 refcount=-1（immortal），`tp_obj_release` 跳过释放 | 用于 C 库自行 free 的借用指针，防 double-free |
+| `phpc_env_pin($cb)` / `phpc_env_unpin($env)` | 钉住闭包 env 于全局 pin 表（64 槽），防异步回调 UAF | 表满时降级返回 env 不阻塞；unpin 清槽 |
+
+**测试覆盖**：`test/phpc/phpc.php` 的 Part 6（测试 23-27）覆盖上述 4 个 API 的成功/失败路径，包括类型不匹配异常、NULL 指针捕获、自动置零验证。修改相关代码必须保持这 5 个测试通过。
+
 ### 命名防冲突
 
 详见 §5「函数命名规范」。速查：
@@ -486,7 +499,7 @@ class Main {
 | `include/array.h` | ~869 | PHP 数组（128 槽复用池/sort/1.5× 增长） |
 | `include/runtime.h` | ~402 | 运行时（128KB 字符串池+Arena/资源追踪/error/str_free SSO 感知） |
 | `include/builtin.h` | ~22 | 内置函数入口 (incl 8个 `include/std/` 子文件) |
-| `include/phpc.h` | ~240 | PHPC 互操作（类型/数组/对象/回调/thunk/内存释放/C 类型注解） |
+| `include/phpc.h` | ~280 | PHPC 互操作（类型/数组/对象/回调/thunk/内存释放/C 类型注解/安全 API） |
 | `include/object/object.h` | ~100 | COS 对象系统 + 128 槽对象复用池 |
 | `include/object/try.h` | ~92 | setjmp/longjmp 异常 |
 | `include/os/json.h` | ~385 | JSON 编解码（位图转义+批量安全字符写入） |

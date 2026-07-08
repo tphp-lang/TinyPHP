@@ -556,6 +556,7 @@ phpc_object:
     'phpc_obj(' expr ')'                       ✅ → void* (借用语义)
   | 'phpc_new_obj(' ptr ',' cls ')'            ✅ → t_object* (接管语义)
   | 'phpc_unregister_obj(' expr ')'            ✅ → void (解除注册，防 double-free)
+  | 'phpc_obj_steal(' expr ')'                 ✅ → void (标记分离，C 库可安全 free)
 
 phpc_callback:
     'phpc_fn(' cb ')'              ✅ → void*
@@ -564,10 +565,13 @@ phpc_callback:
   | 'phpc_fn_i64(' cb ')'          ✅ → int64_t(*)(int64_t, void*)
   | 'phpc_fn_f64(' cb ')'          ✅ → double(*)(double, void*)
   | 'phpc_thunk(' name ',' cb ')'  ✅ → 按 #callback 签名生成 thunk
+  | 'phpc_env_pin(' cb ')'         ✅ → void* (固定 env，异步回调安全)
+  | 'phpc_env_unpin(' env ')'      ✅ → void (解除固定)
 
 phpc_memory:
-    'phpc_free(' ptr ')'           ✅ → free(ptr)，NULL 安全
-  | 'phpc_free_str_arr(' p,p ')'   ✅ → 释放字符串数组（先 free 每个字符串，再 free 指针数组）
+    'phpc_free(' ptr ')'           ✅ → free(ptr) + 自动置零变量防 UAF
+  | 'phpc_free_str_arr(' p,p ')'   ✅ → 释放字符串数组 + 自动置零
+  | 'phpc_assert_ptr(' p,name ')'  ✅ → 断言非 NULL，否则抛 tp_throw
 ```
 
 ---
@@ -609,8 +613,8 @@ phpc_memory:
 | `C.Type` | C 类型注解（函数参数/返回值，如 `C.Point` → `Point*`） |
 | `c_int/c_float/c_str` | PHP → C 类型桥接 |
 | `php_int/php_float/php_str/php_str_clone` | C → PHP 类型桥接 |
-| `phpc_arr_*` `phpc_obj` `phpc_new_obj` `phpc_unregister_obj` `phpc_fn_*` `phpc_thunk` | 数组/对象/回调互操作 |
-| `phpc_free` `phpc_free_str_arr` | C 内存释放 |
+| `phpc_arr_*` `phpc_obj` `phpc_new_obj` `phpc_unregister_obj` `phpc_obj_steal` `phpc_fn_*` `phpc_thunk` `phpc_env_pin` `phpc_env_unpin` | 数组/对象/回调互操作 |
+| `phpc_free` `phpc_free_str_arr` `phpc_assert_ptr` | C 内存释放/安全断言 |
 | `#import pcntl` | 按需引入扩展（自动加载 ext/pcntl/src/） |
 | `int &$x` | 引用传参（int/float/bool/string/array/对象全类型支持） |
 

@@ -1534,10 +1534,11 @@ class Parser
                     'c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
                     'phpc_arr_int','phpc_arr_dbl','phpc_arr_str',
                     'phpc_new_arr_int','phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
-                    'phpc_obj','phpc_new_obj','phpc_unregister_obj',
+                    'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_obj_steal',
                     'phpc_fn','phpc_env','phpc_new_fn','phpc_new_fn_env',
                     'phpc_fn_i32','phpc_fn_i64','phpc_fn_f64','phpc_thunk',
                     'phpc_free','phpc_free_str_arr',
+                    'phpc_assert_ptr','phpc_env_pin','phpc_env_unpin',
                     'count','strlen','trim','ltrim','rtrim','substr','strpos',
                     'str_contains','str_replace','sprintf','implode','explode','join',
                     'array_push','array_pop','array_shift','array_unshift','in_array',
@@ -1791,6 +1792,10 @@ class Parser
         // self 关键字
         if ($this->match(TokenType::SELF_KW)) {
             return 'self';
+        }
+        // 跳过全局命名空间前缀 \（如 \Throwable \Exception）
+        if ($this->check(TokenType::NS_SEP)) {
+            $this->advance();
         }
         $typeToken = $this->advance();
         $validTypes = [
