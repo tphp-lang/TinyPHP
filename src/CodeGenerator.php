@@ -4191,28 +4191,49 @@ class CodeGenerator implements ASTVisitor
         return implode("\n", $lines);
     }
 
-    /** 将 switch 字符串转为 if-elseif 链（break 在 if-else 中无效，自动跳过） */
+    /**
+     * 将 switch 字符串转为 if-goto 链，保留 C switch 的 fall-through 语义。
+     * 每个 case 对应一个 label；匹配则跳入，无 break 则顺序执行到下一个 case label。
+     * default 单独处理：无 case 匹配时跳到 default label（default 可在任意位置）。
+     */
     private function generateStringSwitch(string $condCode, array $cases): string
     {
         $lines = [];
-        $first = true;
-        foreach ($cases as $case) {
+        $swId = (++$this->tmpVarCounter);
+        $endLabel = '_sw_end_' . $swId;
+        $defaultLabel = '_sw_default_' . $swId;
+
+        $hasDefault = false;
+        // 1. 匹配检测：if (str_eq(cond, val)) goto case_label;
+        foreach ($cases as $i => $case) {
             if ($case->value !== null) {
                 $valCode = $case->value->accept($this);
-                $prefix = $first ? 'if' : 'else if';
-                $lines[] = "{$prefix} (tphp_rt_str_eq({$condCode}, {$valCode})) {";
-                $first = false;
+                $label = '_sw_case_' . $swId . '_' . $i;
+                $lines[] = "if (tphp_rt_str_eq({$condCode}, {$valCode})) goto {$label};";
             } else {
-                // default case
-                $lines[] = 'else {';
+                $hasDefault = true;
+            }
+        }
+        // 无匹配 → default 或跳到结尾
+        $lines[] = $hasDefault ? "goto {$defaultLabel};" : "goto {$endLabel};";
+
+        // 2. case body：label + stmts（break → goto end，无 break 则 fall-through 到下一 case）
+        foreach ($cases as $i => $case) {
+            if ($case->value !== null) {
+                $label = '_sw_case_' . $swId . '_' . $i;
+                $lines[] = "{$label}:;";
+            } else {
+                $lines[] = "{$defaultLabel}:;";
             }
             foreach ($case->body as $s) {
-                // if-elseif 天然不穿透，break 无意义且会导致 C 编译错误
-                if ($s instanceof BreakStmtNode) continue;
-                $lines[] = $this->ind($s->accept($this));
+                if ($s instanceof BreakStmtNode) {
+                    $lines[] = $this->ind("goto {$endLabel};");
+                } else {
+                    $lines[] = $this->ind($s->accept($this));
+                }
             }
-            $lines[] = '}';
         }
+        $lines[] = "{$endLabel}:;";
         return implode("\n", $lines);
     }
 
