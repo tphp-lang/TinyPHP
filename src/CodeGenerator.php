@@ -582,31 +582,40 @@ class CodeGenerator implements ASTVisitor
             $vis = $cc->visibility ?? 'public';
             $this->constVis[$fullName] = $vis;
             $this->constVis[$cname] = $vis;
+            // 声明类型 vs 字面量类型一致性校验，并以声明类型注册
+            $declCType = self::mapType($cc->type);
+            $litCType  = self::$litTypeMap[$cc->value::class] ?? null;
+            if ($litCType !== null && $declCType !== $litCType) {
+                throw new \RuntimeException(
+                    "Class constant {$cn}::{$cc->name} type mismatch: "
+                    . "declared '{$cc->type}' ({$declCType}) but value is {$litCType}"
+                );
+            }
             if ($cc->value instanceof StringLiteralExpr) {
-                $this->symbols->addConst($fullName, 't_string', $vis);
-                $this->constTypes[$fullName] = 't_string';
-                $this->constTypes[$cname] = 't_string';
+                $this->symbols->addConst($fullName, $declCType, $vis);
+                $this->constTypes[$fullName] = $declCType;
+                $this->constTypes[$cname] = $declCType;
                 $val = str_replace('"', '\\"', $cc->value->value);
                 $o[] = "#define {$cname} STR_LIT(\"{$val}\")";
             } elseif ($cc->value instanceof IntLiteralExpr) {
-                $this->symbols->addConst($fullName, 't_int', $vis);
-                $this->constTypes[$fullName] = 't_int';
-                $this->constTypes[$cname] = 't_int';
+                $this->symbols->addConst($fullName, $declCType, $vis);
+                $this->constTypes[$fullName] = $declCType;
+                $this->constTypes[$cname] = $declCType;
                 $o[] = "#define {$cname} {$cc->value->value}";
             } elseif ($cc->value instanceof FloatLiteralExpr) {
-                $this->symbols->addConst($fullName, 't_float', $vis);
-                $this->constTypes[$fullName] = 't_float';
-                $this->constTypes[$cname] = 't_float';
+                $this->symbols->addConst($fullName, $declCType, $vis);
+                $this->constTypes[$fullName] = $declCType;
+                $this->constTypes[$cname] = $declCType;
                 $fv = $cc->value->value;
                 $o[] = '#define ' . $cname . ' ' .
                     (($fv == (float)(int)$fv) ? sprintf('%.1f', $fv) : rtrim(rtrim(sprintf('%.15g', $fv), '0'), '.'));
             } elseif ($cc->value instanceof BoolLiteralExpr) {
-                $this->symbols->addConst($fullName, 't_bool', $vis);
-                $this->constTypes[$fullName] = 't_bool';
-                $this->constTypes[$cname] = 't_bool';
+                $this->symbols->addConst($fullName, $declCType, $vis);
+                $this->constTypes[$fullName] = $declCType;
+                $this->constTypes[$cname] = $declCType;
                 $o[] = "#define {$cname} " . ($cc->value->value ? 'true' : 'false');
             } elseif ($cc->value instanceof ArrayLiteralExpr) {
-                // 数组常量：static 变量
+                // 数组常量：static 变量（不注册 constTypes，访问走独立路径）
                 $o[] = "static t_array* {$cname} = NULL;";
                 $o[] = "/* initialized on first access via {$cn} class */";
             }
@@ -1368,6 +1377,16 @@ class CodeGenerator implements ASTVisitor
         // new ClassName(...) → tphp_ClassName* var = expr; + 注册到全局资源表
         if ($node->expr instanceof NewExpr) {
             $cn = self::classRefName($node->expr->className);
+            // 有声明类型时校验一致性
+            if ($node->type !== null) {
+                $declCType = self::mapType($node->type);
+                if ($declCType !== $cn . '*') {
+                    throw new \RuntimeException(
+                        "Variable \${$var} type mismatch: declared '{$node->type}' ({$declCType}) "
+                        . "but assigned new {$node->expr->className} ({$cn}*)"
+                    );
+                }
+            }
             $this->varTypes[$var] = $cn;
             if ($this->indent == 1) {
                 $this->symbols->addScopeObject($var);  // 仅顶层作用域自动析构
@@ -1413,7 +1432,19 @@ class CodeGenerator implements ASTVisitor
 
         // 首次赋值 → 推导类型并声明
         if (!$isDeclared) {
-            $cType = $this->inferType($node->expr);
+            $inferredType = $this->inferType($node->expr);
+            // 有声明类型时校验一致性并优先使用
+            if ($node->type !== null) {
+                $cType = self::mapType($node->type);
+                if ($inferredType !== 'null' && $inferredType !== $cType) {
+                    throw new \RuntimeException(
+                        "Variable \${$var} type mismatch: declared '{$node->type}' ({$cType}) "
+                        . "but inferred {$inferredType}"
+                    );
+                }
+            } else {
+                $cType = $inferredType;
+            }
             $this->varTypes[$var] = $cType;
             $declType = ($cType === 'null') ? 'void*' : $cType;
             $w = $this->varWrite($var, $cType);
@@ -3749,23 +3780,34 @@ class CodeGenerator implements ASTVisitor
     public function visitConst(ConstNode $node): string
     {
         $name = 'TPHP_CONST_' . strtoupper($node->name);
+        // 有声明类型时校验一致性，并以声明类型注册；无则按字面量推导
+        $litCType = self::$litTypeMap[$node->value::class] ?? null;
+        if ($node->type !== null) {
+            $declCType = self::mapType($node->type);
+            if ($litCType !== null && $declCType !== $litCType) {
+                throw new \RuntimeException(
+                    "Constant {$node->name} type mismatch: "
+                    . "declared '{$node->type}' ({$declCType}) but value is {$litCType}"
+                );
+            }
+            $ct = $declCType;
+        } else {
+            $ct = $litCType ?? 't_int';
+        }
+        $this->constTypes[$node->name] = $ct;
         if ($node->value instanceof StringLiteralExpr) {
-            $this->constTypes[$node->name] = 't_string';
             $val = str_replace('"', '\\"', $node->value->value);
             return '#define ' . $name . ' STR_LIT("' . $val . '")';
         }
         if ($node->value instanceof IntLiteralExpr) {
-            $this->constTypes[$node->name] = 't_int';
             return '#define ' . $name . ' ' . $node->value->value;
         }
         if ($node->value instanceof FloatLiteralExpr) {
-            $this->constTypes[$node->name] = 't_float';
             $fv = $node->value->value;
             return '#define ' . $name . ' ' .
                 (($fv == (float)(int)$fv) ? sprintf('%.1f', $fv) : rtrim(rtrim(sprintf('%.15g', $fv), '0'), '.'));
         }
         if ($node->value instanceof BoolLiteralExpr) {
-            $this->constTypes[$node->name] = 't_bool';
             return '#define ' . $name . ' ' . ($node->value->value ? 'true' : 'false');
         }
         return '/* const ' . $node->name . ' */';

@@ -183,16 +183,46 @@ class Parser
     }
 
     // ============================================================
-    // const → CONST_KW IDENTIFIER '=' literal SEMICOLON
+    // const → CONST_KW [TYPE] IDENTIFIER '=' literal SEMICOLON
+    // 类型标记可选：const int NAME = 42  或  const NAME = 42
     // ============================================================
     private function parseConstDecl(): ConstNode
     {
+        // 可选类型标记探测
+        $type = null;
+        $t1 = $this->peek(0);
+        $typeStartTokens = [
+            TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+            TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
+            TokenType::IDENTIFIER, // 类名/C 类型
+        ];
+        if (in_array($t1->type, $typeStartTokens, true)) {
+            $hasType = false;
+            if ($t1->type === TokenType::IDENTIFIER) {
+                $t2 = $this->peek(1);
+                if ($t2->type === TokenType::DOT) {
+                    // C.Type NAME = value
+                    $hasType = true;
+                } elseif ($t2->type === TokenType::IDENTIFIER) {
+                    // ClassName NAME = value
+                    $hasType = true;
+                }
+                // else: const NAME = value (NAME 即常量名)
+            } else {
+                // TYPE_INT/TYPE_FLOAT/... NAME = value
+                $hasType = $this->peek(1)->type === TokenType::IDENTIFIER;
+            }
+            if ($hasType) {
+                $type = $this->parseType();
+            }
+        }
+
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected constant name')->lexeme;
         $this->declaredConsts[$name] = $this->currentNamespace;
         $this->consume(TokenType::EQUALS, 'Expected =');
         $value = $this->parsePrimary(); // 只接受字面量
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
-        return new ConstNode($name, $value, $this->currentNamespace);
+        return new ConstNode($name, $value, $this->currentNamespace, $type);
     }
 
     // ============================================================
@@ -812,9 +842,13 @@ class Parser
             }
             $this->current = $save; // 回退
         }
-        // 赋值: $var = expr;
+        // 赋值: $var = expr;  或  TYPE $var = expr; (可选类型标记)
         if ($this->check(TokenType::IDENTIFIER) && $this->checkNext(TokenType::EQUALS)) {
             return $this->parseAssignStmt();
+        }
+        // 带类型标记的赋值: int $x = ...;  ClassName $x = ...;  C.Type $x = ...;
+        if ($this->isTypedAssignStart()) {
+            return $this->parseAssignStmt(type: $this->parseType());
         }
         // 表达式语句
         return $this->parseExprStmt();
@@ -1184,13 +1218,68 @@ class Parser
         return $this->setPos(new YieldExpr($key, $value), $line, $col);
     }
 
-    private function parseAssignStmt(): AssignStmtNode
+    private function parseAssignStmt(?string $type = null): AssignStmtNode
     {
         $varName = $this->advance()->lexeme;
         $this->consume(TokenType::EQUALS, 'Expected =');
         $expr = $this->parseExpr();
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
-        return new AssignStmtNode($varName, $expr);
+        return new AssignStmtNode($varName, $expr, $type);
+    }
+
+    /** 检测当前是否为带类型标记的赋值开头：TYPE $var = ... */
+    private function isTypedAssignStart(): bool
+    {
+        $t1 = $this->peek(0);
+        // 原生类型关键字: int $x = ... / string $x = ... 等
+        $nativeTypeTokens = [
+            TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+            TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
+        ];
+        if (in_array($t1->type, $nativeTypeTokens, true)) {
+            return $this->peek(1)->type === TokenType::IDENTIFIER
+                && str_starts_with($this->peek(1)->lexeme, '$');
+        }
+        // \Namespace\Class $x = ... (全局命名空间前缀)
+        if ($t1->type === TokenType::NS_SEP) {
+            $t2 = $this->peek(1);
+            if ($t2->type !== TokenType::IDENTIFIER || str_starts_with($t2->lexeme, '$')) return false;
+            // 向后查找第一个 $var 标记
+            $i = 2;
+            while ($this->peek($i)->type === TokenType::NS_SEP
+                && $this->peek($i + 1)->type === TokenType::IDENTIFIER) {
+                $i += 2;
+            }
+            return $this->peek($i)->type === TokenType::IDENTIFIER
+                && str_starts_with($this->peek($i)->lexeme, '$');
+        }
+        // IDENTIFIER 开头: ClassName $x = ... 或 C.Type $x = ...
+        if ($t1->type === TokenType::IDENTIFIER && !str_starts_with($t1->lexeme, '$')) {
+            $t2 = $this->peek(1);
+            // C.Type $x = ...
+            if ($t2->type === TokenType::DOT) {
+                $t3 = $this->peek(2);
+                if ($t3->type !== TokenType::IDENTIFIER) return false;
+                $t4 = $this->peek(3);
+                return $t4->type === TokenType::IDENTIFIER
+                    && str_starts_with($t4->lexeme, '$');
+            }
+            // ClassName $x = ...
+            if ($t2->type === TokenType::IDENTIFIER && str_starts_with($t2->lexeme, '$')) {
+                return true;
+            }
+            // Namespace\Class $x = ...
+            if ($t2->type === TokenType::NS_SEP) {
+                $i = 1;
+                while ($this->peek($i)->type === TokenType::NS_SEP
+                    && $this->peek($i + 1)->type === TokenType::IDENTIFIER) {
+                    $i += 2;
+                }
+                return $this->peek($i)->type === TokenType::IDENTIFIER
+                    && str_starts_with($this->peek($i)->lexeme, '$');
+            }
+        }
+        return false;
     }
 
     private function parseExprStmt(): StmtNode

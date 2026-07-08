@@ -37,6 +37,25 @@ class Main
 
 **类型固定**：变量在首次赋值时确定类型，后续不可变。尝试切换类型（如 `$x` 先 `int` 后 `string`）会在 C 编译阶段报错。
 
+**可选类型标记**：局部变量和全局/命名空间常量支持可选的前置类型标记，声明类型与字面量/推断类型不一致时编译期报错。类属性和类常量的类型标记为必填。
+
+```php
+// 局部变量（可选类型标记）
+int $x = 42;           // 等价于 $x = 42;
+string $s = "hello";
+Point $p = new Point(1, 2);
+
+// 全局/命名空间常量（可选类型标记）
+const int MAX = 100;   // 等价于 const MAX = 100;
+const string NAME = "app";
+
+// 类常量（类型必填，保持不变）
+class C {
+    const int TIMEOUT = 30;
+    const string TITLE = "Hello";
+}
+```
+
 | PHP 类型 | C 类型 | 说明 |
 |----------|--------|------|
 | `int` | `int64_t` | 64 位有符号整数 |

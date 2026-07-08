@@ -192,6 +192,8 @@ class AssignStmtNode extends StmtNode
     public function __construct(
         public readonly string $varName,
         public readonly ExprNode $expr,
+        /** 可选类型标记：'int'|'string'|...|'C.FILE'，null=无标记（按推断） */
+        public readonly ?string $type = null,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
