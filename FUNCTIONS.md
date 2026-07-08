@@ -122,14 +122,14 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `std/core.h`
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `echo $x` | `fwrite(stdout)` | 二进制安全，不解析格式化符 |
-| `var_dump($x)` | type switch → `fprintf` | 支持全部类型，对象输出 `{}`；浮点用 `%.14g`（PHP 默认精度） |
-| `print_r($x, $ret=false)` | 递归格式化 | 支持数组/对象/标量；`$ret=true` 返回字符串 |
-| `exit($code)` | `exit(code)` | — |
-| `isset($var)` | 指针类型 → `ptr != NULL`；值类型 → 编译期 `true` | — |
-| `empty($var)` | 按类型分发 | int→`==0`, string→`is_falsy`, float/bool 同 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `echo $expr` | `echo $expr` | `fwrite(stdout)` + 每次调用 `fflush`，二进制安全，不解析 `%` 格式化符；O(n) 零堆分配 | PHP 支持 `echo $a, $b` 多参数语法，tphp 单参数（多参数由编译器展开为多次调用） |
+| `var_dump(mixed $value, mixed ...$rest): void` | `var_dump(mixed $value): void` | type switch → `fprintf`/`fwrite` 递归输出，O(节点数)，零中间缓冲 | 单参数；浮点 `%g`（6 位有效数字）非 PHP `%.14G`（14 位）；对象仅输出 `object(ClassName)` 无属性列表 |
+| `print_r(mixed $value, bool $return = false): string\|true` | `print_r(mixed $value): void` | 递归格式化，O(节点数)，流式写入 stdout | **无 `$return` 参数**，始终返回 void；对象仅输出 `ClassName Object` 无属性；无循环引用检测（递归数组会栈溢出） |
+| `exit(int\|string $status): void` | `exit(int $code): void` | `exit(code)` 单次 libc 调用，O(1) | 仅接受 int（PHP 还接受 string 消息）；无 shutdown 回调 |
+| `isset(mixed $var, mixed ...$rest): bool` | `isset(mixed $var): bool` | 指针类型 → `ptr != NULL`；值类型 → 编译期 `true`；O(1) | 单参数；语义为指针 NULL 检查（值类型如 int/string 永远返回 true） |
+| `empty(mixed $var): bool` | `empty(mixed $var): bool` | 按类型分发内联：int→`==0`、string→`is_falsy`、float/bool/null 同；O(1) | — |
 
 ---
 
@@ -139,29 +139,35 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ### 类型检测
 
-| 函数 | AOT 优化 |
-|------|---------|
-| `is_int / is_float / is_string / is_bool` | 编译期静态类型 → 直接字面量 `true`/`false` |
-| `is_array / is_null / is_object / is_callable` | 同上 |
-| `is_resource($v)` | 编译期检查 `tphp_class_` 类型 → `true`；运行时 `tp_obj_is_a` 检查继承链 |
-| `is_numeric($s)` | null-terminated 副本 + `strtoll`/`strtod` 扫描 |
-| `gettype($v)` | type switch → 字符串常量 (`"int"`/`"float"`...) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `is_int(mixed $value): bool` | `is_int(mixed $value): bool` | 静态类型编译期折叠为字面量 `true`/`false`；运行时 `v.type==TYPE_INT` | — |
+| `is_float(mixed $value): bool` | `is_float(mixed $value): bool` | 同上，`v.type==TYPE_FLOAT` | — |
+| `is_string(mixed $value): bool` | `is_string(mixed $value): bool` | 同上，`v.type==TYPE_STRING` | — |
+| `is_bool(mixed $value): bool` | `is_bool(mixed $value): bool` | 同上，`v.type==TYPE_BOOL` | — |
+| `is_array(mixed $value): bool` | `is_array(mixed $value): bool` | 同上，`v.type==TYPE_ARRAY` | — |
+| `is_null(mixed $value): bool` | `is_null(mixed $value): bool` | 同上，`v.type==TYPE_NULL` | — |
+| `is_object(mixed $value): bool` | `is_object(mixed $value): bool` | 同上，`v.type==TYPE_OBJECT` | — |
+| `is_callable(mixed $value): bool` | `is_callable(mixed $value): bool` | 同上，`v.type==TYPE_CALLBACK` | 仅识别 Closure，不识别字符串/数组回调名 |
+| `is_resource(mixed $value): bool` | `is_resource(mixed $value): bool` | 编译期 `tphp_class_` 类型 → `true`；运行时 `tp_obj_is_a` 检查继承链 | — |
+| `is_numeric(mixed $value): bool` | `is_numeric(string $value): bool` | null-terminated 副本 + `strtoll`/`strtod` 扫描，`end==buf+len` 才 true | 仅字符串入参（PHP 接受 mixed）；函数名 `is_numeric_str` |
+| `gettype(mixed $value): string` | `gettype(mixed $value): string` | 静态 `names[]` 表查表，O(1) | callable 返回 `"object"`；返回 static 缓冲非拷贝 |
 
 ### 类型转换
 
-| 函数 | C 实现 | 性能 |
-|------|--------|------|
-| `intval($x)` | type switch → cast | O(1) |
-| `floatval($x)` | type switch → cast | O(1) |
-| `strval($x)` | `tphp_rt_str_from_int/float` | O(1) |
-| `boolval($x)` | PHP 假值规则 | O(1) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `intval(mixed $value, int $base = 10): int` | `intval(mixed $value): int` | type switch → cast，string 走 `tphp_rt_parse_int`，O(1) | 无 `$base` 参数 |
+| `floatval(mixed $value): float` | `floatval(mixed $value): float` | type switch → cast，O(1) | — |
+| `strval(mixed $value): string` | `strval(mixed $value): string` | int→`str_from_int`，float→`str_from_float`，bool→`"1"`/`""` | NULL 返回 data=NULL 的空串 |
+| `boolval(mixed $value): bool` | `boolval(mixed $value): bool` | int→`!=0`，float→`!=0.0`，string→`!is_falsy`，O(1) | — |
 
 ### 环境变量
 
-| 函数 | C 实现 |
-|------|--------|
-| `getenv($k)` | libc `getenv()` + 静态缓冲 |
-| `putenv($s)` | libc `putenv()` |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `getenv(string $name, bool $local_only = false): string\|false` | `getenv(string $name): string` | libc `getenv()` + 复制到 static 缓冲 | 未找到返回 NULL 串（非 false）；key 截断 255；返回 static 缓冲非线程安全 |
+| `putenv(string $assignment): bool` | `putenv(string $assignment): void` | 复制到 static 缓冲 + libc `putenv()` | 返回 void（PHP 返回 bool）；key 截断 1023 |
 
 ---
 
@@ -175,56 +181,59 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ### 基础操作
 
-| 函数 | C 实现 | 性能 | 差异 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
 |------|--------|------|------|
-| `strlen($s)` | `s.length` | O(1) | null → 0 |
-| `trim($s)` | 首尾遍历 → 无空白时零分配 | O(n) | 仅 ASCII 空白 |
-| `ltrim($s) / rtrim($s)` | 遍历 → 无空白时零分配 | O(n) | 同上 |
-| `substr($s, $off, $len?)` | 偏移截取 → 全复制时零分配 | O(1) | 负 offset/len ✅ |
-| `strpos($h, $n)` | `memcmp` 线性查找 | O(n) | 未找到 → -1 |
-| `str_contains($h, $n)` | `strpos ≥ 0` | O(n) | — |
-| `str_starts_with($h,$n)` | 单次 `memcmp` 前缀 | O(len(n)) | — |
-| `str_ends_with($h,$n)` | 单次 `memcmp` 后缀 | O(len(n)) | — |
-| `ord($s) / chr($n)` | `(unsigned char)s[0]` | O(1) | — |
+| `strlen(string $string): int` | `strlen(string $string): int` | 返回 `s.length`，O(1) | null → 0 |
+| `trim(string $string, string $characters = " \t\n\r\v\f"): string` | `trim(string $string): string` | 双向扫描，无空白时零分配，O(n) | 仅 ASCII 空白（`<= ' '`）；无 `$characters` 参数 |
+| `ltrim(string $string, string $characters = " \t\n\r\v\f"): string` | `ltrim(string $string): string` | 左扫描，无空白时零分配，O(n) | 同 `trim` |
+| `rtrim(string $string, string $characters = " \t\n\r\v\f"): string` | `rtrim(string $string): string` | 右扫描，无空白时零分配，O(n) | 同 `trim` |
+| `substr(string $string, int $offset, ?int $length = null): string` | `substr(string $string, int $offset, int $length): string` | 偏移截取，全复制时零分配 | `$length` 必传（`0` 表示到末尾）；越界返回空串 |
+| `strpos(string $haystack, string $needle, int $offset = 0): int\|false` | `strpos(string $haystack, string $needle): int` | `memcmp` 线性查找，O(n) | 未找到返回 `-1`（非 `false`）；无 `$offset` 参数；空 needle 返回 `0` |
+| `str_contains(string $haystack, string $needle): bool` | `str_contains(string $haystack, string $needle): bool` | 委托 `strpos >= 0`，O(n) | — |
+| `str_starts_with(string $haystack, string $needle): bool` | `str_starts_with(string $haystack, string $needle): bool` | 单次 `memcmp` 前缀，O(len(needle)) | — |
+| `str_ends_with(string $haystack, string $needle): bool` | `str_ends_with(string $haystack, string $needle): bool` | 单次 `memcmp` 后缀，O(len(needle)) | — |
+| `ord(string $string): int` | `ord(string $string): int` | 返回首字节 `(unsigned char)`，O(1) | 空串返回 `0` |
+| `chr(int $codepoint): string` | `chr(int $codepoint): string` | static `_chr[2]={n&0xFF,0}`，O(1) | 返回 static 缓冲非线程安全 |
 
 ### 转换 / 格式化
 
-| 函数 | C 实现 | 性能 |
-|------|--------|------|
-| `strtolower($s)` | 逐字符 → 无大写时零分配 | O(n) |
-| `strtoupper($s)` | 逐字符 → 无小写时零分配 | O(n) |
-| `ucfirst($s) / lcfirst($s)` | 首字符 ±32 → 无变化时零分配 | O(1) |
-| `sprintf($fmt, ...)` | `snprintf` 测大小 → `str_pool_alloc` | O(n) |
-| `number_format($n, $d?)` | 自研千分位 + 四舍五入 | O(log n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `strtolower(string $string): string` | `strtolower(string $string): string` | A-Z → +32，先扫描 changed 决定是否分配，O(n) | 仅 ASCII（PHP 支持 Unicode） |
+| `strtoupper(string $string): string` | `strtoupper(string $string): string` | a-z → -32，O(n) | 仅 ASCII |
+| `ucfirst(string $string): string` | `ucfirst(string $string): string` | 首字符 a-z → -32，O(1) | 仅 ASCII 首字节 |
+| `lcfirst(string $string): string` | `lcfirst(string $string): string` | 首字符 A-Z → +32，O(1) | 仅 ASCII 首字节 |
+| `sprintf(string $format, mixed ...$values): string` | `sprintf(string $format, mixed ...$values): string` | CodeGenerator 编译期内联 `snprintf(NULL,0)` 测长→`str_pool_alloc`→`snprintf` | 类型映射：string→`.data`，float→`(double)`，其余→`(int)` |
+| `number_format(float $num, int $decimals = 0, string $decimal_separator = ".", string $thousands_separator = ","): string` | `number_format(float $num): string` | 手工舍入 + 千分位逗号，O(log n) | 仅 1 参（无 `$decimals`/分隔符参数）；小数部分硬编码 `.` |
 
 ### 搜索 / 替换
 
-| 函数 | C 实现 | 性能 |
-|------|--------|------|
-| `str_replace($s, $r, $t)` | 两遍扫描 + `str_pool_alloc` | O(n)；支持数组参数（`$s`/`$r` 为数组时逐键替换） |
-| `substr_count($h, $n)` | 线性 `memcmp` 计数 | O(n) |
-| `strtr($s,$from,$to)` | 查表翻译 128 字符 | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `str_replace(array\|string $search, array\|string $replace, array\|string $subject, int &$count = null): array\|string` | `str_replace(string $search, string $replace, string $subject): string` | 两遍扫描 + `str_pool_alloc`，O(n) | 无 `$count` 参数；数组参数变体由编译器展开 |
+| `substr_count(string $haystack, string $needle, int $offset = 0, ?int $length = null): int` | `substr_count(string $haystack, string $needle): int` | `memcmp` 暴力计数，O(n) | 无 `$offset`/`$length` 参数 |
+| `strtr(string $string, array\|string $from, ?string $to = null): string` | `strtr(string $string, string $from, string $to): string` | 预建 128 字节 map，仅 ASCII 0-127，O(n) | 仅三参形式；不支持关联数组形式；非 ASCII 原样保留；函数名 `strtr2` |
 
 ### 数组 ↔ 字符串
 
-| 函数 | C 实现 | 性能 |
-|------|--------|------|
-| `implode($glue, $arr)` | 两遍扫描 + 一次 memcpy | O(n) |
-| `explode($sep, $s)` | 先数分隔符→精确容量→零 realloc | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `implode(string $separator, array $array): string` | `implode(string $separator, array $array): string` | 两遍：算总长→分配→memcpy，O(n) | 仅支持 string/int/float 元素 |
+| `explode(string $separator, string $string, ?int $limit = null): array` | `explode(string $separator, string $string): array` | 预算 pieceCount→精确分配→逐段 push，O(n) | 无 `$limit` 参数；空 separator 返回单元素数组 |
 
 ### 工具函数
 
-| 函数 | C 实现 | 性能 |
-|------|--------|------|
-| `str_repeat($s, $n)` | 一次分配 + 循环 memcpy | O(len×n) |
-| `str_split($s, $n?)` | 逐段切片 → 数组 | O(n) |
-| `str_pad($s, $len, $pad?, $type?)` | 计算填充 + memcpy | O(len) |
-| `strrev($s)` | 倒序复制 | O(n) |
-| `str_shuffle($s)` | Fisher-Yates 洗牌 | O(n) |
-| `addslashes($s)` | 两遍扫描 → 无转义时零分配 | O(n) |
-| `stripslashes($s)` | 两遍扫描 | O(n) |
-| `bin2hex($s)` | 查表 `0-9a-f` → 双倍输出 | O(n) |
-| `hex2bin($s)` | 每 2 字符解码为 1 字节 | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `str_repeat(string $string, int $times): string` | `str_repeat(string $string, int $times): string` | 一次分配 + 循环 memcpy，O(len×n) | `$times < 0` 抛错；上限 0x3FFFFF |
+| `str_split(string $string, int $length = 1): array` | `str_split(string $string, int $length): array` | 逐段切片 → 数组，O(n) | `$length` 必传（无默认值 1）；`< 1` 抛错 |
+| `str_pad(string $string, int $length, string $pad_string = " ", int $pad_type = STR_PAD_RIGHT): string` | `str_pad(string $string, int $length, string $pad_string, int $pad_type): string` | 计算填充 + memcpy，O(len) | 4 参数必传；`pad_type`: 0=RIGHT/1=LEFT/2=BOTH |
+| `strrev(string $string): string` | `strrev(string $string): string` | 逐字节倒序复制，O(n) | — |
+| `str_shuffle(string $string): string` | `str_shuffle(string $string): string` | 复制后 Fisher-Yates 洗牌，O(n) | 用 `rand_int`（非 CSPRNG） |
+| `addslashes(string $string): string` | `addslashes(string $string): string` | 两遍扫描 → 无转义时零分配，O(n) | 转义 `'` `"` `\` |
+| `stripslashes(string $string): string` | `stripslashes(string $string): string` | 两遍扫描，O(n) | `\` 后跟任意字符去掉 `\` |
+| `bin2hex(string $string): string` | `bin2hex(string $string): string` | 查表 `0-9a-f` → 双倍输出，O(n) | 输出小写 hex |
+| `hex2bin(string $string): string` | `hex2bin(string $string): string` | 每 2 字符解码为 1 字节，O(n) | 奇数长度/非 hex 字符抛错 |
 
 ---
 
@@ -232,17 +241,17 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `std/html.h`
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `htmlspecialchars($s)` | 两趟法: 计长度→一次分配→memcpy | 转义 `& " ' < >` |
-| `nl2br($s)` | 两趟法: 计换行数→一次分配 | `\n` → `<br>\n` |
-| `base64_encode($s)` | 查找表法, 3→4 字符 | RFC 4648, 自动补 `=` |
-| `base64_decode($s)` | 256B 逆查找表 | 跳过尾部 `=` |
-| `urlencode($s)` | 非安全字符 → `%XX` | 全安全时零分配 |
-| `urldecode($s)` | `%XX`→字符 + `+`→空格 | 无变换时零分配 |
-| `parse_url($u)` | URL 解析 → 关联数组 | scheme/host/port/path/query |
-| `parse_str($s)` | query string → 关联数组 | `%XX` 和 `+` 解码 |
-| `http_build_query($arr)` | 遍历数组 + `urlencode` | key=value 用 `&` 连接 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `htmlspecialchars(string $string, int $flags = ENT_QUOTES\|ENT_SUBSTITUTE\|ENT_HTML401, ?string $encoding = null, bool $double_encode = true): string` | `htmlspecialchars(string $string): string` | 两趟法：计长度→一次分配→memcpy | 无 `$flags`/`$encoding`/`$double_encode` 参数；单引号用 `&#039;` |
+| `nl2br(string $string, bool $use_xhtml = true): string` | `nl2br(string $string): string` | 两趟法：计换行数→一次分配 | 仅处理 `\n`；无 `$use_xhtml` 参数；输出固定 `<br>`（非 `<br />`） |
+| `base64_encode(string $string): string` | `base64_encode(string $string): string` | 查找表法，3→4 字符，RFC 4648，自动补 `=` | — |
+| `base64_decode(string $string, bool $strict = false): string\|false` | `base64_decode(string $string): string` | 256B 逆查找表，跳过尾部 `=` | 遇非法字符 `break`（非返回 `false`）；无 `$strict` 参数 |
+| `urlencode(string $string): string` | `urlencode(string $string): string` | 非安全字符 → `%XX`（大写 hex），全安全时零分配 | 空格→`%20`；安全字符含 `~` |
+| `urldecode(string $string): string` | `urldecode(string $string): string` | `%XX`→字符 + `+`→空格 | — |
+| `parse_url(string $url, int $component = -1): array\|string\|int\|false\|null` | `parse_url(string $url): array` | URL 解析 → 关联数组 | 无 `$component` 参数；不支持 user/pass/fragment；port 存为字符串 |
+| `parse_str(string $string, array &$result): void` | `parse_str(string $string): array` | 按 `&` 分割，`%XX` 解码、`+`→空格，找 `=` 拆 key/val | 返回数组（PHP 是 byRef 写入变量）；不支持嵌套键 `a[b]=c`；每段截断 255 字节 |
+| `http_build_query(array\|object $data, string $numeric_prefix = "", string $arg_separator = null, int $encoding_type = PHP_QUERY_RFC1738): string` | `http_build_query(array $data): string` | 遍历数组 + `urlencode`，key=value 用 `&` 连接 | 无 `$numeric_prefix`/`$arg_separator`/`$encoding_type` 参数；bool 值输出 `"1"`/`"0"` |
 
 ---
 
@@ -254,72 +263,80 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ### 增删 / 统计
 
-| 函数 | C 实现 | 时间 |
-|------|--------|------|
-| `count($arr)` | `a->length` | O(1) |
-| `array_push($arr,$v)` | 追加 entry + grow | O(1) |
-| `array_pop($arr)` | 取最后一个 entry | O(1) |
-| `array_shift($arr)` | `memmove` 左移 | O(n) |
-| `array_unshift($arr,$v)` | `memmove` 右移 | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `count(Countable\|array $value, int $mode = COUNT_NORMAL): int` | `count(array $array): int` | `a->length`，O(1) | 无 `$mode` 参数，不支持 `COUNT_RECURSIVE` |
+| `array_push(array &$array, mixed ...$values): int` | `array_push(array &$array, mixed $value): int` | 追加 entry + 1.5× grow，O(1) | 仅单值非变参 |
+| `array_pop(array &$array): mixed\|null` | `array_pop(array &$array): mixed` | 取最后一个 entry，O(1) | 空数组返回 `NULL` |
+| `array_shift(array &$array): mixed\|null` | `array_shift(array &$array): mixed` | `memmove` 左移，O(n) | — |
+| `array_unshift(array &$array, mixed ...$values): int` | `array_unshift(array &$array, mixed $value): int` | `memmove` 右移 + 重建 int 键，O(n) | 仅单值非变参 |
 
 ### 查找 / 键操作
 
-| 函数 | C 实现 | 时间 |
-|------|--------|------|
-| `in_array($v,$arr)` | 线性遍历比较 | O(n) |
-| `array_search($v,$arr)` | 线性遍历比较 | O(n) |
-| `array_key_exists($k,$arr)` | 遍历 key | O(n) |
-| `array_keys($arr)` | 遍历提取 key → 新数组 | O(n) |
-| `array_values($arr)` | 遍历提取 value → 新数组 | O(n) |
-| `array_key_first($a)` | `len>0 ? 0 : -1` | O(1) |
-| `array_key_last($a)` | `len>0 ? len-1 : -1` | O(1) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `in_array(mixed $needle, array $array, bool $strict = false): bool` | `in_array(mixed $needle, array $array): bool` | 线性遍历比较，O(n) | 始终严格类型比较（无 PHP 松散转换）；无 `$strict` 参数 |
+| `array_search(mixed $needle, array $array, bool $strict = false): int\|string\|false` | `array_search(array $array, mixed $needle): int` | 线性遍历比较，O(n) | 参数顺序反转；返回 int 索引非键名；失败返回 `-1`（非 `false`） |
+| `array_key_exists(int\|string $key, array $array): bool` | `array_key_exists(int\|string $key, array $array): bool` | 调 `arr_get_int`/`arr_get_str` 判 NULL | 按 key 类型编译期分派为两个 C 函数 |
+| `array_keys(array $array, mixed $search_value = null, bool $strict = false): array` | `array_keys(array $array): array` | 遍历提取 key，O(n) | 无 `$search_value`/`$strict` 参数 |
+| `array_values(array $array): array` | `array_values(array $array): array` | 遍历提取 value，O(n) | — |
+| `array_key_first(array $array): int\|string\|null` | `array_key_first(array $array): int` | `len>0 ? 0 : -1`，O(1) | 返回 `t_int`，字符串键返回 `0` 占位；空返回 `-1` |
+| `array_key_last(array $array): int\|string\|null` | `array_key_last(array $array): int` | `len>0 ? len-1 : -1`，O(1) | 返回 `t_int`，字符串键返回位置索引；空返回 `-1` |
 
 ### 合并 / 拆分
 
-| 函数 | C 实现 | 时间 |
-|------|--------|------|
-| `array_merge($a,$b)` | 逐 entry 复制 | O(n+m) |
-| `array_chunk($a,$size)` | 按 size 切片为子数组 | O(n) |
-| `array_slice($a,$off,$len?)` | 截取复制 | O(k) |
-| `array_combine($k,$v)` | keys+values → 新数组 | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `array_merge(array ...$arrays): array` | `array_merge(array $array1, array $array2): array` | 逐 entry 复制，O(n+m) | 仅两参数非变参 |
+| `array_chunk(array $array, int $length, bool $preserve_keys = false): array` | `array_chunk(array $array, int $length): array` | 按 length 切片为子数组，O(n) | 无 `$preserve_keys` 参数（总是重索引）；`length<1` 返回空数组 |
+| `array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array` | `array_slice(array $array, int $offset, int $length, bool $preserve_keys): array` | 截取复制，O(k) | `$length` 必传（`0`/负值均表示到末尾）；`$preserve_keys` 必传 |
+| `array_combine(array $keys, array $values): array` | `array_combine(array $keys, array $values): array` | keys+values → 新数组，O(n) | 长度不等返回空数组（非 `false`） |
 
 ### 集合操作
 
-| 函数 | C 实现 | 时间 |
-|------|--------|------|
-| `array_unique($a)` | ≤16 元素 O(n²)，>16 用开放寻址哈希 | O(n) |
-| `array_diff($a1,$a2)` | 双重循环 int/string 值比较 | O(n×m) |
-| `array_intersect($a1,$a2)` | 双重循环，取交集 | O(n×m) |
-| `array_count_values($a)` | 遍历统计频次 | O(n) |
-| `array_flip($a)` | key↔value 互换 | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `array_unique(array $array, int $flags = SORT_STRING): array` | `array_unique(array $array): array` | ≤16 元素 O(n²) 双重比较，>16 用开放寻址哈希 | 返回新数组不改原数组；无 `$flags` |
+| `array_diff(array $array, array ...$arrays): array` | `array_diff(array $array1, array $array2): array` | 双重循环 int/string 值比较，O(n×m) | ⚠️ 当前存在命名不匹配 bug，从 PHP 调用会编译失败 |
+| `array_intersect(array $array, array ...$arrays): array` | `array_intersect(array $array1, array $array2): array` | 双重循环取交集，O(n×m) | ⚠️ 同 `array_diff` 命名不匹配问题 |
+| `array_count_values(array $array): array` | `array_count_values(array $array): array` | 遍历统计频次，O(n) | int 值转为字符串键（PHP 保留 int 键）；非 int/string 值跳过 |
+| `array_flip(array $array): array` | `array_flip(array $array): array` | key↔value 互换，O(n) | 非 int/string 值跳过 |
 
 ### 排序 / 随机
 
-| 函数 | C 实现 | 时间 |
-|------|--------|------|
-| `sort($a) / rsort($a)` | libc `qsort` 原地 | O(n log n) |
-| `ksort($a) / krsort($a)` | qsort 指针排序，按键 | O(n log n) |
-| `asort($a) / arsort($a)` | qsort，按值保键 | O(n log n) |
-| `shuffle($a)` | Fisher-Yates 原地洗牌 | O(n) |
-| `array_rand($a,$n)` | Fisher-Yates 随机取键 | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `sort(array &$array, int $flags = SORT_REGULAR): bool` | `sort(array &$array): void` | libc `qsort` 原地，O(n log n) | 返回 `void`（非 `bool`）；无 `$flags`；混合类型按 type tag 升序 |
+| `rsort(array &$array, int $flags = SORT_REGULAR): bool` | `rsort(array &$array): void` | 同 `sort` 降序，O(n log n) | 同 `sort` |
+| `ksort(array &$array, int $flags = SORT_REGULAR): bool` | `ksort(array &$array): void` | qsort 指针排序按键，O(n log n) | 同 `sort` |
+| `krsort(array &$array, int $flags = SORT_REGULAR): bool` | `krsort(array &$array): void` | 同 `ksort` 降序，O(n log n) | 同 `sort` |
+| `asort(array &$array, int $flags = SORT_REGULAR): bool` | `asort(array &$array): void` | qsort 按值保键，O(n log n) | 同 `sort` |
+| `arsort(array &$array, int $flags = SORT_REGULAR): bool` | `arsort(array &$array): void` | 同 `asort` 降序，O(n log n) | 同 `sort` |
+| `shuffle(array &$array): bool` | `shuffle(array &$array): void` | Fisher-Yates 原地洗牌，O(n) | 返回 `void`（非 `bool`）；用 `rand()`（非 CSPRNG） |
+| `array_rand(array $array, int $num = 1): int\|string\|array` | `array_rand(array $array): int` | `rand_int(0,len-1)` 返回单键，O(1) | 无 `$num` 参数；字符串键返回位置索引；空数组返回 `-1` |
 
 ### 迭代器 / 填充 / 提取
 
-| 函数 | C 实现 | 时间 |
-|------|--------|------|
-| `current($a) / key($a)` | `entries[cursor]` | O(1) |
-| `next($a) / prev($a)` | `cursor++` / `cursor--` | O(1) |
-| `end($a) / reset($a)` | `cursor = len-1` / `0` | O(1) |
-| `range($lo,$hi,$step?)` | 预知长度一次分配 | O(n) |
-| `array_fill($s,$c,$v)` | `set_int` 填充 | O(n) |
-| `array_reverse($a)` | 倒序复制 | O(n) |
-| `array_column($a,$k)` | 提取指定列 | O(n×m) |
-| `max($a) / min($a)` | 遍历比较 | O(n) |
-| `array_sum($a) / array_product($a)` | 遍历累加/乘 | O(n) |
-| `array_is_list($a)` | 检查 key=0,1,2... | O(n) |
-| `array_map($cb, $a)` | 编译期内联展开回调循环 | O(n) |
-| `array_filter($a, $cb?)` | 编译期内联展开 + null 过滤 | O(n) |
-| `array_reduce($a, $cb, $init)` | 编译期内联累加器循环 | O(n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `current(array $array): mixed` | `current(array $array): mixed` | `entries[cursor]`，O(1) | 空/cursor 越界返回 `NULL` |
+| `key(array $array): int\|string\|null` | `key(array $array): mixed` | `entries[cursor]` 键，O(1) | 越界返回 `NULL` |
+| `next(array $array): mixed` | `next(array $array): mixed` | `cursor++` 返回新值，O(1) | 越界返回 `NULL` |
+| `prev(array $array): mixed` | `prev(array $array): mixed` | `cursor--` 返回新值，O(1) | 越界返回 `NULL` |
+| `end(array $array): mixed` | `end(array $array): mixed` | `cursor=length-1` 返回末值，O(1) | — |
+| `reset(array $array): mixed` | `reset(array $array): mixed` | `cursor=0` 返回首值，O(1) | — |
+| `range(int\|string $start, int\|string $end, int\|float $step = 1): array` | `range(int $start, int $end, int $step): array` | 预知长度一次分配，O(n) | 仅 int（不支持单字符字符串）；`step==0` 致命错误 |
+| `array_fill(int $start_index, int $count, mixed $value): array` | `array_fill(int $start_index, int $count, mixed $value): array` | `set_int` 填充，O(n) | `count<0` 致命错误 |
+| `array_reverse(array $array, bool $preserve_keys = false): array` | `array_reverse(array $array, bool $preserve_keys): array` | 倒序复制，O(n) | `$preserve_keys` 必传 |
+| `array_column(array $array, int\|string\|null $column_key, int\|string\|null $index_key = null): array` | `array_column(array $array, string $column_key): array` | 遍历行匹配 string 键 push 值，O(n×m) | 仅 string 列名；无 `$index_key` 参数；对象行 push `NULL` |
+| `max(mixed $value, mixed ...$values): mixed` | `max(array $array): mixed` | 遍历比较，O(n) | 仅数组形式（不支持可变参数）；空数组致命错误 |
+| `min(mixed $value, mixed ...$values): mixed` | `min(array $array): mixed` | 遍历比较，O(n) | 同 `max` |
+| `array_sum(array $array): int\|float` | `array_sum(array $array): mixed` | 遍历累加，遇 float 自动提升，O(n) | 非数值静默跳过（PHP 视为 0 并 warning） |
+| `array_product(array $array): int\|float` | `array_product(array $array): mixed` | 遍历累乘，遇 float 自动提升，O(n) | 非数值静默跳过 |
+| `array_is_list(array $array): bool` | `array_is_list(array $array): bool` | 检查所有 entry 为 `TYPE_INT` 且键==位置，O(n) | 空数组返回 `true` |
+| `array_map(?callable $callback, array $array, array ...$arrays): array` | `array_map(callable $callback, array $array): array` | 编译期内联展开为 for 循环，O(n) | 回调必须类型已知；仅单数组；键不保留 |
+| `array_filter(array $array, ?callable $callback = null, int $mode = 0): array` | `array_filter(array $array, callable $callback): array` | 编译期内联展开 + 过滤，O(n) | `$callback` 必填；键不保留；无 `USE_KEY`/`USE_BOTH` 模式 |
+| `array_reduce(array $array, callable $callback, mixed $initial = null): mixed` | `array_reduce(array $array, callable $callback, mixed $initial): mixed` | 编译期内联累加器循环，O(n) | `$initial` 必填 |
 
 ---
 
@@ -329,24 +346,44 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ### 基础运算
 
-| 函数 | C 等价 | 函数 | C 等价 |
-|------|--------|------|--------|
-| `abs($x)` | `llabs(x)` | `round($x)` | `round()` |
-| `ceil($x)` | `ceil()` | `floor($x)` | `floor()` |
-| `sqrt($x)` | `sqrt(x)` | `pow($b,$e)` | `pow()` |
-| `pi()` | `M_PI` | `fmod($x,$y)` | `fmod()` |
-| `deg2rad / rad2deg` | `* M_PI/180` | `intdiv($a,$b)` | `a/b` |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `abs(int\|float $num): int\|float` | `abs(int $num): int` | `llabs(v)`，O(1) | 仅整型（PHP 同时支持 int/float） |
+| `round(int\|float $num, int $precision = 0, int $mode = RoundingMode::HALF_UP): float` | `round(float $num): float` | libc `round(v)`，O(1) | 无 `$precision`/`$mode` 参数 |
+| `ceil(int\|float $num): float` | `ceil(float $num): float` | libc `ceil`，O(1) | — |
+| `floor(int\|float $num): float` | `floor(float $num): float` | libc `floor`，O(1) | — |
+| `sqrt(float $num): float` | `sqrt(float $num): float` | `v >= 0.0 ? sqrt(v) : 0.0`，O(1) | 负数返回 `0.0`（PHP 返回 `NAN`） |
+| `pow(int\|float $base, int\|float $exp): int\|float` | `pow(mixed $base, mixed $exp): mixed` | int^int 走 `tphp_rt_pow_int` 快速幂 O(log n)；否则 libc `pow` | int^int 返回 int（负指数返回 0，PHP 返回 float） |
+| `pi(): float` | `pi(): float` | 返回 `M_PI` 常量，O(1) | — |
+| `fmod(float $num1, float $num2): float` | `fmod(float $num1, float $num2): float` | libc `fmod`，O(1) | — |
+| `deg2rad(float $num): float` | `deg2rad(float $num): float` | `num * (M_PI/180.0)`，O(1) | — |
+| `rad2deg(float $num): float` | `rad2deg(float $num): float` | `num * (180.0/M_PI)`，O(1) | — |
+| `intdiv(int $num1, int $num2): int` | `intdiv(int $num1, int $num2): int` | `a/b`，O(1) | 零除 `tp_throw`（字符串异常，非 `DivisionByZeroError` 对象） |
 
 ### 三角函数
 
-| `sin($x)` | `cos($x)` | `tan($x)` |
-| `asin($x)` | `acos($x)` | `atan($x)` |
-| `sinh($x)` | `cosh($x)` | `tanh($x)` |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `sin(float $num): float` | `sin(float $num): float` | libc `sin`，O(1) | — |
+| `cos(float $num): float` | `cos(float $num): float` | libc `cos`，O(1) | — |
+| `tan(float $num): float` | `tan(float $num): float` | libc `tan`，O(1) | — |
+| `asin(float $num): float` | `asin(float $num): float` | libc `asin`，O(1) | — |
+| `acos(float $num): float` | `acos(float $num): float` | libc `acos`，O(1) | — |
+| `atan(float $num): float` | `atan(float $num): float` | libc `atan`，O(1) | — |
+| `sinh(float $num): float` | `sinh(float $num): float` | libc `sinh`，O(1) | — |
+| `cosh(float $num): float` | `cosh(float $num): float` | libc `cosh`，O(1) | — |
+| `tanh(float $num): float` | `tanh(float $num): float` | libc `tanh`，O(1) | — |
 
 ### 指数/对数
 
-| `exp($x)` | `log($x)` | `log10($x)` |
-| `is_finite($x)` | `is_infinite($x)` | `is_nan($x)` |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `exp(float $num): float` | `exp(float $num): float` | libc `exp`，O(1) | — |
+| `log(float $num, float $base = M_E): float` | `log(float $num): float` | libc `log`（自然对数），O(1) | 无 `$base` 参数 |
+| `log10(float $num): float` | `log10(float $num): float` | libc `log10`，O(1) | — |
+| `is_finite(float $num): bool` | `is_finite(float $num): bool` | `isfinite(x)`，O(1) | — |
+| `is_infinite(float $num): bool` | `is_infinite(float $num): bool` | `isinf(x)`，O(1) | — |
+| `is_nan(float $num): bool` | `is_nan(float $num): bool` | `isnan(x)`，O(1) | — |
 
 ---
 
@@ -354,11 +391,15 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `conv.h` + `std/math.h`
 
-| 函数 | C 实现 | 性能 |
-|------|--------|------|
-| `bindec($s) / hexdec($s) / octdec($s)` | `strtoll(s, NULL, base)` | O(1) |
-| `decbin($n) / decoct($n) / dechex($n)` | `snprintf` | O(1) |
-| `base_convert($n,$f,$t)` | 大整数数组算法 | O(log n) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `bindec(string $binary_string): int` | `bindec(string $binary_string): int` | `strtoll(s, NULL, 2)`，O(1) | 空串/NULL 返回 `0` |
+| `hexdec(string $hex_string): int` | `hexdec(string $hex_string): int` | `strtoll(s, NULL, 16)`，O(1) | 用 `strtoll`（PHP 用 `strtoull` 防溢出） |
+| `octdec(string $octal_string): int` | `octdec(string $octal_string): int` | `strtoll(s, NULL, 8)`，O(1) | — |
+| `decbin(int $num): string` | `decbin(int $num): string` | static buf 逐位写后反转，O(1) | 返回 static 缓冲非线程安全 |
+| `decoct(int $num): string` | `decoct(int $num): string` | `snprintf("%llo")`，O(1) | static 缓冲；按无符号处理 |
+| `dechex(int $num): string` | `dechex(int $num): string` | `snprintf("%llx")`，O(1) | static 缓冲；按无符号处理；小写 |
+| `base_convert(string $num, int $from_base, int $to_base): string` | `base_convert(string $num, int $from_base, int $to_base): string` | 大整数堆计算，O(log n) | 精度受 64 字节缓冲限制（约 20 位十进制）；非法字符返回空串 |
 
 ---
 
@@ -366,13 +407,13 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `std/ctrl.h`
 
-| 函数 | 说明 |
-|------|------|
-| `assert_true($cond)` | 失败→`fprintf(stderr)`→`exit(2)` |
-| `assert_false($cond)` | 同上 |
-| `assert_eq_int($a,$b)` | int 相等断言 |
-| `assert_eq_float($a,$b)` | float 相等断言 |
-| `assert_eq_str($a,$b)` | string 相等断言 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| — | `assert_true(bool $condition): void` | 失败→`fprintf(stderr)`→`exit(2)` | TinyPHP 自有断言，PHP 无对应函数 |
+| — | `assert_false(bool $condition): void` | 同上 | 同上 |
+| — | `assert_eq_int(int $a, int $b): void` | `a != b` → `fprintf(stderr)`+`exit(2)` | 同上 |
+| — | `assert_eq_float(float $a, float $b): void` | `a != b` → `fprintf(stderr)`+`exit(2)` | 无精度容差，严格 `==` |
+| — | `assert_eq_str(string $a, string $b): void` | `!str_eq` → `fprintf(stderr)`+`exit(2)` | 错误信息只打印长度不打印内容 |
 
 ---
 
@@ -382,12 +423,12 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 全部统一走 CSPRNG（Windows → `rand_s`，Linux/macOS → `/dev/urandom`），零全局状态。
 
-| 函数 | 算法 |
-|------|------|
-| `rand($min,$max)` | CSPRNG（代理到 `random_int`） |
-| `mt_rand($min,$max)` | CSPRNG（代理到 `random_int`） |
-| `random_int($min,$max)` | CSPRNG + 拒绝采样防模偏差 |
-| `random_bytes($len)` | CSPRNG 原始二进制, ≤1MB |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `rand(): int` / `rand(int $min, int $max): int` | `rand(int $min, int $max): int` | krng 伪随机（非 CSPRNG），O(1) | 强制 2 参（不支持无参形式） |
+| `mt_rand(): int` / `mt_rand(int $min, int $max): int` | `mt_rand(int $min, int $max): int` | 直接等同 `rand_int`（非真正 Mersenne Twister），O(1) | 强制 2 参；非真 MT 算法 |
+| `random_int(int $min, int $max): int` | `random_int(int $min, int $max): int` | 真 CSPRNG + 拒绝采样防模偏差，O(1) | `min > max` 时 `tp_throw` |
+| `random_bytes(int $length): string` | `random_bytes(int $length): string` | 真 CSPRNG 原始二进制，O(n) | `length <= 0` 返回空串；`length > 1048576` 抛错 |
 
 ---
 
@@ -397,10 +438,10 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 基于 bcrypt 算法的 `password_hash` / `password_verify` 实现，参考 PHP 原生 `crypt_blowfish.c`（EksBlowfish 算法）。纯 C 静态实现，零外部依赖，兼容 AOT 编译。
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `password_hash($pw, PASSWORD_BCRYPT)` | `BF_crypt()` → 60 字符 `$2b$10$...` | cost=10，CSPRNG 盐值 |
-| `password_verify($pw, $hash)` | `BF_crypt()` + 常量时间比较 | 防时序攻击 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `password_hash(string $password, string\|int\|null $algo, array $options = []): string` | `password_hash(string $password, int $algo, array $options): string` | `BF_crypt()` → 60 字符 `$2b$10$...` | 仅支持 `PASSWORD_BCRYPT`；`$options` 被忽略；cost 硬编码 10；空密码抛错 |
+| `password_verify(string $password, string $hash): bool` | `password_verify(string $password, string $hash): bool` | `BF_crypt()` 重算 + 常量时间比较 | hash 长度 < 60 或格式不符直接返回 `false` |
 
 **实现细节**：
 - 算法：EksBlowfish（bcrypt），与 PHP 原生 `password_hash` 完全兼容
@@ -418,19 +459,19 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 11 个函数，直接映射 C `<ctype.h>`，零堆分配。空字符串返回 `false`。
 
-| 函数 | C 实现 | 检测内容 |
-|------|--------|---------|
-| `ctype_alnum($s)` | `isalnum()` | 字母或数字 |
-| `ctype_alpha($s)` | `isalpha()` | 纯字母 |
-| `ctype_cntrl($s)` | `iscntrl()` | 控制字符 |
-| `ctype_digit($s)` | `isdigit()` | 纯数字 |
-| `ctype_graph($s)` | `isgraph()` | 可打印(除空格) |
-| `ctype_lower($s)` | `islower()` | 小写字母 |
-| `ctype_print($s)` | `isprint()` | 可打印(含空格) |
-| `ctype_punct($s)` | `ispunct()` | 标点符号 |
-| `ctype_space($s)` | `isspace()` | 空白字符 |
-| `ctype_upper($s)` | `isupper()` | 大写字母 |
-| `ctype_xdigit($s)` | `isxdigit()` | 十六进制字符 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `ctype_alnum(int\|string $text): bool` | `ctype_alnum(string $text): bool` | `isalnum` 逐字符，O(n) | 仅接受 string（PHP 还接受 int 解释为 ASCII 字符） |
+| `ctype_alpha(int\|string $text): bool` | `ctype_alpha(string $text): bool` | `isalpha`，O(n) | 同上 |
+| `ctype_cntrl(int\|string $text): bool` | `ctype_cntrl(string $text): bool` | `iscntrl`，O(n) | 同上 |
+| `ctype_digit(int\|string $text): bool` | `ctype_digit(string $text): bool` | `isdigit`，O(n) | 同上 |
+| `ctype_graph(int\|string $text): bool` | `ctype_graph(string $text): bool` | `isgraph`，O(n) | 同上 |
+| `ctype_lower(int\|string $text): bool` | `ctype_lower(string $text): bool` | `islower`，O(n) | 同上 |
+| `ctype_print(int\|string $text): bool` | `ctype_print(string $text): bool` | `isprint`，O(n) | 同上 |
+| `ctype_punct(int\|string $text): bool` | `ctype_punct(string $text): bool` | `ispunct`，O(n) | 同上 |
+| `ctype_space(int\|string $text): bool` | `ctype_space(string $text): bool` | `isspace`，O(n) | 同上 |
+| `ctype_upper(int\|string $text): bool` | `ctype_upper(string $text): bool` | `isupper`，O(n) | 同上 |
+| `ctype_xdigit(int\|string $text): bool` | `ctype_xdigit(string $text): bool` | `isxdigit`，O(n) | 同上 |
 
 ---
 
@@ -438,11 +479,11 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `os/json.h`
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `json_encode($var)` | 两趟法：计长→一次分配→写入，零 `str_concat` 开销 | 对象→`{}` |
-| `json_decode($s)` | 递归下降解析 → `t_var` | 无效→NULL |
-| `json_validate($s)` | 复用 `json_decode` | 有效→true |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `json_encode(mixed $value, int $flags = 0, int $depth = 512): string\|false` | `json_encode(mixed $value): string` | 两趟法：计长→一次分配→写入，零 `str_concat` 开销 | 无 `$flags`/`$depth` 参数；NaN/Inf→`null`；`> 8MB` 返回 `"null"` |
+| `json_decode(string $json, ?bool $associative = null, int $depth = 512, int $flags = 0): mixed` | `json_decode(string $json): mixed` | 递归下降解析 → `t_var` | 仅 1 参（无 `$associative`/`$depth`/`$flags`）；对象解析为关联数组；失败返回 `NULL` |
+| `json_validate(string $json, int $depth = 512, int $flags = 0): bool` | `json_validate(string $json): bool` | 复用 `json_decode`，`type != TYPE_NULL` 即有效 | 合法 JSON `"null"` 会被误判为无效（实现缺陷） |
 
 ---
 
@@ -452,13 +493,13 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 全部纯 C 算法（RFC 1321 / FIPS 180-4 / 查表法），零外部依赖。
 
-| 函数 | 算法 | 输出 |
-|------|------|------|
-| `md5($s)` | RFC 1321 | 32 hex |
-| `sha1($s)` | FIPS 180-4 | 40 hex |
-| `sha256($s)` | FIPS 180-4 | 64 hex |
-| `sha512($s)` | FIPS 180-4 | 128 hex |
-| `crc32($s)` | 256 项查表法 | int |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `md5(string $string, bool $binary = false): string` | `md5(string $string): string` | RFC 1321 纯 C，`str_pool_alloc` | 无 `$binary` 参数；返回 32 字符小写 hex |
+| `sha1(string $string, bool $binary = false): string` | `sha1(string $string): string` | FIPS 180-4 纯 C | 无 `$binary` 参数；返回 40 字符小写 hex |
+| `hash(string $algo, string $data, bool $binary = false): string` | `sha256(string $string): string` | FIPS 180-4 纯 C | TinyPHP 直接提供 `sha256()` 内置函数（PHP 需 `hash('sha256', ...)`）；返回 64 字符小写 hex |
+| `hash(string $algo, string $data, bool $binary = false): string` | `sha512(string $string): string` | FIPS 180-4 纯 C | 同上；返回 128 字符小写 hex |
+| `crc32(string $string): int` | `crc32(string $string): int` | 256 项查表法，O(n) | C 函数名 `tphp_fn_crc32_str` |
 
 ---
 
@@ -466,16 +507,17 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `os/times.h`
 
-| 函数 | C 实现 |
-|------|--------|
-| `time()` | `time(NULL)` |
-| `date($fmt)` | `strftime` + 64B 栈缓冲 |
-| `sleep($s) / usleep($us)` | `sleep()` / `usleep()` |
-| `hrtime()` | `QueryPerformanceCounter`(Win) / `clock_gettime`(Unix) |
-| `microtime()` | 同上，返回 float 秒 |
-| `mktime($h,$m,$s,$mo,$d,$y)` | 日历天数累加法 |
-| `strtotime($s)` | 解析 `Y-m-d H:i:s` + mktime |
-| `uniqid($prefix?)` | `sprintf "%08lx%05lx", time, rand` |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `time(): int` | `time(): int` | `(t_int)time(NULL)`，O(1) | — |
+| `date(string $format, ?int $timestamp = null): string` | `date(string $format, int $timestamp): string` | 手写解析 PHP 格式符 + `localtime` + SSO 返回 | `timestamp < 0` 回退到 `time(NULL)`；仅支持 `Y/y/m/n/d/j/H/G/i/s` 10 个格式符；无时区支持 |
+| `sleep(int $seconds): int` | `sleep(int $seconds): void` | Win `Sleep(ms*1000)` / POSIX `sleep()` | 返回 void（PHP 返回 0）；负数直接返回 |
+| `usleep(int $microseconds): void` | `usleep(int $microseconds): void` | Win `Sleep(us/1000)` / POSIX `usleep()` | 负数直接返回 |
+| `hrtime(bool $number_as_number = false): array\|int\|float` | `hrtime(): int` | Win `QueryPerformanceCounter` / POSIX `clock_gettime(CLOCK_MONOTONIC)` | 返回单个纳秒整数（非 PHP 的 `[秒, 纳秒]` 数组）；无 `$number_as_number` 参数 |
+| `microtime(bool $as_float = false): string\|float` | `microtime(): float` | Win QPC / POSIX `clock_gettime(MONOTONIC)` | 永远返回浮点秒（无 `$as_float` 参数） |
+| `mktime(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): int\|false` | `mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | 日历天数累加法从 1970-01-01 起算 | 6 参数全必填（无默认值）；不归一化越界值 |
+| `strtotime(string $datetime, ?int $baseTimestamp = null): int\|false` | `strtotime(string $datetime): int` | 纯数字直接返回 `time()`；支持 `Y-m-d`/`Y/m/d` 配 `H:i:s` | 仅支持几种绝对格式；不支持相对/自然语言格式；无 `$baseTimestamp` 参数 |
+| `uniqid(string $prefix = "", bool $more_entropy = false): string` | `uniqid(string $prefix): string` | `sprintf "%08lx%05lx", time, rand` | 无 `$more_entropy` 参数；prefix 必填；返回 static buf 非线程安全 |
 
 ---
 
@@ -483,11 +525,11 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `os/file.h`
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `file_get_contents($path)` | `fopen("rb")` → 测大小 → 单次 `fread` → `fclose` | 不存在返回空 |
-| `file_put_contents($path,$d)` | `fopen("wb")` → `fwrite` → `fclose` | 覆盖写入 |
-| `unlink($path)` | `remove()` | 删除文件，成功返回 `true` |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `file_get_contents(string $filename, bool $use_include_path = false, ?resource $context = null, int $offset = 0, ?int $length = null): string\|false` | `file_get_contents(string $filename): string` | `fopen("rb")` → 测大小 → 单次 `fread` → `fclose` | 无 `$use_include_path`/`$context`/`$offset`/`$length` 参数；失败 `tp_throw`（非返回 `false`） |
+| `file_put_contents(string $filename, mixed $data, int $flags = 0, ?resource $context = null): int\|false` | `file_put_contents(string $filename, string $data): bool` | `fopen("wb")` → `fwrite` → `fclose` | 无 `$flags`/`$context` 参数；只支持覆盖写（无 `FILE_APPEND`/`LOCK_EX`）；data 不支持数组；返回 `bool`（PHP 返回字节数） |
+| `unlink(string $filename, ?resource $context = null): bool` | `unlink(string $filename): bool` | 拷贝到栈缓冲后 `remove()` | 无 `$context` 参数 |
 
 ---
 
@@ -495,11 +537,11 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `std/utf8.h`
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `mb_strlen($s)` | UTF-8 字节解码计数 | O(n) |
-| `mb_substr($s,$start,$len)` | UTF-8 字符边界对齐 | O(n) |
-| `mb_strpos($h,$n)` | 字节级搜索 (UTF-8 兼容) | O(n×m) |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `mb_strlen(string $string, ?string $encoding = null): int` | `mb_strlen(string $string): int` | UTF-8 字节解码计数，O(n) | 无 `$encoding` 参数（硬编码 UTF-8） |
+| `mb_substr(string $string, int $start, ?int $length = null, ?string $encoding = null): string` | `mb_substr(string $string, int $start, int $length): string` | UTF-8 字符边界对齐，`str_pool_alloc` 拷贝 | `$length` 必填（PHP 可选默认到末尾）；无 `$encoding` 参数；`length <= 0` 一律取到末尾（不支持负 length 截尾） |
+| `mb_strpos(string $haystack, string $needle, int $offset = 0, ?string $encoding = null): int\|false` | `mb_strpos(string $haystack, string $needle): int` | 委托 `strpos` 做字节级搜索，O(n×m) | 仅 2 参数（无 `$offset`/`$encoding`）；未找到返回 `-1`（非 `false`） |
 
 ---
 
@@ -519,16 +561,16 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 **函数**
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `iconv($from,$to,$str)` | 系统 iconv / Win32 API | 核心编码转换，失败 tp_throw |
-| `iconv_strlen($str,$charset="UTF-8")` | UTF-8 快路径 + 转换 | 返回字符数 |
-| `iconv_strpos($h,$n,$offset=0,$charset="UTF-8")` | UTF-8 字符偏移搜索 | 未找到返回 -1 |
-| `iconv_substr($str,$offset,$length=0,$charset="UTF-8")` | UTF-8 字符边界截取 | length=0 表示到末尾 |
-| `iconv_get_encoding($type="all")` | 返回关联数组 | 始终返回 3 元素: input/output/internal_encoding |
-| `iconv_set_encoding($type,$encoding)` | 修改内部编码状态 | 返回 bool，未知 type 时 tp_throw |
-| `iconv_mime_encode($field,$value,$prefs=[])` | base64 + MIME 头 | 生成 `Name: =?charset?B?...?=` |
-| `iconv_mime_decode($str,$mode=0,$charset="UTF-8")` | 解析 MIME 编码段 | 支持 B/Q 编码，失败 tp_throw |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `iconv(string $from_encoding, string $to_encoding, string $string): string\|false` | `iconv(string $from_encoding, string $to_encoding, string $string): string` | POSIX 系统 iconv / Win32 API（经 UTF-16 中转） | 失败 `tp_throw`（非返回 `false`）；支持 `//IGNORE`/`//TRANSLIT` 后缀 |
+| `iconv_strlen(string $string, ?string $encoding = null): int\|false` | `iconv_strlen(string $string, string $encoding): int` | UTF-8 快路径 + 转换计数 | `$encoding` 必填（PHP 可选默认 UTF-8） |
+| `iconv_strpos(string $haystack, string $needle, int $offset = 0, ?string $encoding = null): int\|false` | `iconv_strpos(string $haystack, string $needle, int $offset, string $encoding): int` | 4 参数全必填；非 UTF-8 先转 UTF-8；按字符跳过 offset 后字节级 `memcmp` 搜索 | 未找到返回 `-1`（非 `false`）；`$offset`/`$encoding` 均无默认值 |
+| `iconv_substr(string $string, int $offset, ?int $length = null, ?string $encoding = null): string\|false` | `iconv_substr(string $string, int $offset, int $length, string $encoding): string` | UTF-8 快路径，否则转 UTF-8 截取后转回原编码 | 4 参数全必填；`length <= 0` 表示到末尾（不支持负 length 截尾） |
+| `iconv_get_encoding(string $type = "all"): array\|string\|false` | `iconv_get_encoding(string $type): array` | 始终返回 3 元素关联数组 | `$type` 参数被忽略；始终返回数组（PHP 依 type 返回 string\|array\|false） |
+| `iconv_set_encoding(string $type, string $encoding): bool` | `iconv_set_encoding(string $type, string $encoding): bool` | 大小写不敏感匹配 type，写入 3 个全局 t_string | 未知 type 时 `tp_throw`（非返回 `false`） |
+| `iconv_mime_encode(string $field_name, string $field_value, array $preferences = []): string\|false` | `iconv_mime_encode(string $field_name, string $field_value, array $preferences): string` | 解析 `prefs["output-charset"]`（默认 UTF-8）+ base64 编码 | 仅生成 B 编码；prefs 仅识别 `output-charset` |
+| `iconv_mime_decode(string $string, int $mode = 0, ?string $encoding = null): string\|false` | `iconv_mime_decode(string $string, int $mode, string $encoding): string` | 支持 B 和 Q 编码；raw 字节按 src_cs 转到目标 charset | 3 参数全必填；`$mode` 被忽略；仅处理首段 MIME 编码（尾部剩余丢弃） |
 
 ---
 
@@ -536,15 +578,15 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `ext/pcntl/`，POSIX 专属，按需引入 `#import pcntl`
 
-| 函数 | C 实现 |
-|------|--------|
-| `pcntl_fork()` | `fork()` |
-| `pcntl_waitpid($pid,&$st)` | `waitpid()` |
-| `pcntl_wait(&$st)` | `wait()` |
-| `pcntl_exec($path)` | `execv()` |
-| `pcntl_alarm($sec)` | `alarm()` |
-| `pcntl_get_last_error()` | `errno` |
-| `pcntl_strerror($no)` | `strerror()` |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `pcntl_fork(): int` | `pcntl_fork(): int` | `fork()`，O(1) | Windows 直接 `exit(1)` |
+| `pcntl_waitpid(int $pid, int &$status, int $flags = 0, array &$resource_usage = []): int` | `pcntl_waitpid(int $pid, int &$status, int $flags): int` | `waitpid()` | — |
+| `pcntl_wait(int &$status, int $flags = 0, array &$resource_usage = []): int` | `pcntl_wait(int &$status): int` | `wait()` | 无 `$flags` 参数 |
+| `pcntl_exec(string $path, array $args = [], array $env_vars = []): bool` | `pcntl_exec(string $path): void` | `execv(path, {path, NULL})` | 仅 1 参（无 `$args`/`$env_vars`）；argv 固定为 `{path, NULL}` |
+| `pcntl_alarm(int $seconds): int` | `pcntl_alarm(int $seconds): int` | `alarm(sec > 0 ? sec : 0)` | — |
+| `pcntl_get_last_error(): int` | `pcntl_get_last_error(): int` | 返回 `errno` | — |
+| `pcntl_strerror(int $error_code): string` | `pcntl_strerror(int $error_code): string` | `strerror()` + SSO 包装 | — |
 
 ---
 
@@ -552,19 +594,22 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `ext/posix/`，POSIX 专属，按需引入 `#import posix`
 
-| 函数 | C 实现 |
-|------|--------|
-| `posix_getpid() / getppid()` | `getpid()` / `getppid()` |
-| `posix_getuid() / geteuid()` | `getuid()` / `geteuid()` |
-| `posix_getgid() / getegid()` | `getgid()` / `getegid()` |
-| `posix_getcwd()` | `getcwd()` + 栈缓冲 |
-| `posix_isatty($fd)` | `isatty()` |
-| `posix_kill($pid,$sig)` | `kill()` |
-| `posix_strerror($no)` | `strerror()` |
-| `posix_get_last_error()` | `errno` |
-| `posix_ttyname($fd)` | `ttyname()` |
-| `posix_uname()` | ⬜ 未实现 |
-| `posix_times()` | ⬜ 未实现 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `posix_getpid(): int` | `posix_getpid(): int` | `getpid()` | — |
+| `posix_getppid(): int` | `posix_getppid(): int` | `getppid()` | — |
+| `posix_getuid(): int` | `posix_getuid(): int` | `getuid()` | — |
+| `posix_geteuid(): int` | `posix_geteuid(): int` | `geteuid()` | — |
+| `posix_getgid(): int` | `posix_getgid(): int` | `getgid()` | — |
+| `posix_getegid(): int` | `posix_getegid(): int` | `getegid()` | — |
+| `posix_getcwd(): string\|false` | `posix_getcwd(): string` | `static buf[4096]` + `getcwd()` | 失败返回空 t_string（非 `false`） |
+| `posix_isatty(int $file_descriptor): bool` | `posix_isatty(int $file_descriptor): int` | `isatty()` | 返回 `t_int` 1/0（PHP 返回 bool） |
+| `posix_kill(int $process_id, int $signal): bool` | `posix_kill(int $process_id, int $signal): int` | `kill()` | — |
+| `posix_strerror(int $error_code): string` | `posix_strerror(int $error_code): string` | `strerror()` | — |
+| `posix_get_last_error(): int` | `posix_get_last_error(): int` | 返回 `errno` | — |
+| `posix_ttyname(int $file_descriptor): string\|false` | `posix_ttyname(int $file_descriptor): string` | `ttyname()` | 未匹配返回空 t_string（非 `false`） |
+| `posix_uname(): array\|false` | — | ⬜ 未实现 | — |
+| `posix_times(): array\|false` | — | ⬜ 未实现 | — |
 
 ---
 
@@ -576,16 +621,16 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 **与 PHP 差异**：`preg_match` / `preg_match_all` 返回匹配数组（空=无匹配）而非 `int + byRef $matches`；所有参数必须显式传入（AOT 不支持默认参数值 / byRef 输出参数）；不支持 `preg_replace_callback`；`\a`=`[a-z]`（PHP 为 BEL 0x07）、`\A`=`[A-Z]`（PHP 为字符串起始）；`i` 标志仅 ASCII 大小写折叠；不支持 lookahead / lookbehind / 原子组 `(?>)` / 占有量词 `*+` / Unicode 属性类 `\p{}`。
 
-| 函数 | C 实现 | 说明 |
-|------|--------|------|
-| `preg_match($pat, $subj)` | NFA VM → t_array* | 空=无匹配 |
-| `preg_match_all($pat, $subj)` | 循环匹配 → 二维数组 | 固定 `PREG_PATTERN_ORDER` |
-| `preg_replace($pat, $repl, $subj, $limit)` | 两趟法：计长→写入 | `$0`-`$9` 反向引用 |
-| `preg_split($pat, $subj, $limit, $flags)` | 循环分割 → t_array* | `PREG_SPLIT_NO_EMPTY` |
-| `preg_grep($pat, $arr, $flags)` | 遍历匹配 → t_array* | `PREG_GREP_INVERT` |
-| `preg_quote($str, $delim)` | 两趟法转义元字符 | `$delim` 传空串则只转义元字符 |
-| `preg_last_error()` | 全局错误码 | `PREG_NO_ERROR`=0 |
-| `preg_last_error_msg()` | 错误码 → 字符串 | — |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `preg_match(string $pattern, string $subject, array &$matches = null, int $flags = 0, int $offset = 0): int\|false` | `preg_match(string $pattern, string $subject): array` | NFA VM → `t_array*` | 无 byRef `$matches`；返回数组而非匹配次数；`result[0]`=完整匹配，`result[1..n]`=子组；无匹配返回空数组（非 `false`） |
+| `preg_match_all(string $pattern, string $subject, array &$matches = null, int $flags = 0, int $offset = 0): int\|false` | `preg_match_all(string $pattern, string $subject): array` | 循环匹配 → 二维数组 | 无 byRef `$matches`；返回二维数组而非匹配总数；固定 `PREG_PATTERN_ORDER` |
+| `preg_replace(array\|string $pattern, array\|string $replacement, array\|string $subject, int $limit = -1, int &$count = null): array\|string\|null` | `preg_replace(string $pattern, string $replacement, string $subject, int $limit): string` | 两趟法：计长→写入 | 仅单字符串（PHP 支持 array 入参返回 array/string）；支持 `$1`-`$9` 反向引用；`limit=-1` 无限制 |
+| `preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array\|false` | `preg_split(string $pattern, string $subject, int $limit, int $flags): array` | 循环分割 → `t_array*` | 仅实现 `PREG_SPLIT_NO_EMPTY` 标志；`PREG_SPLIT_DELIM_CAPTURE` 定义但未处理 |
+| `preg_grep(string $pattern, array $array, int $flags = 0): array` | `preg_grep(string $pattern, array $array, int $flags): array` | 遍历匹配 → `t_array*` | 整数键保留，字符串键降级为 push（不保留原 key）；非 string 元素跳过 |
+| `preg_quote(string $str, ?string $delimiter = null): string` | `preg_quote(string $str, string $delimiter): string` | 两趟法转义元字符 | `$delimiter` 必填（PHP 默认 `null`） |
+| `preg_last_error(): int` | `preg_last_error(): int` | 返回全局变量 `g_pcre_last_error` | — |
+| `preg_last_error_msg(): string` | `preg_last_error_msg(): string` | switch 错误码 → 字符串 | — |
 
 ### 支持的正则语法
 
@@ -622,11 +667,11 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ### 函数
 
-| 函数 | 说明 |
-|------|------|
-| `filter_var(mixed $value, int $filter, array\|int $options = 0): mixed` | 用指定过滤器验证/净化单个变量 |
-| `filter_list(): array` | 返回所有支持的过滤器名称列表（string 数组） |
-| `filter_id(string $name): int` | 根据过滤器名称返回 ID，未知名称返回 -1 |
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `filter_var(mixed $value, int $filter = FILTER_DEFAULT, mixed $options = 0): mixed` | `filter_var(mixed $value, int $filter, int $flags): mixed` | header-only 实现，`str_pool_alloc` 输出 | 第三参数强制为 `int $flags`（PHP 是 `mixed $options`，可为 array）；数组选项需走 `filter_var_opt`；`FILTER_VALIDATE_REGEXP` 直接返回原串（不内置 PCRE） |
+| `filter_list(): array` | `filter_list(): array` | 返回固定 18 个过滤器名字符串数组 | 无 `$sort` 参数 |
+| `filter_id(string $name): int\|false` | `filter_id(string $name): int` | 名称转小写后 `strcmp` 匹配 | 未匹配返回 `-1`（非 `false`）；输入截断到 31 字节 |
 
 ### 验证过滤器（FILTER_VALIDATE_*）
 
