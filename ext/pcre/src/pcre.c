@@ -8,6 +8,10 @@
 #include <val.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ext_str.h"
+
+#define tp_mk_str(s) ext_mk_str(s)
+#define tp_mk_substr(src, start, end) ext_mk_substr(src, start, end)
 
 // ============================================================
 // 1. Data Structures
@@ -44,12 +48,17 @@ typedef struct {
     bool         dot_all;
 } tp_inst;
 
+// Backtrack limit to prevent ReDoS (exponential backtracking)
+#define TP_BACKTRACK_LIMIT 1000000
+
 // VM execution workspace (zero-allocation: pre-allocated)
 typedef struct {
     int  *stack;     // backtracking stack
     int   stack_cap;
     int  *captures;  // [start, end] pairs
     int   cap_size;
+    int   backtrack_count;          // incremented per backtrack
+    int   backtrack_limit_exceeded; // set when backtrack_count exceeds limit
 } tp_machine;
 
 // Compiled regex
@@ -1033,6 +1042,10 @@ static int tp_vm_match(const tp_regex *r, const char *text, int text_len,
 
     backtrack:
         if (stack_ptr <= 0) return -1;
+        if (++m->backtrack_count > TP_BACKTRACK_LIMIT) {
+            m->backtrack_limit_exceeded = 1;
+            return -1;
+        }
         int frame_size = cap_size + 2;
         stack_ptr -= frame_size;
         int off = stack_ptr;
@@ -1085,6 +1098,7 @@ static int tp_find_from(const tp_regex *r, const char *text, int text_len,
             if (!found) return -1;
             int res = tp_vm_match(r, text, text_len, i, m);
             if (res >= 0) return res;
+            if (m->backtrack_limit_exceeded) return -1;
             i++;
         }
         return -1;
@@ -1097,6 +1111,7 @@ static int tp_find_from(const tp_regex *r, const char *text, int text_len,
             continue;
         int res = tp_vm_match(r, text, text_len, i, m);
         if (res >= 0) return res;
+        if (m->backtrack_limit_exceeded) return -1;
     }
     return -1;
 }
@@ -1171,37 +1186,8 @@ static tp_regex *tp_get_or_compile(t_string pattern) {
 
 // ============================================================
 // 9. Helper: create t_string from substring
+// (moved to ext/common/ext_str.h as ext_mk_substr / ext_mk_str)
 // ============================================================
-
-static t_string tp_mk_substr(const char *src, int start, int end) {
-    int len = end - start;
-    if (len <= 0 || !src) return (t_string){0};
-    if (len <= STR_SSO_MAX) {
-        t_string r = {.is_local = true, .length = len};
-        memcpy(r.local, src + start, len);
-        r.local[len] = 0;
-        return r;
-    }
-    char *d = str_pool_alloc(len);
-    if (!d) return (t_string){0};
-    memcpy(d, src + start, len);
-    return (t_string){.data = d, .length = len, .is_local = false};
-}
-
-static t_string tp_mk_str(const char *s) {
-    int len = s ? (int)strlen(s) : 0;
-    if (!s || !len) return (t_string){0};
-    if (len <= STR_SSO_MAX) {
-        t_string r = {.is_local = true, .length = len};
-        memcpy(r.local, s, len);
-        r.local[len] = 0;
-        return r;
-    }
-    char *d = str_pool_alloc(len);
-    if (!d) return (t_string){0};
-    memcpy(d, s, len);
-    return (t_string){.data = d, .length = len, .is_local = false};
-}
 
 // ============================================================
 // 10. PHP API Functions — tphp_fn_ 前缀，无 byRef，直接返回结果
@@ -1229,6 +1215,11 @@ t_array* tphp_fn_preg_match(t_string pattern, t_string subject) {
     if (!m.captures) { free(m.stack); return tphp_fn_arr_create(0); }
 
     int end = tp_find_from(r, text, text_len, 0, &m);
+    if (m.backtrack_limit_exceeded) {
+        g_pcre_last_error = PREG_BACKTRACK_LIMIT_ERROR;
+        free(m.stack); free(m.captures);
+        return tphp_fn_arr_create(0);
+    }
 
     t_array* result = tphp_fn_arr_create(r->total_groups);
     if (end >= 0) {
@@ -1280,6 +1271,7 @@ t_array* tphp_fn_preg_match_all(t_string pattern, t_string subject) {
     while (pos <= text_len) {
         int end = tp_find_from(r, text, text_len, pos, &m);
         if (end < 0) break;
+        if (m.backtrack_limit_exceeded) { g_pcre_last_error = PREG_BACKTRACK_LIMIT_ERROR; break; }
 
         int start = m.captures[0];
         if (start < 0) start = pos;
@@ -1343,6 +1335,7 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
     while (pos <= text_len && match_count < max_matches) {
         int end = tp_find_from(r, text, text_len, pos, &m);
         if (end < 0) break;
+        if (m.backtrack_limit_exceeded) { g_pcre_last_error = PREG_BACKTRACK_LIMIT_ERROR; break; }
         int start = m.captures[0];
         if (start < 0) start = pos;
         if (match_count >= match_cap) {
@@ -1489,6 +1482,7 @@ t_array* tphp_fn_preg_split(t_string pattern, t_string subject, t_int limit, t_i
         if (limit > 0 && count >= limit - 1) break;
         int end = tp_find_from(r, text, text_len, pos, &m);
         if (end < 0) break;
+        if (m.backtrack_limit_exceeded) { g_pcre_last_error = PREG_BACKTRACK_LIMIT_ERROR; break; }
         int start = m.captures[0];
         if (start < 0) start = pos;
         int piece_len = start - pos;
@@ -1542,6 +1536,7 @@ t_array* tphp_fn_preg_grep(t_string pattern, t_array* input, t_int flags) {
         if (!text || text_len < 0) text_len = 0;
 
         int end = tp_find_from(r, text, text_len, 0, &m);
+        if (m.backtrack_limit_exceeded) { g_pcre_last_error = PREG_BACKTRACK_LIMIT_ERROR; break; }
         bool matched = (end >= 0);
 
         if (matched != invert) {

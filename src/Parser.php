@@ -670,7 +670,7 @@ class Parser
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected property name')->lexeme;
         $default = null;
         if ($this->match(TokenType::EQUALS)) {
-            $default = $this->parsePrimary();
+            $default = $this->parseExpr();
         }
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
         return new PropertyDeclNode($name, $type, $vis, $default);
@@ -792,10 +792,11 @@ class Parser
         }
         $this->consume(TokenType::IDENTIFIER, 'Expected parameter name');
         $varName = $this->previous()->lexeme;
-        // 默认值: = expr
+        // 默认值: = expr（支持任意表达式，PHP 8.1+ 语义）
+        // 使用 parseExpr 而非 parsePrimary，允许 `= 1 + 2`、`= CONST`、`= $a ?? 'x'` 等
         $default = null;
         if ($this->match(TokenType::EQUALS)) {
-            $default = $this->parsePrimary();
+            $default = $this->parseExpr();
         }
         return new ParamNode($type, $varName, $byRef, $default);
     }

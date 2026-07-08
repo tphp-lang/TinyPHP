@@ -1,27 +1,13 @@
 #include "pcntl.h"
 #include <string.h>
 #include <runtime.h>
+#include "object/try.h"
+#include "ext_str.h"
 
-// Helper: make t_string from C string (SSO ≤23B or pool-allocated)
-static t_string _mk_str(const char *s) {
-    int len = s ? (int)strlen(s) : 0;
-    if (!s || !len) return (t_string){0};
-    if (len <= STR_SSO_MAX) {
-        t_string r = {.length = len, .is_local = true};
-        memcpy(r.local, s, len); r.local[len] = 0;
-        return r;
-    }
-    char *d = str_pool_alloc(len);
-    if (!d) return (t_string){0};
-    memcpy(d, s, len);
-    return (t_string){.data = d, .length = len, .is_local = false};
-}
+#define _mk_str(s) ext_mk_str(s)
 
 #ifdef _WIN32
-#define PCNTL_ERR(msg) do { \
-    fputs("\nFatal error: Call to undefined function " msg " (pcntl extension not available on Windows)\n\n", stderr); \
-    exit(1); \
-} while(0)
+#define PCNTL_ERR(msg) tp_throw("pcntl extension not available on Windows: " msg)
 
 t_int tphp_fn_pcntl_fork(void)       { PCNTL_ERR("pcntl_fork()"); return -1; }
 t_int tphp_fn_pcntl_waitpid(t_int pid, t_int *status, t_int options) { (void)pid;(void)status;(void)options; PCNTL_ERR("pcntl_waitpid()"); return -1; }

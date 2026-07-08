@@ -28,25 +28,7 @@ class CodeGenerator implements ASTVisitor
     // 替代了 13 个散落的类型追踪数组
     private SymbolTable $symbols;
 
-    // 过渡期：旧数组仍用作 write-back，读取均走 SymbolTable
-    // 待全部 READ 迁移完成后删除
-    private array $classPropTypes = [];
-    private array $classOwnProps = [];
-    private array $classParentName = [];
-    private array $classMethodRetTypes = [];
-    private array $classNames = [];
-    private array $constTypes = [];
-    private array $constVis = [];
-    private array $enumBackingTypes = [];
-    private array $enumCTypes = [];
-    private array $methodParamTypes = [];
-    private array $funcRetTypes = [];
-    private array $funcParamTypes = [];
-    private array $funcDefaultCounts = [];  // 函数默认值参数数量
-    private array $funcIsGenerator = [];    // funcCName → true（生成器函数标记）
     private bool $inGenerator = false;     // 当前是否在生成器入口函数体内
-    private array $closureSigs = [];
-    private array $varClosureMap = [];
 
     /** 字面量 → C 类型的映射 */
     private static array $litTypeMap = [
@@ -145,6 +127,110 @@ class CodeGenerator implements ASTVisitor
         'array_keys' => 't_int', 'array_values' => 't_int', 'array_merge' => 't_int',
         'explode' => 't_string', 'preg_match' => 't_string', 'preg_split' => 't_string',
         'preg_grep' => 't_string', 'filter_list' => 't_string',
+    ];
+
+    /**
+     * 简单转发函数映射表（visitCall 第二步拆分）
+     *
+     * 每个条目字段：
+     *  - cName:       C 函数名（必填）
+     *  - modes:       按参数位置的 argMode 数组（缺省='direct'）；不设置=变长全 direct
+     *  - defaults:    缺省参数默认值 [位置 => C 字面量]
+     *  - order:       输出参数重排顺序（如 [1,0] 表示先 arg1 再 arg0）
+     *  - cNameNoArgs: 0 参时的 C 函数名（如 uniqid → uniqid0）
+     *
+     * argMode 取值：direct | data | floatcast | wrapvar | wraparr
+     */
+    private static array $simpleFnMap = [
+        // ── 变长 direct（无 modes，参数全透传）──
+        'count'              => ['cName' => 'tphp_fn_arr_count'],
+        'array_chunk'        => ['cName' => 'tphp_fn_arr_chunk'],
+        'array_combine'      => ['cName' => 'tphp_fn_arr_combine'],
+        'array_count_values' => ['cName' => 'tphp_fn_arr_count_values'],
+        'filter_id'          => ['cName' => 'tphp_fn_filter_id'],
+        'iconv'              => ['cName' => 'tphp_fn_iconv'],
+        'iconv_set_encoding' => ['cName' => 'tphp_fn_iconv_set_encoding'],
+        // ── 0 参 ──
+        'time'               => ['cName' => 'tphp_fn_time'],
+        'hrtime'             => ['cName' => 'tphp_fn_hrtime'],
+        'filter_list'        => ['cName' => 'tphp_fn_filter_list'],
+        // ── 单参 direct ──
+        'array_keys'         => ['cName' => 'tphp_fn_array_keys', 'modes' => ['direct']],
+        'array_values'       => ['cName' => 'tphp_fn_array_values', 'modes' => ['direct']],
+        'array_sum'          => ['cName' => 'tphp_fn_arr_sum', 'modes' => ['direct']],
+        'array_product'      => ['cName' => 'tphp_fn_arr_product', 'modes' => ['direct']],
+        'array_unique'       => ['cName' => 'tphp_fn_arr_unique', 'modes' => ['direct']],
+        'max'                => ['cName' => 'tphp_fn_max', 'modes' => ['direct']],
+        'min'                => ['cName' => 'tphp_fn_min', 'modes' => ['direct']],
+        'strlen'             => ['cName' => 'tphp_fn_strlen', 'modes' => ['direct']],
+        'trim'               => ['cName' => 'tphp_fn_trim', 'modes' => ['direct']],
+        'ltrim'              => ['cName' => 'tphp_fn_ltrim', 'modes' => ['direct']],
+        'rtrim'              => ['cName' => 'tphp_fn_rtrim', 'modes' => ['direct']],
+        'random_bytes'       => ['cName' => 'tphp_fn_random_bytes', 'modes' => ['direct']],
+        'sort'               => ['cName' => 'tphp_fn_sort', 'modes' => ['direct']],
+        'rsort'              => ['cName' => 'tphp_fn_rsort', 'modes' => ['direct']],
+        'shuffle'            => ['cName' => 'tphp_fn_shuffle', 'modes' => ['direct']],
+        'json_decode'        => ['cName' => 'tphp_fn_json_decode', 'modes' => ['direct']],
+        'array_is_list'      => ['cName' => 'tphp_fn_array_is_list_int', 'modes' => ['direct']],
+        'crc32'              => ['cName' => 'tphp_fn_crc32_str', 'modes' => ['direct']],
+        // ── 单参 wrapvar ──
+        'print_r'            => ['cName' => 'tphp_fn_print_r', 'modes' => ['wrapvar']],
+        'json_encode'        => ['cName' => 'tphp_fn_json_encode', 'modes' => ['wrapvar']],
+        'intval'             => ['cName' => 'tphp_fn_intval', 'modes' => ['wrapvar']],
+        'floatval'           => ['cName' => 'tphp_fn_floatval', 'modes' => ['wrapvar']],
+        'strval'             => ['cName' => 'tphp_fn_strval', 'modes' => ['wrapvar']],
+        'boolval'            => ['cName' => 'tphp_fn_boolval', 'modes' => ['wrapvar']],
+        // ── 单参 data ──
+        'file_get_contents'  => ['cName' => 'tphp_fn_file_get_contents', 'modes' => ['data']],
+        // ── 单参 floatcast ──
+        'deg2rad'            => ['cName' => 'tphp_fn_deg2rad', 'modes' => ['floatcast']],
+        'rad2deg'            => ['cName' => 'tphp_fn_rad2deg', 'modes' => ['floatcast']],
+        // ── 单参带默认值 ──
+        'exit'               => ['cName' => 'tphp_fn_exit', 'modes' => ['direct'], 'defaults' => [0 => '0']],
+        'die'                => ['cName' => 'tphp_fn_exit', 'modes' => ['direct'], 'defaults' => [0 => '0']],
+        'sleep'              => ['cName' => 'tphp_fn_sleep', 'modes' => ['direct'], 'defaults' => [0 => '0']],
+        'usleep'             => ['cName' => 'tphp_fn_usleep', 'modes' => ['direct'], 'defaults' => [0 => '0']],
+        'iconv_get_encoding' => ['cName' => 'tphp_fn_iconv_get_encoding', 'modes' => ['direct'], 'defaults' => [0 => 'STR_LIT("all")']],
+        // ── uniqid：0 参走 uniqid0，否则 uniqid(arg) ──
+        'uniqid'             => ['cName' => 'tphp_fn_uniqid', 'cNameNoArgs' => 'tphp_fn_uniqid0', 'modes' => ['direct']],
+        // ── 双参 direct ──
+        'array_merge'        => ['cName' => 'tphp_fn_array_merge', 'modes' => ['direct', 'direct']],
+        'strpos'             => ['cName' => 'tphp_fn_strpos', 'modes' => ['direct', 'direct']],
+        'str_contains'       => ['cName' => 'tphp_fn_str_contains', 'modes' => ['direct', 'direct']],
+        'implode'            => ['cName' => 'tphp_fn_implode', 'modes' => ['direct', 'direct']],
+        'join'               => ['cName' => 'tphp_fn_implode', 'modes' => ['direct', 'direct']],
+        'explode'            => ['cName' => 'tphp_fn_explode', 'modes' => ['direct', 'direct']],
+        'rand'               => ['cName' => 'tphp_fn_rand', 'modes' => ['direct', 'direct']],
+        'mt_rand'            => ['cName' => 'tphp_fn_mt_rand', 'modes' => ['direct', 'direct']],
+        'random_int'         => ['cName' => 'tphp_fn_random_int', 'modes' => ['direct', 'direct']],
+        'array_column'       => ['cName' => 'tphp_fn_array_column_str', 'modes' => ['direct', 'direct']],
+        // ── 双参带默认值 ──
+        'array_reverse'      => ['cName' => 'tphp_fn_arr_reverse', 'modes' => ['direct', 'direct'], 'defaults' => [1 => 'false']],
+        'str_split'          => ['cName' => 'tphp_fn_str_split', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '1']],
+        'iconv_strlen'       => ['cName' => 'tphp_fn_iconv_strlen', 'modes' => ['direct', 'direct'], 'defaults' => [1 => 'STR_LIT("UTF-8")']],
+        'date'               => ['cName' => 'tphp_fn_date', 'modes' => ['direct', 'direct'], 'defaults' => [0 => 'STR_LIT("%c")', 1 => '-1']],
+        // ── 双参 wrapvar + direct ──
+        'in_array'           => ['cName' => 'tphp_fn_in_array', 'modes' => ['wrapvar', 'direct']],
+        // ── 双参 data + direct ──
+        'file_put_contents'  => ['cName' => 'tphp_fn_file_put_contents', 'modes' => ['data', 'direct']],
+        // ── 双参 direct + wraparr ──
+        'array_unshift'      => ['cName' => 'tphp_fn_arr_unshift', 'modes' => ['direct', 'wraparr']],
+        // ── array_search：重排 [1,0]，needle 经 wrapvar ──
+        'array_search'       => ['cName' => 'tphp_fn_arr_search', 'modes' => ['wrapvar', 'direct'], 'order' => [1, 0]],
+        // ── 三参带默认值 ──
+        'substr'             => ['cName' => 'tphp_fn_substr', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'range'              => ['cName' => 'tphp_fn_range', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '1']],
+        'iconv_mime_encode'  => ['cName' => 'tphp_fn_iconv_mime_encode', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => 'NULL']],
+        'password_hash'      => ['cName' => 'tphp_fn_password_hash', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [0 => 'STR_LIT("")', 1 => '1', 2 => 'NULL']],
+        // ── 三参 direct + direct + wraparr ──
+        'array_fill'         => ['cName' => 'tphp_fn_arr_fill', 'modes' => ['direct', 'direct', 'wraparr']],
+        // ── 四参带默认值 ──
+        'str_pad'            => ['cName' => 'tphp_fn_str_pad', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [2 => '(t_string){NULL,0}', 3 => '0']],
+        'iconv_strpos'       => ['cName' => 'tphp_fn_iconv_strpos', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [2 => '0', 3 => 'STR_LIT("UTF-8")']],
+        'iconv_substr'       => ['cName' => 'tphp_fn_iconv_substr', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [2 => '0', 3 => 'STR_LIT("UTF-8")']],
+        'iconv_mime_decode'  => ['cName' => 'tphp_fn_iconv_mime_decode', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '0', 2 => 'STR_LIT("UTF-8")']],
+        // ── 六参 direct（固定）──
+        'mktime'             => ['cName' => 'tphp_fn_mktime', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct', 'direct']],
     ];
 
     /** 临时变量计数器，用于数组字面量的复合表达式 */
@@ -293,13 +379,13 @@ class CodeGenerator implements ASTVisitor
         // ── SEC_FUNCFWDS: 独立函数前置声明 ──
         foreach ($node->functions as $fn) {
             $fnCName = self::funcCName($fn);
-            if (!empty($this->funcIsGenerator[$fnCName])) {
+            $existingFn = $this->symbols->getFunc($fnCName);
+            if ($existingFn !== null && $existingFn->isGenerator) {
                 $ret = 'tphp_class_Generator*';
             } else {
                 $ret = self::mapType($fn->returnType);
             }
-            $this->funcRetTypes[$fnCName] = $ret;
-            $this->funcParamTypes[$fnCName] = array_map(fn($p) => self::paramCType($p), $fn->params);
+            $paramTypes = array_map(fn($p) => self::paramCType($p), $fn->params);
             // 计算默认值参数数量
             $defaultCount = 0;
             $totalParams = count($fn->params);
@@ -310,7 +396,14 @@ class CodeGenerator implements ASTVisitor
                     break;
                 }
             }
-            $this->funcDefaultCounts[$fnCName] = $defaultCount;
+            $isGen = $existingFn !== null && $existingFn->isGenerator;
+            $this->symbols->addFunc($fnCName, new FunctionInfo(
+                $ret,
+                $paramTypes,
+                $defaultCount,
+                $totalParams,
+                $isGen,
+            ));
             $params = array_map(fn($p) => $this->visitParam($p), $fn->params);
             $this->sectionLine(self::SEC_FUNCFWDS,
                 'static ' . $ret . ' ' . $fnCName . '(' . implode(', ', $params) . ');');
@@ -359,14 +452,19 @@ class CodeGenerator implements ASTVisitor
         return $this->renderSections();
     }
 
-    /** 预扫描生成器函数：填充 funcIsGenerator + 预填 funcRetTypes */
+    /** 预扫描生成器函数：填充 SymbolTable */
     private function preScanGenerators(ProgramNode $node): void
     {
         foreach ($node->functions as $fn) {
             if ($fn->isGenerator) {
                 $cn = self::funcCName($fn);
-                $this->funcIsGenerator[$cn] = true;
-                $this->funcRetTypes[$cn] = 'tphp_class_Generator*';
+                $this->symbols->addFunc($cn, new FunctionInfo(
+                    'tphp_class_Generator*',
+                    [],
+                    0,
+                    0,
+                    true,
+                ));
             }
         }
     }
@@ -381,8 +479,6 @@ class CodeGenerator implements ASTVisitor
         $this->capTypeCounter = 0;
         $this->thunkCounter = 0;
         $this->sections = [];
-        $this->funcDefaultCounts = [];
-        $this->funcIsGenerator = [];
         $this->inGenerator = false;
         $this->symbols = new SymbolTable();
         // 内置 Exception 类
@@ -391,14 +487,7 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Exception')->methods['getMessage']    = new MethodInfo('t_string');
         $this->symbols->getClass('tphp_class_Exception')->methods['__construct'] = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_Exception')->methods['__destruct']  = new MethodInfo('void');
-        $this->classOwnProps['tphp_class_Exception']['message'] = true;
-        $this->classParentName['tphp_class_Exception'] = '';
-        $this->classPropTypes['tphp_class_Exception']['message'] = 't_string';
-        $this->classMethodRetTypes['tphp_class_Exception'] = [
-            'getMessage'   => 't_string',
-            '__construct'  => 'void',
-            '__destruct'   => 'void',
-        ];
+        $this->symbols->addClassProp('tphp_class_Exception', 'message', 't_string');
 
         // 内置 Generator 类（基于 minicoro 协程）
         $this->symbols->addClass('tphp_class_Generator');
@@ -410,12 +499,6 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Generator')->methods['valid']    = new MethodInfo('t_int');
         $this->symbols->getClass('tphp_class_Generator')->methods['getReturn'] = new MethodInfo('t_var');
         $this->symbols->getClass('tphp_class_Generator')->methods['rewind']    = new MethodInfo('void');
-        $this->classMethodRetTypes['tphp_class_Generator'] = [
-            'current' => 't_var', 'key' => 't_var', 'next' => 't_var',
-            'send' => 't_var', 'valid' => 't_int', 'getReturn' => 't_var', 'rewind' => 'void',
-        ];
-        $this->methodParamTypes['tphp_class_Generator'] = ['send' => ['t_var']];
-        $this->classParentName['tphp_class_Generator'] = '';
 
         // 内置 Resource 类（资源对象化根，用户可 extends Resource）
         $this->symbols->addClass('tphp_class_Resource');
@@ -423,8 +506,6 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Resource')->methods['__construct'] = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_Resource')->methods['__destruct']  = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_Resource')->methods['getType']     = new MethodInfo('t_int');
-        $this->classMethodRetTypes['tphp_class_Resource'] = ['__construct' => 'void', '__destruct' => 'void', 'getType' => 't_int'];
-        $this->classParentName['tphp_class_Resource'] = '';
 
         // 内置 File 类（Resource 子类，替代 fopen resource）
         $this->symbols->addClass('tphp_class_File', 'tphp_class_Resource');
@@ -437,12 +518,6 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_File')->methods['eof']         = new MethodInfo('t_bool');
         $this->symbols->getClass('tphp_class_File')->methods['close']       = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_File')->methods['isOpen']      = new MethodInfo('t_bool');
-        $this->classMethodRetTypes['tphp_class_File'] = [
-            '__construct' => 'void', '__destruct' => 'void', 'getType' => 't_int',
-            'read' => 't_string', 'write' => 't_int', 'eof' => 't_bool',
-            'close' => 'void', 'isOpen' => 't_bool'
-        ];
-        $this->classParentName['tphp_class_File'] = 'tphp_class_Resource';
     }
 
     // ── 多段输出方法 ─────────────────────────────────────────
@@ -556,32 +631,28 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->addClassName($class->name, $cn);
         foreach ($propTypes as $pn => $pt) {
             $this->symbols->addClassProp($cn, $pn, $pt);
-            // 同步到旧数组（过渡期）
-            $this->classPropTypes[$cn][$pn] = $pt;
-            $this->classOwnProps[$cn][$pn] = true;
         }
-        if ($parentCN !== '') {
-            $this->classParentName[$cn] = $parentCN;
-        }
-        // 方法返回类型
+        // 方法返回类型 + 参数类型 + 默认值信息（第一遍即注册完整信息，
+        // 确保跨类方法调用在 emitClassImpl 阶段即可解析重载版本）
         $this->symbols->getClass($cn)->methods['__construct'] = new MethodInfo('void');
         $this->symbols->getClass($cn)->methods['__destruct']  = new MethodInfo('void');
-        $this->classMethodRetTypes[$cn] = ['__construct' => 'void', '__destruct' => 'void'];
         foreach ($methods as $m) {
             $mr = $this->mapType($m->returnType);
-            $this->symbols->getClass($cn)->methods[$m->name] = new MethodInfo($mr);
-            $this->classMethodRetTypes[$cn][$m->name] = $mr;
+            $pts = array_map(fn($p) => $this->mapType($p->type), $m->params);
+            $tp = count($m->params);
+            $dc = 0;
+            for ($i = $tp - 1; $i >= 0; $i--) {
+                if ($m->params[$i]->default !== null) { $dc++; } else { break; }
+            }
+            $this->symbols->getClass($cn)->methods[$m->name] = new MethodInfo($mr, $pts, false, 'public', $dc, $tp);
         }
         $o[] = "} {$cn};";
         $o[] = '';
         // 类常量 → #define（简单类型）或 static 变量（array）
-        $this->classNames[$class->name] = $cn;
         foreach ($class->classConsts as $cc) {
             $cname = 'TPHP_CONST_' . strtoupper($cn . '_' . $cc->name);
             $fullName = $cn . '_' . $cc->name;
             $vis = $cc->visibility ?? 'public';
-            $this->constVis[$fullName] = $vis;
-            $this->constVis[$cname] = $vis;
             // 声明类型 vs 字面量类型一致性校验，并以声明类型注册
             $declCType = self::mapType($cc->type);
             $litCType  = self::$litTypeMap[$cc->value::class] ?? null;
@@ -593,29 +664,25 @@ class CodeGenerator implements ASTVisitor
             }
             if ($cc->value instanceof StringLiteralExpr) {
                 $this->symbols->addConst($fullName, $declCType, $vis);
-                $this->constTypes[$fullName] = $declCType;
-                $this->constTypes[$cname] = $declCType;
+                $this->symbols->addConst($cname, $declCType, $vis);
                 $val = str_replace('"', '\\"', $cc->value->value);
                 $o[] = "#define {$cname} STR_LIT(\"{$val}\")";
             } elseif ($cc->value instanceof IntLiteralExpr) {
                 $this->symbols->addConst($fullName, $declCType, $vis);
-                $this->constTypes[$fullName] = $declCType;
-                $this->constTypes[$cname] = $declCType;
+                $this->symbols->addConst($cname, $declCType, $vis);
                 $o[] = "#define {$cname} {$cc->value->value}";
             } elseif ($cc->value instanceof FloatLiteralExpr) {
                 $this->symbols->addConst($fullName, $declCType, $vis);
-                $this->constTypes[$fullName] = $declCType;
-                $this->constTypes[$cname] = $declCType;
+                $this->symbols->addConst($cname, $declCType, $vis);
                 $fv = $cc->value->value;
                 $o[] = '#define ' . $cname . ' ' .
                     (($fv == (float)(int)$fv) ? sprintf('%.1f', $fv) : rtrim(rtrim(sprintf('%.15g', $fv), '0'), '.'));
             } elseif ($cc->value instanceof BoolLiteralExpr) {
                 $this->symbols->addConst($fullName, $declCType, $vis);
-                $this->constTypes[$fullName] = $declCType;
-                $this->constTypes[$cname] = $declCType;
+                $this->symbols->addConst($cname, $declCType, $vis);
                 $o[] = "#define {$cname} " . ($cc->value->value ? 'true' : 'false');
             } elseif ($cc->value instanceof ArrayLiteralExpr) {
-                // 数组常量：static 变量（不注册 constTypes，访问走独立路径）
+                // 数组常量：static 变量（不注册到 SymbolTable，访问走独立路径）
                 $o[] = "static t_array* {$cname} = NULL;";
                 $o[] = "/* initialized on first access via {$cn} class */";
             }
@@ -632,6 +699,23 @@ class CodeGenerator implements ASTVisitor
         $o[] = "void {$cn}___destruct({$cn}* self);";
         foreach ($methods as $m) {
             $o[] = $this->methodDecl($m) . ';';
+            // 为有默认值的方法生成重载前置声明（与 generateMethodOverloads 对应）
+            $tp = count($m->params);
+            $firstDefaultIdx = $tp;
+            for ($i = 0; $i < $tp; $i++) {
+                if ($m->params[$i]->default !== null) { $firstDefaultIdx = $i; break; }
+            }
+            if ($firstDefaultIdx < $tp) {
+                $ret = self::mapType($m->returnType);
+                for ($cutIdx = $firstDefaultIdx; $cutIdx < $tp; $cutIdx++) {
+                    $overloadName = $cn . '_' . $m->name . '_' . ($tp - $cutIdx);
+                    $cutParams = array_slice($m->params, 0, $cutIdx);
+                    $paramStr = empty($cutParams)
+                        ? $cn . '* self'
+                        : $cn . '* self, ' . implode(', ', array_map(fn($p) => $this->visitParam($p), $cutParams));
+                    $o[] = "static {$ret} {$overloadName}({$paramStr});";
+                }
+            }
         }
         if ($isMain) {
             $o[] = "{$cn}* new_{$cn}(t_int argc, t_array* argv);";
@@ -667,11 +751,20 @@ class CodeGenerator implements ASTVisitor
             else $methods[] = $m;
             // 记录方法参数类型（用于 visitCall 中 t_var 参数包裹）
             $pts = array_map(fn($p) => $this->mapType($p->type), $m->params);
-            $this->methodParamTypes[$cn][$m->name] = $pts;
-            if ($mi = $this->symbols->getClassMethod($cn, $m->name)) {
-                $mi = new MethodInfo($mi->retType, $pts);
+            // 计算默认值参数数量（尾部连续默认值）
+            $totalParams = count($m->params);
+            $defaultCount = 0;
+            for ($i = $totalParams - 1; $i >= 0; $i--) {
+                if ($m->params[$i]->default !== null) {
+                    $defaultCount++;
+                } else {
+                    break;
+                }
             }
-            $this->symbols->getClass($cn)->methods[$m->name] = $mi ?? new MethodInfo('void', $pts);
+            if ($mi = $this->symbols->getClassMethod($cn, $m->name)) {
+                $mi = new MethodInfo($mi->retType, $pts, $mi->isStatic, $mi->visibility, $defaultCount, $totalParams);
+            }
+            $this->symbols->getClass($cn)->methods[$m->name] = $mi ?? new MethodInfo('void', $pts, false, 'public', $defaultCount, $totalParams);
         }
 
         $o = [];
@@ -829,7 +922,18 @@ class CodeGenerator implements ASTVisitor
         $ret = self::mapType($node->returnType);
         $this->currentRetType = $ret;
         // 注册返回类型，供 inferCallReturnType 使用
-        $this->funcRetTypes[self::funcCName($node)] = $ret;
+        // 同步到 SymbolTable（保留已有 paramTypes/defaultCount/totalParams/isGenerator）
+        $fnCName = self::funcCName($node);
+        $existingFn = $this->symbols->getFunc($fnCName);
+        if ($existingFn !== null) {
+            $this->symbols->addFunc($fnCName, new FunctionInfo(
+                $ret,
+                $existingFn->paramTypes,
+                $existingFn->defaultCount,
+                $existingFn->totalParams,
+                $existingFn->isGenerator,
+            ));
+        }
 
         // 检查是否有默认值参数
         $hasDefaults = false;
@@ -1550,7 +1654,8 @@ class CodeGenerator implements ASTVisitor
 
         // 记录闭包变量名→函数名映射
         if ($node->expr instanceof ClosureExpr) {
-            $this->varClosureMap[$var] = "_closure_{$this->closureCounter}";
+            $closureName = "_closure_{$this->closureCounter}";
+            $this->symbols->addVarClosure($var, $closureName);
         }
 
         return $code;
@@ -1601,7 +1706,7 @@ class CodeGenerator implements ASTVisitor
             return $t;
         }
         if ($expr instanceof EnumAccessExpr) {
-            return $this->enumCTypes[$expr->enumName] ?? 't_int';
+            return $this->symbols->getEnumCType($expr->enumName) ?? 't_int';
         }
         if ($expr instanceof PropertyAccessExpr) {
             // C->CONST — C constant/enum/macro, default to t_int
@@ -1616,24 +1721,24 @@ class CodeGenerator implements ASTVisitor
             }
             // EnumName::CASE->value → 直接取 backing 类型
             if ($objType === '' && $expr->object instanceof EnumAccessExpr) {
-                $objType = $this->enumCTypes[$expr->object->enumName] ?? '';
+                $objType = $this->symbols->getEnumCType($expr->object->enumName) ?? '';
             }
             // 枚举属性访问 → enum->value 返回 backing 类型, enum->name 返回 t_string
             if ($objType !== '' && str_starts_with($objType, 'tphp_enum_')) {
                 if ($expr->property === 'name') return 't_string';
                 if ($expr->property === 'value') {
                     $base = rtrim($objType, '*');
-                    foreach ($this->enumCTypes as $name => $ct) {
+                    foreach ($this->symbols->allEnums() as $name => $ct) {
                         if (rtrim($ct, '*') === $base) {
-                            return ($this->enumBackingTypes[$name] ?? 'int') === 'string' ? 't_string' : 't_int';
+                            return ($this->symbols->getEnumBacking($name)) === 'string' ? 't_string' : 't_int';
                         }
                     }
                     return 't_int';
                 }
             }
-            // 尝试从 classPropTypes 查找
-            if ($objType !== '' && isset($this->classPropTypes[$objType])) {
-                return $this->classPropTypes[$objType][$expr->property] ?? 't_int';
+            // 尝试从 SymbolTable 查找
+            if ($objType !== '' && $this->symbols->hasClass($objType)) {
+                return $this->symbols->getClassPropType($objType, $expr->property) ?? 't_int';
             }
         }
         if ($expr instanceof ArrayAccessExpr) {
@@ -1713,17 +1818,27 @@ class CodeGenerator implements ASTVisitor
                 $sig = $this->inferCallbackSig($expr->args[1] ?? null);
                 return $sig['ret'] ?? 't_int';
             }
-            // 查注册表
+            // C-only 函数 → 查注册表
             if (isset(self::$builtinRetTypes[$name])) {
                 return self::$builtinRetTypes[$name];
             }
+            // 用户定义的函数 → 查 SymbolTable
+            $fnCName = self::funcCNameFromCall($expr);
+            if ($fnCName && $this->symbols->getFuncRet($fnCName) !== null) {
+                return $this->symbols->getFuncRet($fnCName);
+            }
+            // 未注册的 C-only 函数 → 编译错误（避免静默截断为 int）
+            throw new \LogicException(
+                "Unknown function return type: {$name}. " .
+                "Please register it in \$builtinRetTypes."
+            );
         }
-        // 闭包调用 → 查 closureSigs
+        // 闭包调用 → 查 SymbolTable
         if ($expr->name === '__invoke' && $expr->callee instanceof VariableExpr) {
             $varName = self::varName($expr->callee->name);
-            $fnName = $this->varClosureMap[$varName] ?? '';
-            if ($fnName && isset($this->closureSigs[$fnName])) {
-                $sig = $this->closureSigs[$fnName];
+            $fnName = $this->symbols->getVarClosure($varName) ?? '';
+            if ($fnName && $this->symbols->getClosureSig($fnName) !== null) {
+                $sig = $this->symbols->getClosureSig($fnName);
                 return $sig['ret'];
             }
         }
@@ -1735,7 +1850,7 @@ class CodeGenerator implements ASTVisitor
             if (in_array($rcName, $ptrFns, true)) return 'null';
             return 't_int';
         }
-        // 方法调用 → 查 classMethodRetTypes
+        // 方法调用 → 查 SymbolTable
         if ($expr->callee !== null) {
             $objKey = '';
             if ($expr->callee instanceof VariableExpr) {
@@ -1750,24 +1865,26 @@ class CodeGenerator implements ASTVisitor
                 return 't_int';
             }
             $objClean = rtrim($objType, '*');
-            if ($objClean !== '' && isset($this->classMethodRetTypes[$objClean])) {
-                $retType = $this->classMethodRetTypes[$objClean][$expr->name] ?? null;
-                if ($retType !== null) { if ($retType === 'void') return 't_int'; return $retType; }
+            if ($objClean !== '') {
+                $mInfo = $this->symbols->getClassMethod($objClean, $expr->name);
+                if ($mInfo !== null) {
+                    $retType = $mInfo->retType;
+                    if ($retType === 'void') return 't_int'; return $retType;
+                }
             }
             // Inherited method
             $parentCN = $this->resolveMethodClass($objClean, $expr->name);
-            if ($parentCN !== '' && isset($this->classMethodRetTypes[$parentCN][$expr->name])) {
-                $retType = $this->classMethodRetTypes[$parentCN][$expr->name];
-                if ($retType !== 'void') return $retType;
+            if ($parentCN !== '') {
+                $mInfo = $this->symbols->getClassMethod($parentCN, $expr->name);
+                if ($mInfo !== null) {
+                    $retType = $mInfo->retType;
+                    if ($retType !== 'void') return $retType;
+                }
             }
         }
         // 原始 C 调用 → 可能返回指针，用 void* 安全存储
         if ($expr->isRawC) return 'null';
-        // 独立函数 → 查 funcRetTypes 注册表，否则默认 t_int
-        $fnCName = self::funcCNameFromCall($expr);
-        if ($fnCName && isset($this->funcRetTypes[$fnCName])) {
-            return $this->funcRetTypes[$fnCName];
-        }
+        // 方法调用未命中 → 默认 t_int（不在此抛错，方法返回类型由 getClassMethod 路径处理）
         return 't_int';
     }
 
@@ -1878,7 +1995,7 @@ class CodeGenerator implements ASTVisitor
         return $this->inferType($expr->index) === 't_string';
     }
 
-    /** 获取属性类型（通过 classPropTypes 查找） */
+    /** 获取属性类型（通过 SymbolTable 查找） */
     private function getPropType(PropertyAccessExpr $pa): string
     {
         // C->CONST — C constant/enum/macro, default to t_int
@@ -1889,7 +2006,7 @@ class CodeGenerator implements ASTVisitor
         $objType = ($objKey === '$this' || $objKey === 'self')
             ? $this->className
             : ($this->varTypes[$objKey] ?? '');
-        // 去掉尾部 *（指针类型）以匹配 classPropTypes key
+        // 去掉尾部 *（指针类型）以匹配 SymbolTable key
         $objType = rtrim($objType, '*');
         // 链式数组访问: $catalog[0][0]->prop — 用 inferType 推导对象类型
         if ($objType === '' && $pa->object instanceof ArrayAccessExpr) {
@@ -1898,31 +2015,32 @@ class CodeGenerator implements ASTVisitor
         }
         // EnumName::CASE->value → 直接取 backing 类型
         if ($objType === '' && $pa->object instanceof EnumAccessExpr) {
-            $objType = rtrim($this->enumCTypes[$pa->object->enumName] ?? '', '*');
+            $objType = rtrim($this->symbols->getEnumCType($pa->object->enumName) ?? '', '*');
         }
         // 枚举属性 → enum->value 返回 backing 类型, enum->name 返回 t_string
         if ($objType !== '' && str_starts_with($objType, 'tphp_enum_')) {
             if ($pa->property === 'name') return 't_string';
             if ($pa->property === 'value') {
                 $base = rtrim($objType, '*');
-                foreach ($this->enumCTypes as $name => $ct) {
+                foreach ($this->symbols->allEnums() as $name => $ct) {
                     if (rtrim($ct, '*') === $base) {
-                        return ($this->enumBackingTypes[$name] ?? 'int') === 'string' ? 't_string' : 't_int';
+                        return ($this->symbols->getEnumBacking($name)) === 'string' ? 't_string' : 't_int';
                     }
                 }
                 return 't_int';
             }
         }
-        if ($objType !== '' && isset($this->classPropTypes[$objType])) {
-            $pt = $this->classPropTypes[$objType][$pa->property] ?? null;
+        if ($objType !== '' && $this->symbols->hasClass($objType)) {
+            $pt = $this->symbols->getClassPropType($objType, $pa->property);
             if ($pt !== null) return $pt;
         }
         // Search parent chain for inherited properties
         $cur = $objType;
-        while (isset($this->classParentName[$cur]) && $this->classParentName[$cur] !== '') {
-            $cur = $this->classParentName[$cur];
-            if (isset($this->classPropTypes[$cur][$pa->property])) {
-                return $this->classPropTypes[$cur][$pa->property];
+        while ($this->symbols->hasClass($cur) && $this->symbols->getClassParent($cur) !== '') {
+            $cur = $this->symbols->getClassParent($cur);
+            $pt = $this->symbols->getClassPropType($cur, $pa->property);
+            if ($pt !== null) {
+                return $pt;
             }
         }
         return '';
@@ -2146,10 +2264,11 @@ class CodeGenerator implements ASTVisitor
         $this->sectionBlock(self::SEC_CLOSURES, implode("\n", $implLines));
 
         // 记录闭包签名：用于 generateClosureCall 生成正确的函数指针转换
-        $this->closureSigs[$name] = [
+        $sig = [
             'ret'    => $ret,
             'params' => implode(', ', array_map(fn($p) => self::mapType($p->type), $node->params)),
         ];
+        $this->symbols->addClosureSig($name, $sig);
 
         // 恢复外层作用域
         $this->declaredVars = $savedDeclared;
@@ -2511,23 +2630,82 @@ class CodeGenerator implements ASTVisitor
         return implode("\n", $lines);
     }
 
+    /**
+     * 简单转发通用处理器：按 $simpleFnMap 配置生成 tphp_fn_xxx(args) 代码。
+     *
+     * 支持的 argMode：direct | data | floatcast | wrapvar | wraparr
+     * 支持 defaults（缺省参数填充）、order（参数重排）、cNameNoArgs（0 参变体）。
+     */
+    private function generateSimpleForward(CallExpr $node, array $info): string
+    {
+        // 0-arg 变体（如 uniqid → uniqid0）
+        if (count($node->args) === 0 && isset($info['cNameNoArgs'])) {
+            return $info['cNameNoArgs'] . '()';
+        }
+
+        $modes    = $info['modes'] ?? [];
+        $defaults = $info['defaults'] ?? [];
+        $order    = $info['order'] ?? null;
+        $nArgs    = count($node->args);
+        // modes 非空时限制最大输出参数数；为空表示变长（不限制）
+        $maxArgs  = !empty($modes) ? count($modes) : PHP_INT_MAX;
+
+        // 输出位置数 = min(实参数, maxArgs)，再用 defaults 延伸至填满默认值
+        $nPositions = min($nArgs, $maxArgs);
+        if (!empty($defaults)) {
+            $maxDefaultPos = max(array_keys($defaults)) + 1;
+            $nPositions = max($nPositions, min($maxDefaultPos, $maxArgs));
+        }
+
+        $processed = [];
+        for ($i = 0; $i < $nPositions; $i++) {
+            if (isset($node->args[$i])) {
+                $arg  = $node->args[$i];
+                $mode = $modes[$i] ?? 'direct';
+                $processed[$i] = match ($mode) {
+                    'direct'    => $arg->accept($this),
+                    'data'      => $arg->accept($this) . '.data',
+                    'floatcast' => '(t_float)(' . $arg->accept($this) . ')',
+                    'wrapvar'   => $this->wrapVar($arg),
+                    'wraparr'   => $this->wrapArrayElement($arg, $arg->accept($this)),
+                    default     => $arg->accept($this),
+                };
+            } elseif (isset($defaults[$i])) {
+                $processed[$i] = $defaults[$i];
+            }
+        }
+
+        // 参数重排（如 array_search: PHP(needle,arr) → C(arr,needle)）
+        if ($order !== null) {
+            $ordered = [];
+            foreach ($order as $pos) {
+                if (isset($processed[$pos])) $ordered[] = $processed[$pos];
+            }
+            $processed = $ordered;
+        }
+
+        return $info['cName'] . '(' . implode(', ', $processed) . ')';
+    }
+
     public function visitCall(CallExpr $node): string
     {
+        // PHPC 互操作函数名集合（B 段、C 段共享，避免重复定义）
+        static $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
+            'phpc_arr_int','phpc_arr_dbl','phpc_arr_str','phpc_new_arr_int',
+            'phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
+            'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_free','phpc_free_str_arr',
+            'phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
+            'phpc_new_fn','phpc_new_fn_env','phpc_thunk',
+            'phpc_assert_ptr','phpc_obj_steal','phpc_env_pin','phpc_env_unpin'];
+
+        // 简单转发函数：查 $simpleFnMap 命中则交给通用处理器
+        if ($node->callee === null && isset(self::$simpleFnMap[$node->name])) {
+            return $this->generateSimpleForward($node, self::$simpleFnMap[$node->name]);
+        }
+
         // var_dump 内置函数 —— 包装参数为 t_var 并调用 tphp_var_dump
         if ($node->callee === null && $node->name === 'var_dump') {
             return $this->generateVarDump($node->args);
-        }
-
-        // print_r($x) — 包装参数为 t_var 调用 tphp_fn_print_r
-        if ($node->callee === null && $node->name === 'print_r') {
-            $wrapped = $this->wrapVar($node->args[0]);
-            return 'tphp_fn_print_r(' . $wrapped . ')';
-        }
-
-        // count 内置函数 → tphp_arr_count
-        if ($node->callee === null && $node->name === 'count') {
-            $args = array_map(fn($a) => $a->accept($this), $node->args);
-            return 'tphp_fn_arr_count(' . implode(', ', $args) . ')';
         }
 
         // array_push($arr, $val) → 尾部追加，返回新长度
@@ -2543,13 +2721,6 @@ class CodeGenerator implements ASTVisitor
             return 'tphp_fn_array_pop(&' . $arrCode . ')';
         }
 
-        // in_array($needle, $haystack) → 值是否存在
-        if ($node->callee === null && $node->name === 'in_array') {
-            $needleCode = $this->wrapVar($node->args[0]);
-            $arrCode    = $node->args[1]->accept($this);
-            return 'tphp_fn_in_array(' . $needleCode . ', ' . $arrCode . ')';
-        }
-
         // array_key_exists($key, $arr) → 键是否存在
         if ($node->callee === null && $node->name === 'array_key_exists') {
             $keyType = $this->inferType($node->args[0]);
@@ -2561,63 +2732,11 @@ class CodeGenerator implements ASTVisitor
             return 'tphp_fn_array_key_exists_int(' . $keyCode . ', ' . $arrCode . ')';
         }
 
-        // array_keys($arr) → 返回所有 key 组成的新数组
-        if ($node->callee === null && $node->name === 'array_keys') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_array_keys(' . $arrCode . ')';
-        }
-
-        // array_values($arr) → 返回所有 value 组成的新数组
-        if ($node->callee === null && $node->name === 'array_values') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_array_values(' . $arrCode . ')';
-        }
-
-        // array_merge($arr1, $arr2) → 合并两个数组
-        if ($node->callee === null && $node->name === 'array_merge') {
-            $a1 = $node->args[0]->accept($this);
-            $a2 = $node->args[1]->accept($this);
-            return 'tphp_fn_array_merge(' . $a1 . ', ' . $a2 . ')';
-        }
-
-        // Phase 2 array functions — map to tphp_fn_arr_* convention
-        if ($node->callee === null && in_array($node->name, ['array_chunk','array_combine','array_count_values'], true)) {
-            $fnMap = ['array_chunk'=>'tphp_fn_arr_chunk','array_combine'=>'tphp_fn_arr_combine','array_count_values'=>'tphp_fn_arr_count_values'];
-            $args = array_map(fn($a) => $a->accept($this), $node->args);
-            return $fnMap[$node->name] . '(' . implode(', ', $args) . ')';
-        }
-
         // array_shift($arr) → 移除头部元素，返回 t_var
         if ($node->callee === null && $node->name === 'array_shift') {
             $arrCode = $node->args[0]->accept($this);
             $tv = '_ts_' . (++$this->tmpVarCounter);
             return "({ t_var {$tv} = VAR_NULL(); tphp_fn_arr_shift({$arrCode}, &{$tv}); {$tv}; })";
-        }
-
-        // array_unshift($arr, $val) → 头部追加，返回新长度
-        if ($node->callee === null && $node->name === 'array_unshift') {
-            $arrCode = $node->args[0]->accept($this);
-            $valCode = $this->wrapArrayElement($node->args[1], $node->args[1]->accept($this));
-            return 'tphp_fn_arr_unshift(' . $arrCode . ', ' . $valCode . ')';
-        }
-
-        // array_sum($arr)
-        if ($node->callee === null && $node->name === 'array_sum') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_arr_sum(' . $arrCode . ')';
-        }
-
-        // array_product($arr)
-        if ($node->callee === null && $node->name === 'array_product') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_arr_product(' . $arrCode . ')';
-        }
-
-        // array_reverse($arr, $preserve_keys=false)
-        if ($node->callee === null && $node->name === 'array_reverse') {
-            $arrCode = $node->args[0]->accept($this);
-            $pk = isset($node->args[1]) ? $node->args[1]->accept($this) : 'false';
-            return 'tphp_fn_arr_reverse(' . $arrCode . ', ' . $pk . ')';
         }
 
         // array_slice($arr, $offset, $length=0, $preserve_keys=false)
@@ -2627,46 +2746,6 @@ class CodeGenerator implements ASTVisitor
             $len     = isset($node->args[2]) ? $node->args[2]->accept($this) : '0';
             $pk      = isset($node->args[3]) ? $node->args[3]->accept($this) : 'false';
             return 'tphp_fn_arr_slice(' . $arrCode . ', ' . $offset . ', ' . $len . ', ' . $pk . ')';
-        }
-
-        // max($arr)
-        if ($node->callee === null && $node->name === 'max') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_max(' . $arrCode . ')';
-        }
-
-        // min($arr)
-        if ($node->callee === null && $node->name === 'min') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_min(' . $arrCode . ')';
-        }
-
-        // strlen($str)
-        if ($node->callee === null && $node->name === 'strlen') {
-            return 'tphp_fn_strlen(' . $node->args[0]->accept($this) . ')';
-        }
-
-        // trim($str) / ltrim($str) / rtrim($str)
-        if ($node->callee === null && in_array($node->name, ['trim', 'ltrim', 'rtrim'], true)) {
-            return 'tphp_fn_' . $node->name . '(' . $node->args[0]->accept($this) . ')';
-        }
-
-        // substr($str, $offset, $length=0)
-        if ($node->callee === null && $node->name === 'substr') {
-            $s   = $node->args[0]->accept($this);
-            $off = $node->args[1]->accept($this);
-            $len = isset($node->args[2]) ? $node->args[2]->accept($this) : '0';
-            return 'tphp_fn_substr(' . $s . ', ' . $off . ', ' . $len . ')';
-        }
-
-        // strpos($haystack, $needle)
-        if ($node->callee === null && $node->name === 'strpos') {
-            return 'tphp_fn_strpos(' . $node->args[0]->accept($this) . ', ' . $node->args[1]->accept($this) . ')';
-        }
-
-        // str_contains($haystack, $needle)
-        if ($node->callee === null && $node->name === 'str_contains') {
-            return 'tphp_fn_str_contains(' . $node->args[0]->accept($this) . ', ' . $node->args[1]->accept($this) . ')';
         }
 
         // str_replace($search, $replace, $subject) — 支持数组参数
@@ -2721,114 +2800,9 @@ class CodeGenerator implements ASTVisitor
             return $this->generateArrayReduce($node);
         }
 
-        // 类型转换: intval/floatval/strval/boolval
-        if ($node->callee === null && in_array($node->name, ['intval', 'floatval', 'strval', 'boolval'], true)) {
-            $valCode = $this->wrapVar($node->args[0]);
-            return 'tphp_fn_' . $node->name . '(' . $valCode . ')';
-        }
-
-        // rand($min, $max) / mt_rand($min, $max) / random_int($min, $max)
-        if ($node->callee === null && in_array($node->name, ['rand', 'mt_rand', 'random_int'], true)) {
-            $min = $node->args[0]->accept($this);
-            $max = $node->args[1]->accept($this);
-            return 'tphp_fn_' . $node->name . '(' . $min . ', ' . $max . ')';
-        }
-
-        // random_bytes($length)
-        if ($node->callee === null && $node->name === 'random_bytes') {
-            return 'tphp_fn_random_bytes(' . $node->args[0]->accept($this) . ')';
-        }
-
-        // sort($arr) / rsort($arr) — in-place sort
-        if ($node->callee === null && ($node->name === 'sort' || $node->name === 'rsort')) {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_' . $node->name . '(' . $arrCode . ')';
-        }
-
-        // shuffle($arr) — Fisher-Yates in-place
-        if ($node->callee === null && $node->name === 'shuffle') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_shuffle(' . $arrCode . ')';
-        }
-
-        // file_get_contents($path) — 路径为 t_string，C 端需 const char*
-        if ($node->callee === null && $node->name === 'file_get_contents') {
-            $pathCode = $node->args[0]->accept($this);
-            return 'tphp_fn_file_get_contents(' . $pathCode . '.data)';
-        }
-
-        // file_put_contents($path, $data)
-        if ($node->callee === null && $node->name === 'file_put_contents') {
-            $pathCode = $node->args[0]->accept($this);
-            $dataCode = $node->args[1]->accept($this);
-            return 'tphp_fn_file_put_contents(' . $pathCode . '.data, ' . $dataCode . ')';
-        }
-
-        // array_search($needle, $haystack)
-        if ($node->callee === null && $node->name === 'array_search') {
-            $needle = $this->wrapVar($node->args[0]);
-            $arr    = $node->args[1]->accept($this);
-            return 'tphp_fn_arr_search(' . $arr . ', ' . $needle . ')';
-        }
-
-        // array_unique($arr)
-        if ($node->callee === null && $node->name === 'array_unique') {
-            $arrCode = $node->args[0]->accept($this);
-            return 'tphp_fn_arr_unique(' . $arrCode . ')';
-        }
-
-        // range($start, $end, $step=1)
-        if ($node->callee === null && $node->name === 'range') {
-            $start = $node->args[0]->accept($this);
-            $end   = $node->args[1]->accept($this);
-            $step  = isset($node->args[2]) ? $node->args[2]->accept($this) : '1';
-            return 'tphp_fn_range(' . $start . ', ' . $end . ', ' . $step . ')';
-        }
-
-        // array_fill($start_index, $count, $value)
-        if ($node->callee === null && $node->name === 'array_fill') {
-            $start = $node->args[0]->accept($this);
-            $count = $node->args[1]->accept($this);
-            $val   = $this->wrapArrayElement($node->args[2], $node->args[2]->accept($this));
-            return 'tphp_fn_arr_fill(' . $start . ', ' . $count . ', ' . $val . ')';
-        }
-
-        // implode($glue, $arr) → 用分隔符连接数组元素为字符串
-        if ($node->callee === null && ($node->name === 'implode' || $node->name === 'join')) {
-            $glue = $node->args[0]->accept($this);
-            $arr  = $node->args[1]->accept($this);
-            return 'tphp_fn_implode(' . $glue . ', ' . $arr . ')';
-        }
-
-        // explode($delim, $str) → 按分隔符切分字符串为数组
-        if ($node->callee === null && $node->name === 'explode') {
-            $delim = $node->args[0]->accept($this);
-            $str   = $node->args[1]->accept($this);
-            return 'tphp_fn_explode(' . $delim . ', ' . $str . ')';
-        }
-
-        // json_encode($val) → JSON 字符串
-        if ($node->callee === null && $node->name === 'json_encode') {
-            $valCode = $this->wrapVar($node->args[0]);
-            return 'tphp_fn_json_encode(' . $valCode . ')';
-        }
-
-        // json_decode($str) → mixed (t_var)
-        if ($node->callee === null && $node->name === 'json_decode') {
-            $strCode = $node->args[0]->accept($this);
-            return 'tphp_fn_json_decode(' . $strCode . ')';
-        }
-
         // var_export 内置函数 —— 转换为可读字符串输出
         if ($node->callee === null && $node->name === 'var_export') {
             return $this->generateVarExport($node->args);
-        }
-
-        // exit / die 内置函数 → tphp_fn_exit(code)
-        if ($node->callee === null && ($node->name === 'exit' || $node->name === 'die')) {
-            $args = array_map(fn($a) => $a->accept($this), $node->args);
-            $code = !empty($args) ? $args[0] : '0';
-            return 'tphp_fn_exit(' . $code . ')';
         }
 
         // error($msg) → 报错 + 清理所有资源 + 退出
@@ -2837,47 +2811,6 @@ class CodeGenerator implements ASTVisitor
             $line = !empty($node->args) ? ($node->args[0]->line ?? 0) : 0;
             $file = '"' . str_replace(['\\', '"'], ['/', '\"'], $this->phpFile) . '"';
             return 'tphp_fn_error(' . $msg . ', ' . $file . ', ' . $line . ')';
-        }
-
-        // time() → Unix 时间戳
-        if ($node->callee === null && $node->name === 'time') {
-            return 'tphp_fn_time()';
-        }
-
-        // date($format, $ts?) → 格式化时间
-        if ($node->callee === null && $node->name === 'date') {
-            $args = array_map(fn($a) => $a->accept($this), $node->args);
-            $fmt  = $args[0] ?? 'STR_LIT("%c")';
-            $ts   = $args[1] ?? '-1';  // -1 = not passed, use current time
-            return 'tphp_fn_date(' . $fmt . ', ' . $ts . ')';
-        }
-
-        // sleep($seconds)
-        if ($node->callee === null && $node->name === 'sleep') {
-            $args = array_map(fn($a) => $a->accept($this), $node->args);
-            $sec  = $args[0] ?? '0';
-            return 'tphp_fn_sleep(' . $sec . ')';
-        }
-
-        // usleep($microseconds)
-        if ($node->callee === null && $node->name === 'usleep') {
-            $args = array_map(fn($a) => $a->accept($this), $node->args);
-            $us = $args[0] ?? '0';
-            return 'tphp_fn_usleep(' . $us . ')';
-        }
-
-        // password_hash($pw, $algo, $options=[]) → options 默认 NULL
-        if ($node->callee === null && $node->name === 'password_hash') {
-            $args = array_map(fn($a) => $a->accept($this), $node->args);
-            $pw = $args[0] ?? 'STR_LIT("")';
-            $algo = $args[1] ?? '1';
-            $opts = $args[2] ?? 'NULL';
-            return "tphp_fn_password_hash({$pw}, {$algo}, {$opts})";
-        }
-
-        // hrtime() → 高分辨率时间（纳秒）
-        if ($node->callee === null && $node->name === 'hrtime') {
-            return 'tphp_fn_hrtime()';
         }
 
         // isset($var) → 非 null 检测（非指针类型始终 true）
@@ -2955,10 +2888,6 @@ class CodeGenerator implements ASTVisitor
             $c = count($a) > 0 ? $a[0] : '';
 
             // 特殊：需要类型转换或非标准 C 名
-            if ($n === 'uniqid' && empty($a)) return 'tphp_fn_uniqid0()';
-            if ($n === 'uniqid' && $c)        return "tphp_fn_uniqid({$c})";
-            if ($n === 'deg2rad' && $c)       return "tphp_fn_deg2rad((t_float)({$c}))";
-            if ($n === 'rad2deg' && $c)       return "tphp_fn_rad2deg((t_float)({$c}))";
             if ($n === 'gettype') {
                 $t0 = $this->inferType($node->args[0]);
                 $w = match ($t0) {
@@ -2977,35 +2906,12 @@ class CodeGenerator implements ASTVisitor
                 $tb = ($this->inferType($node->args[1]) === 't_int') ? "VAR_INT({$a[1]})" : "VAR_FLOAT((t_float)({$a[1]}))";
                 return "tphp_fn_pow({$ta}, {$tb})";
             }
-            if ($n === 'mktime')   return "tphp_fn_mktime({$a[0]},{$a[1]},{$a[2]},{$a[3]},{$a[4]},{$a[5]})";
-            // 默认参数
-            if ($n === 'str_split') {
-                $ck = count($a) >= 2 ? $a[1] : '1';
-                return "tphp_fn_str_split({$c}, {$ck})";
-            }
-            if ($n === 'str_pad') {
-                $pad = count($a) >= 3 ? $a[2] : '(t_string){NULL,0}';
-                $ty  = count($a) >= 4 ? $a[3] : '0';
-                return "tphp_fn_str_pad({$c}, {$a[1]}, {$pad}, {$ty})";
-            }
-            // 非标准 C 名
-            if ($n === 'is_numeric')   return "tphp_fn_is_numeric_str({$c})";
-            if ($n === 'array_is_list') return "tphp_fn_array_is_list_int({$c})";
-            if ($n === 'crc32')        return "tphp_fn_crc32_str({$c})";
-            if ($n === 'array_column') return "tphp_fn_array_column_str({$a[0]}, {$a[1]})";
             if ($n === 'strtr') {
                 if (count($a) >= 3) return "tphp_fn_strtr2({$a[0]}, {$a[1]}, {$a[2]})";
                 return $c;
             }
 
             // PHPC 互操作函数：加 tphp_fn_ 前缀
-            $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
-                        'phpc_arr_int','phpc_arr_dbl','phpc_arr_str','phpc_new_arr_int',
-                        'phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
-                        'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_free','phpc_free_str_arr',
-                        'phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
-                        'phpc_new_fn','phpc_new_fn_env','phpc_thunk',
-                        'phpc_assert_ptr','phpc_obj_steal','phpc_env_pin','phpc_env_unpin'];
             $shortN = strrchr($n, '\\') !== false ? substr(strrchr($n, '\\'), 1) : $n;
             if (in_array($shortN, $phpcFns, true)) {
                 // phpc_thunk 特殊处理：按 #callback 声明生成 thunk
@@ -3048,53 +2954,6 @@ class CodeGenerator implements ASTVisitor
                 $optCode = $a[2] ?? '0';
                 return "tphp_fn_filter_var({$valVar}, {$filterCode}, {$optCode})";
             }
-            // filter_list(): array → tphp_fn_filter_list()
-            if ($shortN === 'filter_list') {
-                return 'tphp_fn_filter_list()';
-            }
-            // filter_id(string $name): int → tphp_fn_filter_id(name)
-            if ($shortN === 'filter_id') {
-                return 'tphp_fn_filter_id(' . implode(', ', $a) . ')';
-            }
-
-            // ── iconv 系列内置函数 (含可选参数 → C 函数不支持默认值，需分发) ──
-            // iconv_strlen($str, $charset="UTF-8")
-            if ($shortN === 'iconv_strlen') {
-                $args = [ $a[0], $a[1] ?? 'STR_LIT("UTF-8")' ];
-                return 'tphp_fn_iconv_strlen(' . implode(', ', $args) . ')';
-            }
-            // iconv_strpos($h, $n, $offset=0, $charset="UTF-8")
-            if ($shortN === 'iconv_strpos') {
-                $args = [ $a[0], $a[1], $a[2] ?? '0', $a[3] ?? 'STR_LIT("UTF-8")' ];
-                return 'tphp_fn_iconv_strpos(' . implode(', ', $args) . ')';
-            }
-            // iconv_substr($str, $offset, $length=0, $charset="UTF-8")
-            if ($shortN === 'iconv_substr') {
-                $args = [ $a[0], $a[1], $a[2] ?? '0', $a[3] ?? 'STR_LIT("UTF-8")' ];
-                return 'tphp_fn_iconv_substr(' . implode(', ', $args) . ')';
-            }
-            // iconv_get_encoding($type="all") — 始终返回完整数组，type 参数被忽略
-            if ($shortN === 'iconv_get_encoding') {
-                return 'tphp_fn_iconv_get_encoding(' . ($a[0] ?? 'STR_LIT("all")') . ')';
-            }
-            // iconv_set_encoding($type, $encoding)
-            if ($shortN === 'iconv_set_encoding') {
-                return 'tphp_fn_iconv_set_encoding(' . implode(', ', $a) . ')';
-            }
-            // iconv($from, $to, $str)
-            if ($shortN === 'iconv') {
-                return 'tphp_fn_iconv(' . implode(', ', $a) . ')';
-            }
-            // iconv_mime_encode($field_name, $field_value, $prefs=[])
-            if ($shortN === 'iconv_mime_encode') {
-                $args = [ $a[0], $a[1], $a[2] ?? 'NULL' ];
-                return 'tphp_fn_iconv_mime_encode(' . implode(', ', $args) . ')';
-            }
-            // iconv_mime_decode($str, $mode=0, $charset="UTF-8")
-            if ($shortN === 'iconv_mime_decode') {
-                $args = [ $a[0], $a[1] ?? '0', $a[2] ?? 'STR_LIT("UTF-8")' ];
-                return 'tphp_fn_iconv_mime_decode(' . implode(', ', $args) . ')';
-            }
 
             // 通用回退：tphp_fn_函数名(参数) — C 编译器兜底
             // 全局函数: tphp_fn_name, 命名空间函数: tphp_na_Ns_tphp_fn_name
@@ -3106,21 +2965,22 @@ class CodeGenerator implements ASTVisitor
             }
             // 检查是否有默认值参数，选择正确的重载版本
             $argCount = count($node->args);
-            $defaultCount = $this->funcDefaultCounts[$fnName] ?? 0;
+            $fnInfo = $this->symbols->getFunc($fnName);
+            $defaultCount = $fnInfo !== null ? $fnInfo->defaultCount : 0;
             if ($defaultCount > 0) {
                 // 获取总参数数量
-                $totalParams = count($this->funcParamTypes[$fnName] ?? []);
+                $totalParams = $fnInfo !== null ? count($fnInfo->paramTypes) : 0;
                 if ($totalParams > 0 && $argCount < $totalParams) {
                     // 使用重载版本：fnName_缺失参数数量
                     $missingCount = $totalParams - $argCount;
                     $fnName = $fnName . '_' . $missingCount;
                     // 更新参数类型列表（重载版本只有前 argCount 个参数）
-                    $pTypes = array_slice($this->funcParamTypes[$fnName] ?? [], 0, $argCount);
+                    $pTypes = array_slice($this->symbols->getFuncParams($fnName), 0, $argCount);
                 } else {
-                    $pTypes = $this->funcParamTypes[$fnName] ?? [];
+                    $pTypes = $fnInfo !== null ? $fnInfo->paramTypes : [];
                 }
             } else {
-                $pTypes = $this->funcParamTypes[$fnName] ?? [];
+                $pTypes = $fnInfo !== null ? $fnInfo->paramTypes : [];
             }
             if (empty($a)) return "{$fnName}()";
             // byRef 参数：形参是指针时要正确传参
@@ -3179,14 +3039,6 @@ class CodeGenerator implements ASTVisitor
                 throw new \RuntimeException("Unknown callback: #callback {$cbName} not declared");
             }
 
-            $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
-                'phpc_arr_int','phpc_arr_dbl','phpc_arr_str',
-                'phpc_new_arr_int','phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
-                'phpc_obj','phpc_new_obj','phpc_unregister_obj',
-                'phpc_fn','phpc_env','phpc_new_fn','phpc_new_fn_env',
-                'phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
-                'phpc_free','phpc_free_str_arr',
-                'phpc_assert_ptr','phpc_obj_steal','phpc_env_pin','phpc_env_unpin'];
             if (in_array($baseName, $phpcFns, true)) {
                 return $baseName . '(' . implode(', ', $args) . ')';
             }
@@ -3221,12 +3073,12 @@ class CodeGenerator implements ASTVisitor
         // Strip trailing * + resolve parent class for inherited methods
         $cnClean = rtrim($cn, '*');
         $useParent = false;
-        if ($cnClean !== '' && !isset($this->classMethodRetTypes[$cnClean][$node->name])) {
+        if ($cnClean !== '' && $this->symbols->getClassMethod($cnClean, $node->name) === null) {
             $parentCN = $this->resolveMethodClass($cnClean, $node->name);
             if ($parentCN !== '') { $cnClean = $parentCN; $useParent = true; }
         }
         // 校验方法存在性：未定义的方法直接报错，不生成无效 C 代码
-        if ($cnClean !== '' && !isset($this->classMethodRetTypes[$cnClean][$node->name])
+        if ($cnClean !== '' && $this->symbols->getClassMethod($cnClean, $node->name) === null
             && $node->name !== '__construct' && $node->name !== '__destruct') {
             throw new \RuntimeException(sprintf(
                 "[%d:%d] Call to undefined method %s::%s()",
@@ -3236,10 +3088,20 @@ class CodeGenerator implements ASTVisitor
         // If method is inherited, pass &obj->_parent as self
         $selfArg = $useParent ? ('&' . $callee . '->_parent') : $callee;
         $allArgs[0] = $selfArg;
-        $call = "{$cnClean}_{$node->name}(" . implode(', ', $allArgs) . ')';
+        // 选择重载版本：有默认值参数且实参数量 < 总参数时，使用 fnName_缺失数 重载
+        $methodCName = "{$cnClean}_{$node->name}";
+        $argCount = count($node->args);
+        $mInfoForDefault = $this->symbols->getClassMethod($cnClean, $node->name);
+        if ($mInfoForDefault !== null && $mInfoForDefault->defaultCount > 0
+            && $argCount < $mInfoForDefault->totalParams) {
+            $missingCount = $mInfoForDefault->totalParams - $argCount;
+            $methodCName = $methodCName . '_' . $missingCount;
+        }
+        $call = "{$methodCName}(" . implode(', ', $allArgs) . ')';
         // nullsafe ?-> : wrap in NULL check with temp variable
         if ($node->isNullsafe) {
-            $ret = $this->classMethodRetTypes[$cnClean][$node->name] ?? 't_int';
+            $mInfo = $this->symbols->getClassMethod($cnClean, $node->name);
+            $ret = $mInfo !== null ? $mInfo->retType : 't_int';
             if ($ret === 'void') {
                 return "({ if ((void*){$callee} != NULL) {{ {$call}; }} })";
             }
@@ -3310,9 +3172,9 @@ class CodeGenerator implements ASTVisitor
         $paramTypes = (empty($inferred) ? '' : implode(', ', $inferred) . ', ') . 'void*';
         if ($callee instanceof VariableExpr) {
             $varName = self::varName($callee->name);
-            $fnName = $this->varClosureMap[$varName] ?? '';
-            if ($fnName && isset($this->closureSigs[$fnName])) {
-                $sig = $this->closureSigs[$fnName];
+            $fnName = $this->symbols->getVarClosure($varName) ?? '';
+            if ($fnName && $this->symbols->getClosureSig($fnName) !== null) {
+                $sig = $this->symbols->getClosureSig($fnName);
                 $retType = $sig['ret'];
                 $paramTypes = $sig['params'] ? $sig['params'] . ', void*' : 'void*';
             }
@@ -3333,9 +3195,9 @@ class CodeGenerator implements ASTVisitor
         }
         if ($expr instanceof VariableExpr) {
             $varName = self::varName($expr->name);
-            $fnName = $this->varClosureMap[$varName] ?? '';
-            if ($fnName && isset($this->closureSigs[$fnName])) {
-                $sig = $this->closureSigs[$fnName];
+            $fnName = $this->symbols->getVarClosure($varName) ?? '';
+            if ($fnName && $this->symbols->getClosureSig($fnName) !== null) {
+                $sig = $this->symbols->getClosureSig($fnName);
                 $params = $sig['params'] !== '' ? array_map('trim', explode(',', $sig['params'])) : [];
                 return ['ret' => $sig['ret'], 'params' => $params];
             }
@@ -3501,9 +3363,9 @@ class CodeGenerator implements ASTVisitor
         }
         if ($expr instanceof PropertyAccessExpr) {
             $code = $expr->accept($this);
-            // 类常量访问 → 查 constTypes
+            // 类常量访问 → 查 SymbolTable
             if (str_starts_with($code, 'TPHP_CONST_')) {
-                $ct = $this->constTypes[$code] ?? $this->constTypes[strtoupper(substr($code, 12))] ?? 't_int';
+                $ct = $this->symbols->getConstType($code) ?? $this->symbols->getConstType(strtoupper(substr($code, 12))) ?? 't_int';
                 return match ($ct) {
                     't_string' => "VAR_STRING({$code})",
                     't_float'  => "VAR_FLOAT({$code})",
@@ -3537,7 +3399,7 @@ class CodeGenerator implements ASTVisitor
             // 常量引用（原始名字不以 $ 开头）—— 根据类型选择 VAR_*
             if (!str_starts_with($expr->name, '$')) {
                 $cname = 'TPHP_CONST_' . strtoupper($expr->name);
-                $ct = $this->constTypes[$expr->name] ?? 't_string';
+                $ct = $this->symbols->getConstType($expr->name) ?? 't_string';
                 return match ($ct) {
                     't_int'    => "VAR_INT({$cname})",
                     't_float'  => "VAR_FLOAT({$cname})",
@@ -3731,7 +3593,7 @@ class CodeGenerator implements ASTVisitor
             // tphp_class_Dog* → tphp_class_Dog
             $objCN = rtrim($objType, '*');
         }
-        if ($objCN !== '' && !isset($this->classOwnProps[$objCN][$prop])) {
+        if ($objCN !== '' && !$this->symbols->hasClassOwnProp($objCN, $prop)) {
             // 枚举类型直接访问字段（无 COS _parent 包装）
             if (str_starts_with($objCN, 'tphp_enum_')) {
                 return $obj . '->' . $prop;
@@ -3753,10 +3615,10 @@ class CodeGenerator implements ASTVisitor
                 return 'TPHP_CONST_' . $cn . '_' . strtoupper($prop);
             }
             // ClassName::CONST — 解析类名，检查可见性
-            $cname = $this->classNames[$rawObjName] ?? null;
+            $cname = $this->symbols->resolveClass($rawObjName);
             if ($cname !== null) {
                 $fullCName = 'TPHP_CONST_' . strtoupper($cname . '_' . $prop);
-                $vis = $this->constVis[$cname . '_' . $prop] ?? 'public';
+                $vis = $this->symbols->getConstVis($cname . '_' . $prop);
                 if ($vis !== 'public' && $vis !== null) {
                     throw new \RuntimeException(
                         "Cannot access {$vis} const {$rawObjName}::{$prop}"
@@ -3794,7 +3656,7 @@ class CodeGenerator implements ASTVisitor
         } else {
             $ct = $litCType ?? 't_int';
         }
-        $this->constTypes[$node->name] = $ct;
+        $this->symbols->addConst($node->name, $ct);
         if ($node->value instanceof StringLiteralExpr) {
             $val = str_replace('"', '\\"', $node->value->value);
             return '#define ' . $name . ' STR_LIT("' . $val . '")';
@@ -3827,10 +3689,8 @@ class CodeGenerator implements ASTVisitor
         }
         $cValueType = ($node->backingType === 'int') ? 't_int' : 't_string';
 
-        $this->enumBackingTypes[$fqName] = $node->backingType;
-        $this->enumBackingTypes[$node->name] = $node->backingType;
-        $this->enumCTypes[$fqName] = $cName . '*';
-        $this->enumCTypes[$node->name] = $cName . '*';
+        $this->symbols->addEnum($fqName, $node->backingType, $cName . '*');
+        $this->symbols->addEnum($node->name, $node->backingType, $cName . '*');
 
         // 将命名空间分隔符转为 C 标识符前缀
         $prefix = self::mangleCName($fqName);
@@ -4764,10 +4624,13 @@ class CodeGenerator implements ASTVisitor
                     ? $this->className
                     : ($this->varTypes[$objKey] ?? '');
                 $objClean = rtrim($objType, '*'); // COS objects always have *
-                if ($objClean !== '' && isset($this->classMethodRetTypes[$objClean])) {
-                    $retType = $this->classMethodRetTypes[$objClean][$expr->name] ?? '';
-                    if ($retType === 't_string') return $code;
-                    if ($retType === 't_float') return "tphp_rt_str_from_float({$code})";
+                if ($objClean !== '') {
+                    $mInfo = $this->symbols->getClassMethod($objClean, $expr->name);
+                    if ($mInfo !== null) {
+                        $retType = $mInfo->retType;
+                        if ($retType === 't_string') return $code;
+                        if ($retType === 't_float') return "tphp_rt_str_from_float({$code})";
+                    }
                 }
             }
         }
@@ -4904,9 +4767,11 @@ class CodeGenerator implements ASTVisitor
         if ($cn === '' && $call->callee instanceof VariableExpr && self::varName($call->callee->name) === 'self') {
             $cn = $this->className;
         }
-        if ($cn !== '' && isset($this->methodParamTypes[$cn][$call->name])) {
-            $params = $this->methodParamTypes[$cn][$call->name];
-            return $params[$idx] ?? '';
+        if ($cn !== '') {
+            $mInfo = $this->symbols->getClassMethod($cn, $call->name);
+            if ($mInfo !== null) {
+                return $mInfo->paramTypes[$idx] ?? '';
+            }
         }
         return '';
     }
@@ -4937,12 +4802,14 @@ class CodeGenerator implements ASTVisitor
             };
         }
         // 枚举类型 → 返回 C struct 指针类型
-        if (isset($this->enumCTypes[$t])) {
-            return $this->enumCTypes[$t];
+        $enumCType = $this->symbols->getEnumCType($t);
+        if ($enumCType !== null) {
+            return $enumCType;
         }
         // 用户定义的类名 → tphp_class_XXX*
-        if (isset($this->classNames[$t])) {
-            return $this->classNames[$t] . '*';
+        $resolved = $this->symbols->resolveClass($t);
+        if ($resolved !== null) {
+            return $resolved . '*';
         }
         return self::$typeMap[$t] ?? "{$t}*";
     }
@@ -5050,7 +4917,7 @@ class CodeGenerator implements ASTVisitor
 
     /** 查询枚举名对应的 backing 类型 ('int'|'string') */
     private function enumBackingType(string $name): string {
-        return $this->enumBackingTypes[$name] ?? 'int';
+        return $this->symbols->getEnumBacking($name);
     }
 
     /** 将 PHP 命名空间名转为 C 标识符: Demo\Foo → Demo_Foo */
@@ -5073,9 +4940,9 @@ class CodeGenerator implements ASTVisitor
     private function resolveMethodClass(string $cn, string $method): string
     {
         $cur = $cn;
-        while (isset($this->classParentName[$cur]) && $this->classParentName[$cur] !== '') {
-            $cur = $this->classParentName[$cur];
-            if (isset($this->classMethodRetTypes[$cur][$method])) return $cur;
+        while ($this->symbols->hasClass($cur) && $this->symbols->getClassParent($cur) !== '') {
+            $cur = $this->symbols->getClassParent($cur);
+            if ($this->symbols->getClassMethod($cur, $method) !== null) return $cur;
         }
         return '';
     }
@@ -5085,9 +4952,9 @@ class CodeGenerator implements ASTVisitor
     {
         $prefix = '';
         $cur = $cn;
-        while (isset($this->classParentName[$cur]) && $this->classParentName[$cur] !== '') {
-            $cur = $this->classParentName[$cur];
-            if (isset($this->classOwnProps[$cur][$prop])) {
+        while ($this->symbols->hasClass($cur) && $this->symbols->getClassParent($cur) !== '') {
+            $cur = $this->symbols->getClassParent($cur);
+            if ($this->symbols->hasClassOwnProp($cur, $prop)) {
                 return $prefix;
             }
             $prefix .= '_parent.';

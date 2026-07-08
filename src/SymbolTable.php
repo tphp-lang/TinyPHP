@@ -16,6 +16,8 @@ class MethodInfo
         public readonly array  $paramTypes = [],
         public readonly bool   $isStatic = false,
         public readonly string $visibility = 'public',
+        public readonly int $defaultCount = 0,
+        public readonly int $totalParams = 0,
     ) {}
 }
 
@@ -46,6 +48,7 @@ class FunctionInfo
         public readonly int $defaultCount = 0,
         /** @var int 总参数数量 */
         public readonly int $totalParams = 0,
+        public readonly bool $isGenerator = false,
     ) {}
 }
 
@@ -170,6 +173,12 @@ class SymbolTable
     public function getEnumCType(string $name): ?string
     {
         return $this->enums[$name]['cType'] ?? null;
+    }
+
+    /** @return array<string,string> name => cType */
+    public function allEnums(): array
+    {
+        return array_map(fn($i) => $i['cType'], $this->enums);
     }
 
     // ──────────────────────────────────────────────────────────
@@ -331,5 +340,8 @@ class SymbolTable
         $this->closureSigs = [];
         $this->varClosureMap = [];
         $this->scopeObjects = [];
+        $this->scopeStrings = [];
+        $this->scopeArrays = [];
+        $this->returnedVars = [];
     }
 }

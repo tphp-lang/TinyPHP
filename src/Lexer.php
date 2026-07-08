@@ -544,21 +544,203 @@ class Lexer
 
     private function scanNumber(): void
     {
-        $num = '';
-        $isFloat = false;
-        while ($this->pos < strlen($this->source) && (ctype_digit($this->peek()) || $this->peek() === '.')) {
-            if ($this->peek() === '.') {
-                if ($isFloat) break;
-                $isFloat = true;
+        $ch = $this->peek();
+
+        // 前缀字面量: 0x / 0b / 0o（仅当首字符为 '0' 时检测）
+        if ($ch === '0' && $this->pos + 1 < strlen($this->source)) {
+            $next = $this->peek(1);
+            if ($next === 'x' || $next === 'X') {
+                $this->scanHexNumber();
+                return;
             }
-            $num .= $this->peek();
-            $this->advance();
+            if ($next === 'b' || $next === 'B') {
+                $this->scanBinaryNumber();
+                return;
+            }
+            if ($next === 'o' || $next === 'O') {
+                $this->scanOctalNumber();
+                return;
+            }
         }
 
+        $this->scanDecimalNumber();
+    }
+
+    /** 十六进制: 0x[0-9a-fA-F_]+ */
+    private function scanHexNumber(): void
+    {
+        $lexeme = '0x';
+        $this->advance(2);
+
+        $digits = '';
+        while ($this->pos < strlen($this->source)) {
+            $c = $this->peek();
+            if (ctype_xdigit($c)) {
+                $digits .= $c;
+                $lexeme .= $c;
+                $this->advance();
+            } elseif ($c === '_') {
+                if ($digits === '') {
+                    $this->error("Invalid hex literal: underscore cannot follow prefix '0x'");
+                }
+                $next = $this->peek(1);
+                if (!ctype_xdigit($next)) {
+                    $this->error("Invalid hex literal: underscore must be followed by a hex digit");
+                }
+                $lexeme .= '_';
+                $this->advance();
+            } else {
+                break;
+            }
+        }
+
+        if ($digits === '') {
+            $this->error("Invalid hex literal: missing digits after '0x'");
+        }
+
+        $value = intval(str_replace('_', '', $digits), 16);
+        $this->addToken(TokenType::INT_LIT, $lexeme, $value);
+    }
+
+    /** 二进制: 0b[01_]+ */
+    private function scanBinaryNumber(): void
+    {
+        $lexeme = '0b';
+        $this->advance(2);
+
+        $digits = '';
+        while ($this->pos < strlen($this->source)) {
+            $c = $this->peek();
+            if ($c === '0' || $c === '1') {
+                $digits .= $c;
+                $lexeme .= $c;
+                $this->advance();
+            } elseif ($c === '_') {
+                if ($digits === '') {
+                    $this->error("Invalid binary literal: underscore cannot follow prefix '0b'");
+                }
+                $next = $this->peek(1);
+                if ($next !== '0' && $next !== '1') {
+                    $this->error("Invalid binary literal: underscore must be followed by a binary digit");
+                }
+                $lexeme .= '_';
+                $this->advance();
+            } else {
+                break;
+            }
+        }
+
+        if ($digits === '') {
+            $this->error("Invalid binary literal: missing digits after '0b'");
+        }
+
+        $value = intval(str_replace('_', '', $digits), 2);
+        $this->addToken(TokenType::INT_LIT, $lexeme, $value);
+    }
+
+    /** 八进制: 0o[0-7_]+ */
+    private function scanOctalNumber(): void
+    {
+        $lexeme = '0o';
+        $this->advance(2);
+
+        $digits = '';
+        while ($this->pos < strlen($this->source)) {
+            $c = $this->peek();
+            if ($c >= '0' && $c <= '7') {
+                $digits .= $c;
+                $lexeme .= $c;
+                $this->advance();
+            } elseif ($c === '_') {
+                if ($digits === '') {
+                    $this->error("Invalid octal literal: underscore cannot follow prefix '0o'");
+                }
+                $next = $this->peek(1);
+                if ($next < '0' || $next > '7') {
+                    $this->error("Invalid octal literal: underscore must be followed by an octal digit");
+                }
+                $lexeme .= '_';
+                $this->advance();
+            } else {
+                break;
+            }
+        }
+
+        if ($digits === '') {
+            $this->error("Invalid octal literal: missing digits after '0o'");
+        }
+
+        $value = intval(str_replace('_', '', $digits), 8);
+        $this->addToken(TokenType::INT_LIT, $lexeme, $value);
+    }
+
+    /** 十进制（含小数、科学计数、下划线分隔） */
+    private function scanDecimalNumber(): void
+    {
+        $num = '';
+        $isFloat = false;
+
+        // 整数部分
+        while ($this->pos < strlen($this->source)) {
+            $c = $this->peek();
+            if (ctype_digit($c)) {
+                $num .= $c;
+                $this->advance();
+            } elseif ($c === '_' && $num !== '' && ctype_digit($num[-1]) && ctype_digit($this->peek(1))) {
+                $num .= '_';
+                $this->advance();
+            } else {
+                break;
+            }
+        }
+
+        // 小数部分（保留原有行为：紧邻数字的 '.' 作为小数点）
+        if ($this->peek() === '.') {
+            $isFloat = true;
+            $num .= '.';
+            $this->advance();
+            while ($this->pos < strlen($this->source)) {
+                $c = $this->peek();
+                if (ctype_digit($c)) {
+                    $num .= $c;
+                    $this->advance();
+                } elseif ($c === '_' && $num !== '' && ctype_digit($num[-1]) && ctype_digit($this->peek(1))) {
+                    $num .= '_';
+                    $this->advance();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // 指数部分: e/E [+-]? [0-9]+
+        if ($this->peek() === 'e' || $this->peek() === 'E') {
+            $sign = '';
+            $offset = 1;
+            if ($this->peek(1) === '+' || $this->peek(1) === '-') {
+                $sign = $this->peek(1);
+                $offset = 2;
+            }
+            if (ctype_digit($this->peek($offset))) {
+                $isFloat = true;
+                $num .= $this->peek(); // e/E
+                $this->advance();
+                if ($sign !== '') {
+                    $num .= $sign;
+                    $this->advance();
+                }
+                while ($this->pos < strlen($this->source) && ctype_digit($this->peek())) {
+                    $num .= $this->peek();
+                    $this->advance();
+                }
+            }
+        }
+
+        $cleaned = str_replace('_', '', $num);
         if ($isFloat) {
-            $this->addToken(TokenType::FLOAT_LIT, $num, (float)$num);
+            $this->addToken(TokenType::FLOAT_LIT, $num, (float)$cleaned);
         } else {
-            $this->addToken(TokenType::INT_LIT, $num, (int)$num);
+            $this->addToken(TokenType::INT_LIT, $num, (int)$cleaned);
         }
     }
 

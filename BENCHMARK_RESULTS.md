@@ -96,6 +96,15 @@
 | 13 | **JSON 快速 int 格式化** | yyjso digit_table + 乘法逆除法, 2.5x↑ |
 | 14 | **字符串键哈希索引** (arr_stridx) | 50键查询 4x↑, 1000键查询 270x↑ (O(n)→O(1)) |
 | 15 | **SSO 比较修复** (_tphp_cmp_var) | ksort 不再崩溃, 动态键排序正确 |
+| 16 | **SymbolTable 迁移完成** | 删除 16 个 legacy 数组 + 43 处 write-back, 消除技术债 |
+| 17 | **pcre ReDoS 防护** (backtrack limit) | 恶意模式安全失败, 不再阻塞进程 (TP_BACKTRACK_LIMIT=1M) |
+| 18 | **pcntl/posix 异常化** | Windows 路径改 tp_throw, 可 try-catch 处理 |
+| 19 | **visitCall 简单转发映射表** ($simpleFnMap) | 55+ 内置函数抽取到映射表, visitCall 主流程简化 |
+| 20 | **inferCallReturnType 编译错误** | 未注册 C-only 函数从静默 t_int 改为 LogicException, 防指针截断 |
+| 21 | **Lexer 数字字面量** (hex/binary/octal/科学计数/下划线) | 0x1F/0b101/1e10/1_000 正确解析, PHP 兼容 |
+| 22 | **ext_str.h 公共头** | 3 个扩展共享 ext_mk_str/ext_mk_substr, 消除重复定义 |
+| 23 | **core.h 去重** | 删除 4 个孤儿文件 (output/type/string/array_core.h) |
+| 24 | **默认值支持表达式** | 参数/属性默认值支持任意常量表达式 (1+2, "a"."b", 0xFF|0x10); 方法调用重载选择 |
 
 ---
 

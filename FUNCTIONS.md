@@ -580,7 +580,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
 |------|--------|------|------|
-| `pcntl_fork(): int` | `pcntl_fork(): int` | `fork()`，O(1) | Windows 直接 `exit(1)` |
+| `pcntl_fork(): int` | `pcntl_fork(): int` | `fork()`，O(1) | Windows 抛 `tp_throw` 异常（可 try-catch） |
 | `pcntl_waitpid(int $pid, int &$status, int $flags = 0, array &$resource_usage = []): int` | `pcntl_waitpid(int $pid, int &$status, int $flags): int` | `waitpid()` | — |
 | `pcntl_wait(int &$status, int $flags = 0, array &$resource_usage = []): int` | `pcntl_wait(int &$status): int` | `wait()` | 无 `$flags` 参数 |
 | `pcntl_exec(string $path, array $args = [], array $env_vars = []): bool` | `pcntl_exec(string $path): void` | `execv(path, {path, NULL})` | 仅 1 参（无 `$args`/`$env_vars`）；argv 固定为 `{path, NULL}` |
@@ -619,6 +619,8 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 纯 C NFA VM 正则引擎（Russ Cox 模型，12 条指令），不依赖外部 PCRE2 库。128 位 bitset ASCII 字符类、Boyer-Moore 前缀跳过、32 槽 LRU 编译缓存。
 
+**ReDoS 防护**：`tp_vm_match` 内置回溯计数器，超限（`TP_BACKTRACK_LIMIT=1000000`）设置 `backtrack_limit_exceeded` 标志，`tp_find_from` 检测后提前退出，5 个 `preg_*` 函数设置 `g_pcre_last_error = PREG_BACKTRACK_LIMIT_ERROR`。恶意模式（如 `(a+)+$`）会安全失败而非阻塞进程。
+
 **与 PHP 差异**：`preg_match` / `preg_match_all` 返回匹配数组（空=无匹配）而非 `int + byRef $matches`；所有参数必须显式传入（AOT 不支持默认参数值 / byRef 输出参数）；不支持 `preg_replace_callback`；`\a`=`[a-z]`（PHP 为 BEL 0x07）、`\A`=`[A-Z]`（PHP 为字符串起始）；`i` 标志仅 ASCII 大小写折叠；不支持 lookahead / lookbehind / 原子组 `(?>)` / 占有量词 `*+` / Unicode 属性类 `\p{}`。
 
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
@@ -656,7 +658,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `PREG_GREP_INVERT` | 1 | `preg_grep` 反转结果 |
 | `PREG_NO_ERROR` | 0 | 无错误 |
 | `PREG_INTERNAL_ERROR` | 1 | 内部错误 |
-| `PREG_BACKTRACK_LIMIT_ERROR` | 2 | 回溯限制（未启用） |
+| `PREG_BACKTRACK_LIMIT_ERROR` | 2 | 回溯超限（`TP_BACKTRACK_LIMIT=1000000`） |
 | `PREG_RECURSION_LIMIT_ERROR` | 3 | 递归限制（未启用） |
 
 ---
