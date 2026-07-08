@@ -1257,9 +1257,16 @@ class Parser
         if ($t1->type === TokenType::IDENTIFIER && !str_starts_with($t1->lexeme, '$')) {
             $t2 = $this->peek(1);
             // C.Type $x = ...
+            // 注意: C.int/C.float 等的 int/float 是 TYPE_* 关键字，不是 IDENTIFIER
             if ($t2->type === TokenType::DOT) {
                 $t3 = $this->peek(2);
-                if ($t3->type !== TokenType::IDENTIFIER) return false;
+                $validCTypeTokens = [
+                    TokenType::IDENTIFIER,
+                    TokenType::TYPE_INT, TokenType::TYPE_FLOAT,
+                    TokenType::TYPE_STRING, TokenType::TYPE_BOOL,
+                    TokenType::TYPE_VOID,
+                ];
+                if (!in_array($t3->type, $validCTypeTokens, true)) return false;
                 $t4 = $this->peek(3);
                 return $t4->type === TokenType::IDENTIFIER
                     && str_starts_with($t4->lexeme, '$');
@@ -1953,10 +1960,18 @@ class Parser
 
         // C 类型: C.IDENTIFIER（如 C.FILE, C.int, C.char_ptr, C.void_ptr）
         // 借鉴 vlang 的 C.TypeName 命名空间前缀设计
+        // 注意: C.int/C.float/C.string/C.bool 中的 int/float/string/bool 是 TYPE_* 关键字，
+        // 不是 IDENTIFIER，需要单独接受
         if ($result === 'C' && $this->check(TokenType::DOT)) {
             $this->advance(); // 消费 '.'
             $memberToken = $this->advance();
-            if ($memberToken->type !== TokenType::IDENTIFIER) {
+            $validCTypeTokens = [
+                TokenType::IDENTIFIER,
+                TokenType::TYPE_INT, TokenType::TYPE_FLOAT,
+                TokenType::TYPE_STRING, TokenType::TYPE_BOOL,
+                TokenType::TYPE_VOID,
+            ];
+            if (!in_array($memberToken->type, $validCTypeTokens, true)) {
                 $this->error("Expected C type name after 'C.', got '{$memberToken->lexeme}'");
             }
             return 'C.' . $memberToken->lexeme;

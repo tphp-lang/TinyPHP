@@ -44,6 +44,8 @@ class Main
 int $x = 42;           // 等价于 $x = 42;
 string $s = "hello";
 Point $p = new Point(1, 2);
+callable $fn = function(int $a): int { return $a; };
+C.FILE $f = c_open("file.txt");   // phpc 互操作 C 类型
 
 // 全局/命名空间常量（可选类型标记）
 const int MAX = 100;   // 等价于 const MAX = 100;
