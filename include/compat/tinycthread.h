@@ -98,27 +98,15 @@
   #endif
   #include <windows.h>
   #include <process.h>   /* _beginthreadex */
-  /* TCC 的 windows.h 缺少 SRWLOCK / CONDITION_VARIABLE — 手动补充。
-   * GCC/Clang (MSYS2) 的 windows.h 已包含完整定义，跳过以避免冲突。 */
-  #if defined(__TINYC__) && !defined(_TTHREAD_HAVE_SRWLOCK)
-    typedef struct _TTHREAD_SRWLOCK {
-      PVOID Ptr;
-    } SRWLOCK, *PSRWLOCK;
-    #define SRWLOCK_INIT {0}
-    WINBASEAPI void    WINAPI InitializeSRWLock(PSRWLOCK Lock);
-    WINBASEAPI void    WINAPI AcquireSRWLockExclusive(PSRWLOCK Lock);
-    WINBASEAPI void    WINAPI ReleaseSRWLockExclusive(PSRWLOCK Lock);
-    WINBASEAPI BOOLEAN WINAPI TryAcquireSRWLockExclusive(PSRWLOCK Lock);
-  #endif
-  #if defined(__TINYC__) && !defined(_TTHREAD_HAVE_CONDVAR)
-    typedef struct _TTHREAD_CONDITION_VARIABLE {
-      PVOID Ptr;
-    } CONDITION_VARIABLE, *PCONDITION_VARIABLE;
-    WINBASEAPI void WINAPI InitializeConditionVariable(PCONDITION_VARIABLE Cond);
-    WINBASEAPI void WINAPI WakeConditionVariable(PCONDITION_VARIABLE Cond);
-    WINBASEAPI void WINAPI WakeAllConditionVariable(PCONDITION_VARIABLE Cond);
-    WINBASEAPI BOOL  WINAPI SleepConditionVariableSRW(PCONDITION_VARIABLE Cond, PSRWLOCK Lock, DWORD ms, ULONG flags);
-    WINBASEAPI BOOL  WINAPI SleepConditionVariableCS(PCONDITION_VARIABLE Cond, LPCRITICAL_SECTION Lock, DWORD ms);
+  /* 同步原语选择：
+   *   GCC/Clang (MSYS2) → 原生 SRWLOCK + CONDITION_VARIABLE（windows.h 提供，链接器有导出）
+   *   TCC              → CRITICAL_SECTION + 信号量模拟（TCC 自带 kernel32.def 未导出 Vista+ 函数）
+   * TCC 的 windows.h 虽然缺 SRWLOCK/CV 声明，但不能手动补声明——链接阶段会报
+   * unresolved reference（kernel32.def 无这些符号）。故 TCC 走纯 CS+sem 路径。 */
+  #if !defined(__TINYC__)
+    #define TPHP_WIN_NATIVE_SYNC 1   /* 用 SRWLOCK + CONDITION_VARIABLE */
+  #else
+    #define TPHP_WIN_NATIVE_SYNC 0   /* 用 CRITICAL_SECTION + 信号量 */
   #endif
 #endif
 
@@ -191,22 +179,41 @@
 
 /* ── Mutex ── */
 #if defined(_TTHREAD_WIN32_)
-  /* 优化：非递归用 SRWLOCK（指针大小），递归用 CRITICAL_SECTION */
-  typedef struct {
-    int               mRecursive;  /* 1=递归(CRITICAL_SECTION), 0=非递归(SRWLOCK) */
-    SRWLOCK           mLock;       /* 非递归锁 */
-    CRITICAL_SECTION  mRecLock;    /* 递归锁 */
-  } mtx_t;
+  #if TPHP_WIN_NATIVE_SYNC
+    /* GCC/Clang: 非递归用 SRWLOCK（指针大小），递归用 CRITICAL_SECTION */
+    typedef struct {
+      int               mRecursive;  /* 1=递归(CS), 0=非递归(SRWLOCK) */
+      SRWLOCK           mLock;       /* 非递归锁 */
+      CRITICAL_SECTION  mRecLock;    /* 递归锁 */
+    } mtx_t;
+  #else
+    /* TCC: 统一用 CRITICAL_SECTION（kernel32.def 必有，XP 起可用）。
+     * CS 本身递归，非递归模式靠 mOwner 追踪模拟（tryLock 重入返回 busy）。 */
+    typedef struct {
+      CRITICAL_SECTION  mLock;
+      int               mRecursive;  /* 1=允许递归, 0=非递归(自检 owner) */
+      DWORD             mOwner;      /* 非递归: 持锁线程 id (0=未锁) */
+    } mtx_t;
+  #endif
 #else
   typedef pthread_mutex_t mtx_t;
 #endif
 
 /* ── Condition Variable ── */
 #if defined(_TTHREAD_WIN32_)
-  /* 优化：用原生 CONDITION_VARIABLE 替代 2 Event + CS 模拟 */
-  typedef struct {
-    CONDITION_VARIABLE mCond;
-  } cnd_t;
+  #if TPHP_WIN_NATIVE_SYNC
+    /* GCC/Clang: 原生 CONDITION_VARIABLE */
+    typedef struct {
+      CONDITION_VARIABLE mCond;
+    } cnd_t;
+  #else
+    /* TCC: 信号量 + 计数器模拟（CreateSemaphore/ReleaseSemaphore 均在 kernel32.def） */
+    typedef struct {
+      CRITICAL_SECTION mCs;     /* 保护 mWaiters 计数 */
+      int              mWaiters;
+      HANDLE           mSem;    /* 信号量，signal/broadcast 释放 */
+    } cnd_t;
+  #endif
 #else
   typedef pthread_cond_t cnd_t;
 #endif
@@ -493,12 +500,18 @@ static inline int thrd_sleep(const struct timespec *duration, struct timespec *r
 
 static inline int mtx_init(mtx_t *mtx, int type) {
 #if defined(_TTHREAD_WIN32_)
-  mtx->mRecursive = (type & mtx_recursive) ? 1 : 0;
-  if (mtx->mRecursive) {
-    InitializeCriticalSection(&mtx->mRecLock);
-  } else {
-    InitializeSRWLock(&mtx->mLock);
-  }
+  #if TPHP_WIN_NATIVE_SYNC
+    mtx->mRecursive = (type & mtx_recursive) ? 1 : 0;
+    if (mtx->mRecursive) {
+      InitializeCriticalSection(&mtx->mRecLock);
+    } else {
+      InitializeSRWLock(&mtx->mLock);
+    }
+  #else
+    InitializeCriticalSection(&mtx->mLock);
+    mtx->mRecursive = (type & mtx_recursive) ? 1 : 0;
+    mtx->mOwner = 0;
+  #endif
   (void)type;
   return thrd_success;
 #else
@@ -515,8 +528,12 @@ static inline int mtx_init(mtx_t *mtx, int type) {
 
 static inline void mtx_destroy(mtx_t *mtx) {
 #if defined(_TTHREAD_WIN32_)
-  if (mtx->mRecursive) DeleteCriticalSection(&mtx->mRecLock);
-  /* SRWLOCK 无需销毁 */
+  #if TPHP_WIN_NATIVE_SYNC
+    if (mtx->mRecursive) DeleteCriticalSection(&mtx->mRecLock);
+    /* SRWLOCK 无需销毁 */
+  #else
+    DeleteCriticalSection(&mtx->mLock);
+  #endif
 #else
   pthread_mutex_destroy(mtx);
 #endif
@@ -524,11 +541,16 @@ static inline void mtx_destroy(mtx_t *mtx) {
 
 static inline int mtx_lock(mtx_t *mtx) {
 #if defined(_TTHREAD_WIN32_)
-  if (mtx->mRecursive) {
-    EnterCriticalSection(&mtx->mRecLock);
-  } else {
-    AcquireSRWLockExclusive(&mtx->mLock);
-  }
+  #if TPHP_WIN_NATIVE_SYNC
+    if (mtx->mRecursive) {
+      EnterCriticalSection(&mtx->mRecLock);
+    } else {
+      AcquireSRWLockExclusive(&mtx->mLock);
+    }
+  #else
+    EnterCriticalSection(&mtx->mLock);
+    if (!mtx->mRecursive) mtx->mOwner = GetCurrentThreadId();
+  #endif
   return thrd_success;
 #else
   return pthread_mutex_lock(mtx) == 0 ? thrd_success : thrd_error;
@@ -537,11 +559,24 @@ static inline int mtx_lock(mtx_t *mtx) {
 
 static inline int mtx_trylock(mtx_t *mtx) {
 #if defined(_TTHREAD_WIN32_)
-  if (mtx->mRecursive) {
-    return TryEnterCriticalSection(&mtx->mRecLock) ? thrd_success : thrd_busy;
-  }
-  /* TryAcquireSRWLockExclusive: Windows 7+ */
-  return TryAcquireSRWLockExclusive(&mtx->mLock) ? thrd_success : thrd_busy;
+  #if TPHP_WIN_NATIVE_SYNC
+    if (mtx->mRecursive) {
+      return TryEnterCriticalSection(&mtx->mRecLock) ? thrd_success : thrd_busy;
+    }
+    /* TryAcquireSRWLockExclusive: Windows 7+ */
+    return TryAcquireSRWLockExclusive(&mtx->mLock) ? thrd_success : thrd_busy;
+  #else
+    /* CS 递归，非递归模式需自检 mOwner：已持锁→回退并返回 busy */
+    if (TryEnterCriticalSection(&mtx->mLock)) {
+      if (!mtx->mRecursive && mtx->mOwner != 0) {
+        LeaveCriticalSection(&mtx->mLock);
+        return thrd_busy;
+      }
+      if (!mtx->mRecursive) mtx->mOwner = GetCurrentThreadId();
+      return thrd_success;
+    }
+    return thrd_busy;
+  #endif
 #else
   return (pthread_mutex_trylock(mtx) == 0) ? thrd_success : thrd_busy;
 #endif
@@ -549,11 +584,16 @@ static inline int mtx_trylock(mtx_t *mtx) {
 
 static inline int mtx_unlock(mtx_t *mtx) {
 #if defined(_TTHREAD_WIN32_)
-  if (mtx->mRecursive) {
-    LeaveCriticalSection(&mtx->mRecLock);
-  } else {
-    ReleaseSRWLockExclusive(&mtx->mLock);
-  }
+  #if TPHP_WIN_NATIVE_SYNC
+    if (mtx->mRecursive) {
+      LeaveCriticalSection(&mtx->mRecLock);
+    } else {
+      ReleaseSRWLockExclusive(&mtx->mLock);
+    }
+  #else
+    if (!mtx->mRecursive) mtx->mOwner = 0;
+    LeaveCriticalSection(&mtx->mLock);
+  #endif
   return thrd_success;
 #else
   return pthread_mutex_unlock(mtx) == 0 ? thrd_success : thrd_error;
@@ -576,7 +616,14 @@ static inline int mtx_timedlock(mtx_t *mtx, const struct timespec *ts) {
 
 static inline int cnd_init(cnd_t *cond) {
 #if defined(_TTHREAD_WIN32_)
-  InitializeConditionVariable(&cond->mCond);
+  #if TPHP_WIN_NATIVE_SYNC
+    InitializeConditionVariable(&cond->mCond);
+  #else
+    InitializeCriticalSection(&cond->mCs);
+    cond->mWaiters = 0;
+    cond->mSem = CreateSemaphore(NULL, 0, 0x7FFFFFFF, NULL);
+    if (!cond->mSem) return thrd_error;
+  #endif
   return thrd_success;
 #else
   return pthread_cond_init(cond, NULL) == 0 ? thrd_success : thrd_error;
@@ -585,8 +632,13 @@ static inline int cnd_init(cnd_t *cond) {
 
 static inline void cnd_destroy(cnd_t *cond) {
 #if defined(_TTHREAD_WIN32_)
-  /* CONDITION_VARIABLE 无需销毁 */
-  (void)cond;
+  #if TPHP_WIN_NATIVE_SYNC
+    /* CONDITION_VARIABLE 无需销毁 */
+    (void)cond;
+  #else
+    if (cond->mSem) { CloseHandle(cond->mSem); cond->mSem = NULL; }
+    DeleteCriticalSection(&cond->mCs);
+  #endif
 #else
   pthread_cond_destroy(cond);
 #endif
@@ -594,7 +646,16 @@ static inline void cnd_destroy(cnd_t *cond) {
 
 static inline int cnd_signal(cnd_t *cond) {
 #if defined(_TTHREAD_WIN32_)
-  WakeConditionVariable(&cond->mCond);
+  #if TPHP_WIN_NATIVE_SYNC
+    WakeConditionVariable(&cond->mCond);
+  #else
+    EnterCriticalSection(&cond->mCs);
+    if (cond->mWaiters > 0) {
+      cond->mWaiters--;
+      ReleaseSemaphore(cond->mSem, 1, NULL);
+    }
+    LeaveCriticalSection(&cond->mCs);
+  #endif
   return thrd_success;
 #else
   return pthread_cond_signal(cond) == 0 ? thrd_success : thrd_error;
@@ -603,7 +664,15 @@ static inline int cnd_signal(cnd_t *cond) {
 
 static inline int cnd_broadcast(cnd_t *cond) {
 #if defined(_TTHREAD_WIN32_)
-  WakeAllConditionVariable(&cond->mCond);
+  #if TPHP_WIN_NATIVE_SYNC
+    WakeAllConditionVariable(&cond->mCond);
+  #else
+    EnterCriticalSection(&cond->mCs);
+    int n = cond->mWaiters;
+    cond->mWaiters = 0;
+    LeaveCriticalSection(&cond->mCs);
+    if (n > 0) ReleaseSemaphore(cond->mSem, n, NULL);
+  #endif
   return thrd_success;
 #else
   /* 修复原 tinycthread bug: pthread_cond_signal → pthread_cond_broadcast */
@@ -613,13 +682,23 @@ static inline int cnd_broadcast(cnd_t *cond) {
 
 static inline int cnd_wait(cnd_t *cond, mtx_t *mtx) {
 #if defined(_TTHREAD_WIN32_)
-  BOOL ok;
-  if (mtx->mRecursive) {
-    ok = SleepConditionVariableCS(&cond->mCond, &mtx->mRecLock, INFINITE);
-  } else {
-    ok = SleepConditionVariableSRW(&cond->mCond, &mtx->mLock, INFINITE, 0);
-  }
-  return ok ? thrd_success : thrd_error;
+  #if TPHP_WIN_NATIVE_SYNC
+    BOOL ok;
+    if (mtx->mRecursive) {
+      ok = SleepConditionVariableCS(&cond->mCond, &mtx->mRecLock, INFINITE);
+    } else {
+      ok = SleepConditionVariableSRW(&cond->mCond, &mtx->mLock, INFINITE, 0);
+    }
+    return ok ? thrd_success : thrd_error;
+  #else
+    /* 信号量模拟：waiters++ → 释放锁 → 等信号量 → 重获锁 */
+    EnterCriticalSection(&cond->mCs);
+    cond->mWaiters++;
+    LeaveCriticalSection(&cond->mCs);
+    mtx_unlock(mtx);
+    WaitForSingleObject(cond->mSem, INFINITE);
+    return mtx_lock(mtx);
+  #endif
 #else
   return pthread_cond_wait(cond, mtx) == 0 ? thrd_success : thrd_error;
 #endif
@@ -627,20 +706,41 @@ static inline int cnd_wait(cnd_t *cond, mtx_t *mtx) {
 
 static inline int cnd_timedwait(cnd_t *cond, mtx_t *mtx, const struct timespec *ts) {
 #if defined(_TTHREAD_WIN32_)
-  struct timespec now;
-  if (clock_gettime(TIME_UTC, &now) != 0) return thrd_error;
-  DWORD delta = (DWORD)((ts->tv_sec - now.tv_sec) * 1000 +
-                        (ts->tv_nsec - now.tv_nsec + 500000) / 1000000);
-  BOOL ok;
-  if (mtx->mRecursive) {
-    ok = SleepConditionVariableCS(&cond->mCond, &mtx->mRecLock, delta);
-  } else {
-    ok = SleepConditionVariableSRW(&cond->mCond, &mtx->mLock, delta, 0);
-  }
-  if (!ok) {
-    return (GetLastError() == ERROR_TIMEOUT) ? thrd_timeout : thrd_error;
-  }
-  return thrd_success;
+  #if TPHP_WIN_NATIVE_SYNC
+    struct timespec now;
+    if (clock_gettime(TIME_UTC, &now) != 0) return thrd_error;
+    DWORD delta = (DWORD)((ts->tv_sec - now.tv_sec) * 1000 +
+                          (ts->tv_nsec - now.tv_nsec + 500000) / 1000000);
+    BOOL ok;
+    if (mtx->mRecursive) {
+      ok = SleepConditionVariableCS(&cond->mCond, &mtx->mRecLock, delta);
+    } else {
+      ok = SleepConditionVariableSRW(&cond->mCond, &mtx->mLock, delta, 0);
+    }
+    if (!ok) {
+      return (GetLastError() == ERROR_TIMEOUT) ? thrd_timeout : thrd_error;
+    }
+    return thrd_success;
+  #else
+    struct timespec now;
+    if (clock_gettime(TIME_UTC, &now) != 0) return thrd_error;
+    DWORD delta = (DWORD)((ts->tv_sec - now.tv_sec) * 1000 +
+                          (ts->tv_nsec - now.tv_nsec + 500000) / 1000000);
+    EnterCriticalSection(&cond->mCs);
+    cond->mWaiters++;
+    LeaveCriticalSection(&cond->mCs);
+    mtx_unlock(mtx);
+    DWORD r = WaitForSingleObject(cond->mSem, delta);
+    if (r == WAIT_TIMEOUT) {
+      /* 超时：从 waiters 中扣回（可能已被 signal 扣除，故只在没有时扣） */
+      EnterCriticalSection(&cond->mCs);
+      if (cond->mWaiters > 0) cond->mWaiters--;
+      LeaveCriticalSection(&cond->mCs);
+      mtx_lock(mtx);
+      return thrd_timeout;
+    }
+    return mtx_lock(mtx);
+  #endif
 #else
   int ret = pthread_cond_timedwait(cond, mtx, ts);
   if (ret == ETIMEDOUT) return thrd_timeout;
