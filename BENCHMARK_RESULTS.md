@@ -1,7 +1,7 @@
 # TinyPHP vs Native PHP 8.5 — 性能对比报告
 
 测试环境: Windows x64, PHP 8.5.1 NTS, TinyPHP + TCC/GCC 16.1/Clang 22.1  
-*更新: 2026-07-09 — SSO + Arena + 对象池 + implode/explode + str/int 键双哈希索引全部落地*
+*更新: 2026-07-09 — SSO + Arena + 对象池 + implode/explode + str/int 键双哈希索引 + 多线程 (Thread/Mutex/CondVar/WaitGroup) 全部落地*
 
 ---
 
@@ -110,6 +110,10 @@
 | 27 | **pcre tp_cache 动态 key** | 长模式 (>255B) 可正常缓存命中 (原 key[256] 截断导致永远 miss) |
 | 28 | **preg_replace 反向引用** | captures 首次匹配时缓存, O(n×matches×backrefs)→O(n+matches) |
 | 29 | **try.h 动态异常消息** | char\* msg 替代 msg_buf[256], 支持任意长度异常消息 (malloc 绕过 rt_free_all) |
+| 30 | **tinycthread 多线程集成** | Thread/Mutex/CondVar/WaitGroup OOP API (15 方法), SRWLOCK/CONDITION_VARIABLE/SpinLock 优化 |
+| 31 | **Thread-Local 运行时** | 每线程独立 str_pool/arr_pool/obj_pool, 多线程无锁竞争 |
+| 32 | **TCC+Windows TLS 兼容层** (compat/tls.h) | TlsAlloc/TlsGetValue/TlsSetValue 替代 _Thread_local (TCC 在 Windows 不支持 TLS) |
+| 33 | **静态缓冲区线程安全** (P3-7) | 10 处 static char buf[N] → str_pool_alloc, 配合 sizeof 字面量常量修复 |
 
 ---
 
@@ -218,16 +222,28 @@ json_write_to(v, buf);                // 第2趟: 直接 memcpy 写入
 
 | 类别 | 函数数 | 三编译器 |
 |------|--------|---------|
-| 字符串 / HTML / Base64 / URL | 42 | ✅ |
-| 数组 | 52 | ✅ |
-| 数学 (含三角函数) | 30 | ✅ |
+| 字符串 / 输出 / 类型 (standard core) | 67 | ✅ |
+| HTML / Base64 / URL | 6 | ✅ |
+| 数组 | 41 | ✅ |
+| 数学 (含三角函数) | 21 | ✅ |
+| 进制转换 (含 base_convert) | 8 | ✅ |
+| 断言 / 随机 (CSPRNG) | 5 | ✅ |
 | JSON (含 validate) | 3 | ✅ |
 | 哈希 (MD5/SHA1/SHA256/SHA512/CRC32) | 5 | ✅ |
-| password (bcrypt) | 2 | ✅ |
+| 时间 (date/sleep/microtime/strtotime/mktime) | 9 | ✅ |
+| ctype | 11 | ✅ |
 | mbstring (UTF-8) | 3 | ✅ |
-| 进制转换 (含 base_convert) | 8 | ✅ |
-| 其他 (echo/var_dump/type/ctype/random/date 等) | 87+ | ✅ |
-| **合计** | **232+** | ✅ |
+| iconv (字符集转换) | 8 | ✅ |
+| filter (filter_var) | 3 | ✅ |
+| password (bcrypt) | 2 | ✅ |
+| OOP / 异常 / Resource | 14 | ✅ |
+| Generator / yield (minicoro 协程) | 7 | ✅ |
+| 多线程 (Thread/Mutex/CondVar/WaitGroup) | 15 | ✅ |
+| C 互操作 (PHPC) | 31 | ✅ |
+| ext/pcntl | 7 | ✅ |
+| ext/posix | 14 | ✅ |
+| ext/pcre (PCRE NFA VM) | 8 | ✅ |
+| **合计** | **288+** | ✅ |
 
 ### include/ 重构
 
@@ -252,5 +268,26 @@ include/os/
 ├── times.h      — time, date, sleep, hrtime, microtime, strtotime, mktime
 ├── json.h       — json_encode, json_decode, json_validate
 ├── file.h       — file_get_contents, file_put_contents
+├── file_obj.h   — File 类 (Resource 子类, 替代 fopen resource)
 └── password.h   — password_hash, password_verify (EksBlowfish bcrypt)
+```
+
+### include/object/ 对象系统
+
+```
+include/object/
+├── object.h     — COS 对象系统 (16B 头 + struct 嵌套继承 + 对象复用池)
+├── exception.h  — 内置 Exception 类
+├── try.h        — setjmp/longjmp 异常 (TP_TRY/TP_CATCH/TP_THROW)
+├── generator.h  — Generator 类 (基于 minicoro 协程)
+├── resource.h   — Resource 基类
+└── thread.h     — Thread/Mutex/CondVar/WaitGroup COS 类 (基于 tinycthread)
+```
+
+### include/compat/ 跨平台兼容层
+
+```
+include/compat/
+├── tinycthread.h — tinycthread v1.1 优化版 (SRWLOCK/CONDITION_VARIABLE/SpinLock/WaitGroup)
+└── tls.h         — TCC+Windows TLS 兼容层 (Windows TLS API 实现 _Thread_local)
 ```

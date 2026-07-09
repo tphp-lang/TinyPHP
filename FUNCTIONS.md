@@ -27,8 +27,9 @@
 | `include/password` (bcrypt) | `os/password.h` | 2 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
+| 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 31 |
-| **合计** | | **262+** |
+| **合计** | | **277+** |
 
 ---
 
@@ -118,7 +119,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — 输出函数
+## standard — 输出函数
 
 > 文件: `std/core.h`
 
@@ -133,7 +134,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 ---
 
-## ext/standard — 类型函数
+## standard — 类型函数
 
 > 文件: `std/core.h`
 
@@ -881,6 +882,107 @@ var_dump($gen->send(100));   // 101
 | Linux x86_64 | ucontext | ASM |
 | Linux aarch64 | ucontext | ASM |
 | macOS aarch64 + TCC | **不支持**（编译报错） | ASM |
+
+---
+
+## 多线程 (Thread / Mutex / CondVar / WaitGroup)
+
+> 文件: `object/thread.h`（COS 封装）+ `compat/tinycthread.h`（tinycthread v1.1 优化版）+ `compat/tls.h`（TCC+Windows TLS 兼容层）
+>
+> 基于 tinycthread 跨平台线程库（zlib license），提供 OOP 风格的线程 API。
+> 采用**策略 A（Thread-Local 运行时）**：每个线程拥有独立的 `str_pool`/`arr_pool`/`obj_pool`，
+> 线程间只能传递值类型（int/float/bool）或堆分配数据，无锁竞争。
+
+### Thread 类
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `__construct` | `(callable $fn): void` | 接收闭包（须返回 `int` 作为线程退出码）；闭包副本堆分配，`start` 后转交子线程 |
+| `start` | `(): bool` | `thrd_create` 创建线程；成功返回 `true` |
+| `join` | `(): int` | `thrd_join` 等待线程结束，返回退出码；未启动/已结束返回缓存的 `ret` |
+| `detach` | `(): bool` | `thrd_detach` 分离线程（结束后自动回收）；析构时若仍运行自动 detach |
+| `yield` (静态) | `(): void` | `thrd_yield` 让出 CPU 时间片 |
+| `sleep` (静态) | `(float $seconds): void` | `thrd_sleep` 秒级休眠（支持小数毫秒/微秒） |
+| `id` (静态) | `(): int` | 当前线程 ID（Windows: `GetCurrentThreadId`，POSIX: `pthread_self`） |
+
+### Mutex 类
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `__construct` | `(bool $recursive = false): void` | `mtx_init`；`recursive=true` 用 CRITICAL_SECTION，`false` 用 SRWLOCK（更轻量） |
+| `lock` | `(): bool` | `mtx_lock` 阻塞加锁 |
+| `tryLock` | `(): bool` | `mtx_trylock` 非阻塞加锁；已锁定返回 `false` |
+| `unlock` | `(): bool` | `mtx_unlock` 解锁 |
+
+### CondVar 类
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `__construct` | `(): void` | `cnd_init`；Windows 用 CONDITION_VARIABLE，POSIX 用 `pthread_cond_t` |
+| `wait` | `(Mutex $m): bool` | `cnd_wait` 原子释放锁并阻塞，被唤醒后重新加锁 |
+| `signal` | `(): bool` | `cnd_signal` 唤醒一个等待线程 |
+| `broadcast` | `(): bool` | `cnd_broadcast` 唤醒所有等待线程（已修复 tinycthread POSIX 的 `pthread_cond_signal` bug） |
+
+### WaitGroup 类
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `__construct` | `(): void` | `tphp_wg_init`；单 u64 state（高32位任务数 + 低32位等待数）+ Semaphore |
+| `add` | `(int $delta): void` | 增减任务计数（`delta` 可为负） |
+| `done` | `(): void` | 任务完成，计数减 1 |
+| `wait` | `(): void` | 阻塞直到所有任务完成（计数归零） |
+
+### 示例
+
+```php
+// Thread + join
+$thread = new Thread(function(): int {
+    return 42;
+});
+$thread->start();
+$ret = $thread->join();  // 42
+
+// Thread + WaitGroup 跨线程同步
+$wg = new WaitGroup();
+$wg->add(1);
+$t = new Thread(function() use ($wg): int {
+    $wg->done();
+    return 0;
+});
+$t->start();
+$wg->wait();
+$t->join();
+
+// Mutex 互斥
+$mutex = new Mutex(false);
+$mutex->lock();
+// ... 临界区 ...
+$mutex->unlock();
+
+// 静态方法
+Thread::yield();
+Thread::sleep(0.5);
+$tid = Thread::id();
+```
+
+### 线程安全模型
+
+| 机制 | 说明 |
+|------|------|
+| Thread-Local 运行时 | 每个线程独立 `str_pool`（128KB Arena）/`arr_freelist`（128 槽）/`obj_freelist`（128 槽），无锁竞争 |
+| TCC+Windows TLS | TCC 不支持 `_Thread_local`/`__declspec(thread)`；`compat/tls.h` 用 Windows TLS API（`TlsAlloc`/`TlsGetValue`/`TlsSetValue`）实现真正线程隔离 |
+| GCC/Clang/MSVC | 直接用 `_Thread_local`（性能更好） |
+| 闭包跨线程传递 | `t_callback {func, env}` 堆分配副本传递给子线程，`_tphp_thread_entry` 适配器调用后释放 |
+| 子线程清理 | 退出时调 `tphp_thread_cleanup()` 释放 TLS 内存池；`tphp_tls_destroy()` 释放 TLS 结构体 |
+
+### 平台支持
+
+| 平台 | TCC | GCC / Clang |
+|------|-----|-------------|
+| Windows x86_64 | ✅ Win32 线程 + TLS API | ✅ Win32 线程 + `_Thread_local` |
+| Linux x86_64 | ✅ pthread + `_Thread_local` | ✅ pthread + `_Thread_local` |
+| Linux aarch64 | ✅ pthread + `_Thread_local` | ✅ pthread + `_Thread_local` |
+| macOS aarch64 | ✅ pthread + `_Thread_local` | ✅ pthread + `_Thread_local` |
 
 ---
 

@@ -1991,6 +1991,8 @@ class Parser
             TokenType::DIE, TokenType::ISSET, TokenType::EMPTY_KW, TokenType::LIST_KW, TokenType::EXIT, TokenType::UNSET,
             // PHP 保留字也可作为方法名
             TokenType::NULL_KW, TokenType::TRUE_KW, TokenType::FALSE_KW,
+            TokenType::YIELD_KW, // Thread::yield()
+            TokenType::SLEEP,    // Thread::sleep()
         ];
         if (!in_array($tok->type, $valid, true)) {
             $this->error("Expected method name, got '{$tok->lexeme}'");

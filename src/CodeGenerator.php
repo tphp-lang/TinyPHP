@@ -537,6 +537,45 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_File')->methods['eof']         = new MethodInfo('t_bool');
         $this->symbols->getClass('tphp_class_File')->methods['close']       = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_File')->methods['isOpen']      = new MethodInfo('t_bool');
+
+        // 内置 Thread 类（基于 tinycthread 的线程封装）
+        $this->symbols->addClass('tphp_class_Thread');
+        $this->symbols->addClassName('Thread', 'tphp_class_Thread');
+        $this->symbols->getClass('tphp_class_Thread')->methods['__construct'] = new MethodInfo('void', ['t_callback']);
+        $this->symbols->getClass('tphp_class_Thread')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Thread')->methods['start']       = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Thread')->methods['join']        = new MethodInfo('t_int');
+        $this->symbols->getClass('tphp_class_Thread')->methods['detach']      = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Thread')->methods['yield']       = new MethodInfo('void', [], true);
+        $this->symbols->getClass('tphp_class_Thread')->methods['sleep']       = new MethodInfo('void', ['t_float'], true);
+        $this->symbols->getClass('tphp_class_Thread')->methods['id']          = new MethodInfo('t_int', [], true);
+
+        // 内置 Mutex 类
+        $this->symbols->addClass('tphp_class_Mutex');
+        $this->symbols->addClassName('Mutex', 'tphp_class_Mutex');
+        $this->symbols->getClass('tphp_class_Mutex')->methods['__construct'] = new MethodInfo('void', ['t_bool']);
+        $this->symbols->getClass('tphp_class_Mutex')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Mutex')->methods['lock']        = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Mutex')->methods['tryLock']     = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Mutex')->methods['unlock']      = new MethodInfo('t_bool');
+
+        // 内置 CondVar 类
+        $this->symbols->addClass('tphp_class_CondVar');
+        $this->symbols->addClassName('CondVar', 'tphp_class_CondVar');
+        $this->symbols->getClass('tphp_class_CondVar')->methods['__construct'] = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_CondVar')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_CondVar')->methods['wait']        = new MethodInfo('t_bool', ['tphp_class_Mutex*']);
+        $this->symbols->getClass('tphp_class_CondVar')->methods['signal']      = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_CondVar')->methods['broadcast']   = new MethodInfo('t_bool');
+
+        // 内置 WaitGroup 类
+        $this->symbols->addClass('tphp_class_WaitGroup');
+        $this->symbols->addClassName('WaitGroup', 'tphp_class_WaitGroup');
+        $this->symbols->getClass('tphp_class_WaitGroup')->methods['__construct'] = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_WaitGroup')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_WaitGroup')->methods['add']         = new MethodInfo('void', ['t_int']);
+        $this->symbols->getClass('tphp_class_WaitGroup')->methods['done']        = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_WaitGroup')->methods['wait']        = new MethodInfo('void');
     }
 
     // ── 多段输出方法 ─────────────────────────────────────────
@@ -2042,6 +2081,12 @@ class CodeGenerator implements ASTVisitor
                 if ($objType === '' && $this->symbols->resolveEnumCName($expr->callee->name) !== null) {
                     $objType = $this->symbols->resolveEnumCName($expr->callee->name);
                 }
+                // 静态方法调用 Thread::yield() — callee=VariableExpr(Thread)，varTypes 无此键
+                //   但名称是已知类 → 用 C 类名
+                if ($objType === '') {
+                    $resolved = $this->symbols->resolveClass($expr->callee->name);
+                    if ($resolved !== null) $objType = $resolved;
+                }
             } elseif ($expr->callee instanceof CallExpr) {
                 // 链式调用：递归推导
                 $objType = $this->inferCallChainClass($expr->callee);
@@ -3477,9 +3522,7 @@ class CodeGenerator implements ASTVisitor
         if ($node->isRawC) {
             return $node->name . '(' . implode(', ', $args) . ')';
         }
-        // 方法调用：self 作为第一个参数
-        $allArgs = array_merge([$callee], $args);
-        // 类名推导
+        // 方法调用：类名推导
         if ($callee === 'self') {
             $cn = $this->className;
         } elseif ($node->callee instanceof VariableExpr) {
@@ -3501,6 +3544,12 @@ class CodeGenerator implements ASTVisitor
         }
         // Strip trailing * + resolve parent class for inherited methods
         $cnClean = rtrim($cn, '*');
+        // 静态方法调用：PHP 类名 → C 类名解析（如 Thread → tphp_class_Thread）
+        if ($cnClean !== '' && !$this->symbols->hasClass($cnClean)
+            && $this->symbols->resolveEnumCName($cnClean) === null) {
+            $resolved = $this->symbols->resolveClass($cnClean);
+            if ($resolved !== null) $cnClean = $resolved;
+        }
         // ── 枚举方法调用（静态 Color::method() 或实例 Color::Red->method()）──
         $enumCName = $this->symbols->resolveEnumCName($cnClean);
         if ($enumCName !== null) {
@@ -3519,13 +3568,18 @@ class CodeGenerator implements ASTVisitor
                 $node->line, $node->column, $cnClean, $node->name
             ));
         }
-        // If method is inherited, pass &obj->_parent as self
-        $selfArg = $useParent ? ('&' . $callee . '->_parent') : $callee;
-        $allArgs[0] = $selfArg;
+        // 静态方法不传 self，实例方法 self 作为第一个参数
+        $mInfoForDefault = $this->symbols->getClassMethod($cnClean, $node->name);
+        $isStatic = $mInfoForDefault !== null && $mInfoForDefault->isStatic;
+        if ($isStatic) {
+            $allArgs = $args;
+        } else {
+            $selfArg = $useParent ? ('&' . $callee . '->_parent') : $callee;
+            $allArgs = array_merge([$selfArg], $args);
+        }
         // 选择重载版本：有默认值参数且实参数量 < 总参数时，使用 fnName_缺失数 重载
         $methodCName = "{$cnClean}_{$node->name}";
         $argCount = count($node->args);
-        $mInfoForDefault = $this->symbols->getClassMethod($cnClean, $node->name);
         if ($mInfoForDefault !== null && $mInfoForDefault->defaultCount > 0
             && $argCount < $mInfoForDefault->totalParams) {
             $missingCount = $mInfoForDefault->totalParams - $argCount;
@@ -5455,6 +5509,11 @@ class CodeGenerator implements ASTVisitor
         }
         if ($cn === '' && $call->callee instanceof VariableExpr && self::varName($call->callee->name) === 'self') {
             $cn = $this->className;
+        }
+        // 静态方法调用：PHP 类名 → C 类名解析（如 Thread → tphp_class_Thread）
+        if ($cn === '' && $call->callee instanceof VariableExpr) {
+            $resolved = $this->symbols->resolveClass($call->callee->name);
+            if ($resolved !== null) $cn = $resolved;
         }
         if ($cn !== '') {
             $mInfo = $this->symbols->getClassMethod($cn, $call->name);

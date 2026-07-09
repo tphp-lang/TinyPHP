@@ -318,7 +318,6 @@ static inline t_string tphp_fn_gettype(t_var v) {
 // ── getenv / putenv — 环境变量 ───────────────────────────────
 static inline t_string tphp_fn_getenv(t_string key) {
     if (key.data == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
-    static char _env[4096];
     // 临时复制到可写缓冲区（getenv 返回的指针可能不安全）
     char tmp[256];
     int klen = key.length < 255 ? key.length : 255;
@@ -327,7 +326,9 @@ static inline t_string tphp_fn_getenv(t_string key) {
     char *val = getenv(tmp);
     if (val == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
     int vlen = (int)strlen(val);
-    if (vlen > 4095) vlen = 4095;
+    // 从线程局部 str_pool 分配（线程安全）
+    char *_env = str_pool_alloc(vlen);
+    if (!_env) return (t_string){.data = NULL, .length = 0, .is_local = false};
     memcpy(_env, val, (size_t)vlen);
     _env[vlen] = '\0';
     return (t_string){_env, vlen};
@@ -335,6 +336,9 @@ static inline t_string tphp_fn_getenv(t_string key) {
 
 static inline void tphp_fn_putenv(t_string key) {
     if (key.data == NULL) return;
+    /* putenv() 要求字符串在进程生命周期内持久存在（环境变量指向该内存），
+     * 因此必须用 static 或 malloc。putenv 本身是进程级操作（非线程安全），
+     * static buf 是正确的语义。 */
     static char _buf[1024];
     int len = key.length < 1023 ? key.length : 1023;
     memcpy(_buf, STR_PTR(key), (size_t)len);
@@ -559,7 +563,8 @@ static inline t_int tphp_fn_ord(t_string s) {
 }
 
 static inline t_string tphp_fn_chr(t_int n) {
-    static char _chr[2];
+    char *_chr = str_pool_alloc(2);
+    if (!_chr) return (t_string){.data = NULL, .length = 0, .is_local = false};
     _chr[0] = (char)(n & 0xFF);
     _chr[1] = '\0';
     return (t_string){_chr, 1};

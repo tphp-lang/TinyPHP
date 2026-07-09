@@ -155,6 +155,7 @@ use MyApp\Models\User;
 | 命名空间 | `namespace A\B`、`use A\{B,C}` 分组导入、`use function A\{f1,f2}` 组合式函数导入、`use const A\{C1,C2}` 组合式常量导入、`use A\{B, function f, const C}` 混合导入 |
 | 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、`int $x = 42;` 局部变量可选类型标记、`const int MAX = 100;` 全局常量可选类型标记、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
 | Generator | `yield`、`yield $k => $v`、`send()`、`getReturn()`、`return`、foreach 迭代（基于 minicoro 协程，不使用 yield 时零开销） |
+| 多线程 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` OOP 线程 API（基于 tinycthread，Thread-Local 运行时无锁竞争） |
 
 ### ❌ 不支持（AOT 物理不可行）
 
@@ -191,7 +192,7 @@ use MyApp\Models\User;
 
 ### 🔢 内置函数
 
-已实现 **262+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+已实现 **277+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ## 独有特性
 
@@ -212,6 +213,7 @@ use MyApp\Models\User;
 | 128 槽数组复用池 | LIFO + 1.5× 增长 | 热路径零 malloc |
 | 128 槽对象复用池 | LIFO | new+unset 提速 36-52% |
 | ROPE 多片段拼接 | 编译期展平为单次分配 | concat-4 提速 6 倍 |
+| Thread-Local 运行时 | 每线程独立 str_pool/arr_pool/obj_pool | 多线程无锁竞争 |
 
 ### 三编译器 + 四平台
 
@@ -223,6 +225,50 @@ use MyApp\Models\User;
 | **macOS aarch64** | ✅ | ✅ | ✅ |
 
 TCC 亚秒编译，GCC/Clang -O2 带来 3-10 倍额外提速。`compat.h` 统一处理三编译器差异。
+
+### 多线程支持
+
+基于 tinycthread（zlib license）跨平台线程库，提供 OOP 风格线程 API。采用 **Thread-Local 运行时**策略：每个线程拥有独立的 `str_pool`/`arr_pool`/`obj_pool`，无锁竞争。
+
+```php
+// Thread + join
+$thread = new Thread(function(): int {
+    return 42;
+});
+$thread->start();
+echo $thread->join();  // 42
+
+// WaitGroup 跨线程同步
+$wg = new WaitGroup();
+$wg->add(1);
+$t = new Thread(function() use ($wg): int {
+    $wg->done();
+    return 0;
+});
+$t->start();
+$wg->wait();
+$t->join();
+
+// Mutex 互斥
+$mutex = new Mutex(false);
+$mutex->lock();
+// ... 临界区 ...
+$mutex->unlock();
+
+// 静态方法
+Thread::yield();
+Thread::sleep(0.5);
+$tid = Thread::id();
+```
+
+| 类 | 方法 | 说明 |
+|---|---|---|
+| `Thread` | `start/join/detach` + 静态 `yield/sleep/id` | 闭包跨线程传递（堆分配副本） |
+| `Mutex` | `lock/tryLock/unlock` | `recursive` 选项：SRWLOCK（轻量）/ CRITICAL_SECTION（递归） |
+| `CondVar` | `wait/signal/broadcast` | Windows CONDITION_VARIABLE / POSIX pthread_cond_t |
+| `WaitGroup` | `add/done/wait` | 单 u64 state + Semaphore，等待 N 个线程完成 |
+
+> TCC+Windows 通过 `compat/tls.h` 用 Windows TLS API 实现真正的线程隔离（TCC 不支持 `_Thread_local`）。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ### C 互操作（PHPC）
 

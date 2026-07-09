@@ -49,7 +49,8 @@ static inline t_int tphp_fn_octdec(t_string s) {
 // decbin < 64 位 → 栈缓冲写二进制
 
 static inline t_string tphp_fn_decbin(t_int n) {
-    static char buf[72];
+    char *buf = str_pool_alloc(72);
+    if (!buf) return (t_string){.data = NULL, .length = 0, .is_local = false};
     int pos = 0;
     uint64_t v = (uint64_t)n;
     if (v == 0) { buf[0] = '0'; buf[1] = '\0'; return (t_string){buf, 1}; }
@@ -63,21 +64,24 @@ static inline t_string tphp_fn_decbin(t_int n) {
 }
 
 static inline t_string tphp_fn_decoct(t_int n) {
-    static char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%llo", (unsigned long long)(uint64_t)n);
+    char *buf = str_pool_alloc(32);
+    if (!buf) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    int len = snprintf(buf, 32, "%llo", (unsigned long long)(uint64_t)n);
     return (t_string){buf, len > 0 ? len : 0};
 }
 
 static inline t_string tphp_fn_dechex(t_int n) {
-    static char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%llx", (unsigned long long)(uint64_t)n);
+    char *buf = str_pool_alloc(32);
+    if (!buf) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    int len = snprintf(buf, 32, "%llx", (unsigned long long)(uint64_t)n);
     return (t_string){buf, len > 0 ? len : 0};
 }
 
 // ── number_format($num, $decimals) ─────────────────
 // 与 PHP 行为一致：. ± 千分位逗号
 static inline t_string tphp_fn_number_format2(t_float num, t_int decimals) {
-    static char buf[128];
+    char *buf = str_pool_alloc(128);
+    if (!buf) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (decimals < 0) decimals = 0;
     if (decimals > 50) decimals = 50;
 

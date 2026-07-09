@@ -70,6 +70,7 @@ class C {
 | `never` | `void` | 永不返回（exit/throw） |
 | `mixed` | `t_var` | 标签联合体，有运行时开销 |
 | `Generator` | `tphp_class_Generator*` | 协程对象（minicoro 实现，stackless） |
+| `Thread`/`Mutex`/`CondVar`/`WaitGroup` | `tphp_class_X*` | 多线程 COS 类（tinycthread 封装，Thread-Local 运行时） |
 | 类类型 | `tphp_class_X*` 或 `tphp_na_Ns_tphp_class_X*` | COS 对象指针（命名空间类带 `tphp_na_` 前缀） |
 
 > ⚠️ **`===` 和 `==` 等价**：类型固定意味着编译期已知类型，"同时类型不同"的情况不存在。
@@ -655,6 +656,7 @@ phpc_memory:
 | `phpc_free` `phpc_free_str_arr` `phpc_assert_ptr` | C 内存释放/安全断言 |
 | `#import pcntl` | 按需引入扩展（自动加载 ext/pcntl/src/） |
 | `int &$x` | 引用传参（int/float/bool/string/array/对象全类型支持） |
+| `Thread`/`Mutex`/`CondVar`/`WaitGroup` | 多线程 OOP API（tinycthread 封装，Thread-Local 运行时无锁竞争） |
 
 ### ❌ 不支持（AOT 物理不可行）
 

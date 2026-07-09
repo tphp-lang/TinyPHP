@@ -23,10 +23,34 @@
 #endif
 #endif
 
+/* _Thread_local 回退（pre-C11 编译器）— 用于线程独立内存池 */
+#if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 201102L)
+  #if !defined(_Thread_local)
+    #if defined(_WIN32)
+      #define _Thread_local __declspec(thread)
+    #elif defined(__GNUC__) || defined(__clang__)
+      #define _Thread_local __thread
+    #endif
+  #endif
+#endif
+
 // 数组复用池上限（runtime.h 与 array.h 共用）
 #ifndef ARR_POOL_MAX
 #define ARR_POOL_MAX 128
 #endif
+
+// 字符串池大小（runtime.h 用，提前定义供 tls.h 使用）
+#ifndef STR_POOL_SIZE
+#define STR_POOL_SIZE 131072
+#endif
+
+// 对象复用池上限（object.h 用，提前定义供 tls.h 使用）
+#ifndef OBJ_FREELIST_MAX
+#define OBJ_FREELIST_MAX 128
+#endif
+
+// 对象池槽位类型（object.h 用，提前定义供 tls.h 使用）
+typedef struct { void *ptr; uint32_t size; } _obj_pool_slot;
 
 // ============================================================
 // 类型标记枚举

@@ -34,7 +34,7 @@ t_int tphp_fn_posix_kill(t_int pid, t_int sig) { return (t_int)kill((pid_t)pid, 
 t_int tphp_fn_posix_get_last_error(void)   { return (t_int)errno; }
 
 t_string tphp_fn_posix_getcwd(void) {
-    static char buf[4096];
+    char buf[4096];  /* 栈缓冲（_mk_str 立即复制，无需持久化） */
     if (!getcwd(buf, sizeof(buf))) return (t_string){0};
     return _mk_str(buf);
 }

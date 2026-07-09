@@ -10,7 +10,11 @@
 #include "compat.h"            // math.h + 跨编译器 math 声明
 #include "object/object.h"     // tp_obj_alloc/release — runtime.h 需要
 #include "array.h"             // arr_freelist/tphp_fn_arr_* — runtime.h 需要
-#include "runtime.h"           // tphp_fn_error 定义在此
+#include "runtime.h"           // tphp_fn_error + tphp_thread_cleanup 定义在此
+/* 线程库 — 在 runtime.h 之后引入，使 thread wrapper 能调用 tphp_thread_cleanup() */
+#define TPHP_THREAD_CLEANUP() tphp_thread_cleanup()
+#include "compat/tinycthread.h"
+#include "object/thread.h"      // Thread/Mutex/CondVar/WaitGroup COS 类
 #include "object/exception.h"   // tphp_class_Exception — tp_throw 需要 (前置以供后续内函数使用)
 #include "object/try.h"         // tp_throw 宏 — 前置以供 rand.h / builtin.h 内函数使用
 #include "rand.h"               // CSPRNG (builtin.h 需要，内部用 tp_throw)

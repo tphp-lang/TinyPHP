@@ -199,7 +199,8 @@ static inline t_int tphp_fn_time(void);
 static inline t_int tphp_fn_rand_int(t_int min, t_int max);
 
 static inline t_string tphp_fn_uniqid(t_string prefix) {
-    static char buf[48];
+    char *buf = str_pool_alloc(48);
+    if (!buf) return (t_string){.data = NULL, .length = 0, .is_local = false};
     t_int t = tphp_fn_time();
     t_int r = tphp_fn_rand_int(0, 99999);
 
@@ -208,7 +209,7 @@ static inline t_string tphp_fn_uniqid(t_string prefix) {
 
     int pos = 0;
     if (plen > 0) { memcpy(buf, STR_PTR(prefix), (size_t)plen); pos += plen; }
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
+    pos += snprintf(buf + pos, 48 - (size_t)pos,
                     "%08lx%05lx", (unsigned long)t, (unsigned long)r);
     buf[pos] = '\0';
     return (t_string){buf, pos};

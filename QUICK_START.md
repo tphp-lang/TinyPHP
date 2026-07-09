@@ -116,7 +116,55 @@ phpc_env_unpin($env);          // 用完释放
 
 ---
 
-## 3. 开发流程
+## 3. 多线程
+
+TinyPHP 内置 `Thread`/`Mutex`/`CondVar`/`WaitGroup` 四个 OOP 线程类（基于 tinycthread）。采用 Thread-Local 运行时策略，每线程独立内存池，无锁竞争。
+
+```php
+<?php
+#debug ret=42
+#debug sync=1
+
+class Main {
+    public function main(): void {
+        // Thread + join
+        $t = new Thread(function(): int { return 42; });
+        $t->start();
+        echo "ret=" . $t->join() . "\n";   // 42
+
+        // WaitGroup 跨线程同步
+        $wg = new WaitGroup();
+        $wg->add(1);
+        $t2 = new Thread(function() use ($wg): int {
+            $wg->done();
+            return 0;
+        });
+        $t2->start();
+        $wg->wait();
+        $t2->join();
+        echo "sync=1\n";
+    }
+}
+```
+
+```bash
+php tphp.php thread_demo.php --debug
+# [YES] ret=42
+# [YES] sync=1
+```
+
+| 类 | 常用方法 |
+|---|---|
+| `Thread` | `start()` / `join()` / `detach()` + 静态 `yield()` / `sleep($s)` / `id()` |
+| `Mutex` | `lock()` / `tryLock()` / `unlock()`（构造参数 `recursive=true` 用递归锁） |
+| `CondVar` | `wait(Mutex $m)` / `signal()` / `broadcast()` |
+| `WaitGroup` | `add(int $n)` / `done()` / `wait()` |
+
+> 闭包须返回 `int` 作为线程退出码。详见 [FUNCTIONS.md](FUNCTIONS.md) 多线程章节。
+
+---
+
+## 4. 开发流程
 
 ```
 改代码 → 跑相关测试 → 全量 CI → PR
@@ -135,7 +183,7 @@ phpc_env_unpin($env);          // 用完释放
 
 ---
 
-## 4. 代码约定
+## 5. 代码约定
 
 | 文件 | 职责 |
 |---|---|
@@ -151,7 +199,7 @@ phpc_env_unpin($env);          // 用完释放
 
 ---
 
-## 5. 常见问题
+## 6. 常见问题
 
 **Q: 编译报 `macro used with too many args`？**
 

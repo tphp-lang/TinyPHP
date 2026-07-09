@@ -28,6 +28,9 @@ static inline void tphp_rt_init(void) {
     SetConsoleOutputCP(65001); // CP_UTF8
     SetConsoleCP(65001);
 #endif
+#if TPHP_USE_WIN_TLS
+    tphp_tls_init();  // 初始化主线程 TLS slot
+#endif
     // 预热数组复用池：预分配 16 个空数组，后续 [] 从池 O(1) 获取
     for (int _pi = 0; _pi < 16 && arr_freelist_count < ARR_POOL_MAX; _pi++) {
         size_t _sz = sizeof(t_array) + (size_t)4 * sizeof(t_arr_entry);
@@ -165,9 +168,13 @@ static inline t_bool tphp_rt_str_ne(t_string a, t_string b)  { return tphp_rt_st
 
 // ── 字符串池 + Arena (bump allocator, 128KB主池 + 链接溢出块) ──
 
-#define STR_POOL_SIZE 131072
-static char  str_pool_buf[STR_POOL_SIZE];
-static char *str_pool_cur = str_pool_buf;
+// STR_POOL_SIZE 已在 types.h 中定义（供 tls.h 使用）
+#include "compat/tls.h"  // TCC+Windows 时定义 str_pool_buf 等访问宏
+
+#if !TPHP_USE_WIN_TLS
+static _Thread_local char  str_pool_buf[STR_POOL_SIZE];
+static _Thread_local char *str_pool_cur = NULL;  /* lazy init in str_pool_alloc */
+#endif
 
 // Arena 溢出块链表（主池满时分配，tphp_rt_free_all 时释放）
 typedef struct _str_arena_block {
@@ -176,7 +183,9 @@ typedef struct _str_arena_block {
     int    size;
     struct _str_arena_block *next;
 } str_arena_block;
-static str_arena_block *str_arena_head = NULL;
+#if !TPHP_USE_WIN_TLS
+static _Thread_local str_arena_block *str_arena_head = NULL;
+#endif
 
 /** 分配一个新的 arena 块（64KB），挂在链表头部 */
 static inline str_arena_block* str_arena_new_block(int minSize) {
@@ -207,6 +216,8 @@ static inline void str_arena_free_all(void) {
 /** 从小字符串池分配 len+1 字节（<=512 用池；池满→arena块；超512→独立malloc） */
 static inline char* str_pool_alloc(int len) {
     if (len <= 0) return NULL;
+    // 首次调用：初始化 bump 指针（每个线程独立的 str_pool_buf）
+    if (unlikely(str_pool_cur == NULL)) str_pool_cur = str_pool_buf;
     // 大块：直接 malloc（不走池也不走 arena）
     if (unlikely(len > 512)) return (char*)malloc((size_t)len + 1);
     // 主池足够 → O(1) bump
@@ -350,7 +361,9 @@ typedef struct tphp_rt_alloc {
     struct tphp_rt_alloc *next;
 } tphp_rt_alloc;
 
-static tphp_rt_alloc *tphp_alloc_head = NULL;
+#if !TPHP_USE_WIN_TLS
+static _Thread_local tphp_rt_alloc *tphp_alloc_head = NULL;
+#endif
 
 static inline void tphp_rt_register(void *ptr, int type) {
     if (ptr == NULL) return;
@@ -404,4 +417,31 @@ static inline void tphp_fn_error(t_string msg, const char *php_file, int php_lin
     fprintf(stderr, "\nFatal error: %.*s\n  in %s on line %d\n\n",
             msg.length > 0 ? msg.length : 0, STR_PTR(msg) ? STR_PTR(msg) : "", php_file, php_line);
     exit(1);
+}
+
+// ============================================================
+// 线程退出清理 — 释放子线程的 thread-local 内存池
+// （主线程不需要调用，进程退出时 OS 回收全部资源）
+// ============================================================
+
+static inline void tphp_thread_cleanup(void) {
+    // 1. 释放 arena 溢出块
+    str_arena_free_all();
+    str_pool_cur = NULL;  // 重置 bump 指针
+    // 2. 释放数组复用池中的缓存数组
+    for (int i = 0; i < arr_freelist_count; i++) {
+        if (arr_freelist[i]) free(arr_freelist[i]);
+    }
+    arr_freelist_count = 0;
+    // 3. 释放对象复用池中的缓存对象
+    for (int i = 0; i < _obj_freelist_count; i++) {
+        if (_obj_freelist[i].ptr) free(_obj_freelist[i].ptr);
+    }
+    _obj_freelist_count = 0;
+    // 4. 释放 GC 追踪列表（异常安全网）
+    tphp_rt_free_all();
+#if TPHP_USE_WIN_TLS
+    // 5. TCC+Windows: 释放 TLS 结构体本身
+    tphp_tls_destroy();
+#endif
 }

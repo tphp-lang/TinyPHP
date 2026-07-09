@@ -306,11 +306,17 @@ static inline void arr_intidx_delete(t_array *a, t_int key) {
 
 // === Array Freelist Pool (LIFO, up to 128 cached arrays) ===
 
-#ifndef ARR_POOL_MAX
-#define ARR_POOL_MAX  128
+// ARR_POOL_MAX 已在 types.h 中定义
+#include "compat/tls.h"  // TCC+Windows 时定义 arr_freelist 访问宏
+
+/* str_pool_alloc 定义在 runtime.h（在 array.h 之后 include），
+ * 前置声明以供 arr_item_str/arr_get_str_str 使用 */
+static inline char* str_pool_alloc(int len);
+
+#if !TPHP_USE_WIN_TLS
+static _Thread_local t_array*  arr_freelist[ARR_POOL_MAX];
+static _Thread_local int       arr_freelist_count = 0;
 #endif
-static t_array*  arr_freelist[ARR_POOL_MAX];
-static int       arr_freelist_count = 0;
 
 /** 将数组归还到复用池（仅当引用计数为 0 且无外部持有者时调用） */
 static inline void arr_pool_put(t_array *a) {
@@ -570,8 +576,9 @@ static inline t_string tphp_fn_arr_item_str(t_array *a, int idx) {
     t_var *v = &a->entries[idx].val;
     if (v->type == TYPE_STRING) return v->value._string;
     if (v->type == TYPE_INT) {
-        static char _b[32];
-        int n = snprintf(_b, sizeof(_b), "%lld", (long long)v->value._int);
+        char *_b = str_pool_alloc(32);
+        if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
+        int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
         return (t_string){.data = _b, .length = n};
     }
     return (t_string){.data = NULL, .length = 0, .is_local = false};
@@ -647,8 +654,9 @@ static inline t_string tphp_fn_arr_get_str_str(t_array *a, t_string key) {
     if (v == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (v->type == TYPE_STRING) return v->value._string;
     if (v->type == TYPE_INT) {
-        static char _b[32];
-        int n = snprintf(_b, sizeof(_b), "%lld", (long long)v->value._int);
+        char *_b = str_pool_alloc(32);
+        if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
+        int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
         return (t_string){.data = _b, .length = n};
     }
     return (t_string){.data = NULL, .length = 0, .is_local = false};

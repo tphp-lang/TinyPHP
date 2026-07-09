@@ -36,10 +36,13 @@ typedef struct _t_class {
 // ── Object lifecycle ──────────────────────────────────────
 
 // ── Object freelist pool (LIFO, eliminates calloc/free for hot paths)
-#define OBJ_FREELIST_MAX 128
-typedef struct { void *ptr; uint32_t size; } _obj_pool_slot;
-static _obj_pool_slot _obj_freelist[OBJ_FREELIST_MAX];
-static int _obj_freelist_count = 0;
+// OBJ_FREELIST_MAX 和 _obj_pool_slot 已在 types.h 中定义（供 tls.h 使用）
+#include "compat/tls.h"  // TCC+Windows 时定义 _obj_freelist 访问宏
+
+#if !TPHP_USE_WIN_TLS
+static _Thread_local _obj_pool_slot _obj_freelist[OBJ_FREELIST_MAX];
+static _Thread_local int _obj_freelist_count = 0;
+#endif
 
 /** Recycle object into pool instead of free() */
 static inline void _obj_pool_put(void *obj, uint32_t sz) {
