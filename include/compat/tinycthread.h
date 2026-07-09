@@ -75,7 +75,6 @@
 
 #if defined(_TTHREAD_POSIX_)
   #include <pthread.h>
-  #include <signal.h>
   #include <sched.h>
   #include <unistd.h>
   /* TCC 在 Linux/macOS 自带的 errno.h 引用链不完整
