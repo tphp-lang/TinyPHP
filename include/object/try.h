@@ -161,7 +161,21 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
             _tp_ex_top->thrown  = 1; \
             /* 把 Exception 从全局注册列表移除，避免被 tphp_rt_free_all 释放（catch 块还需访问它） */ \
             if (_orig != NULL) tphp_rt_unregister(_orig); \
+            /* Exception::message 可能指向 str_pool/arena，tphp_rt_free_all 后变野指针。
+             * free_all 前用 malloc 备份，free_all 后重建 message 指向 malloc 副本。
+             * SSO 短串(≤23B)内联在 t_string.local 中不受影响，跳过即可。 */ \
+            char *_msg_backup = NULL; int _msg_len = 0; \
+            if (_e && !_e->message.is_local && _e->message.length > 0) { \
+                _msg_len = _e->message.length; \
+                _msg_backup = _tp_dup_msg_n(STR_PTR_V(_e->message), _msg_len); \
+            } \
             tphp_rt_free_all(); \
+            if (_msg_backup != NULL) { \
+                _e->message.data = _msg_backup; \
+                _e->message.length = _msg_len; \
+                _e->message.is_local = false; \
+                _e->message.is_lit = false; \
+            } \
             longjmp(_tp_ex_top->jmp_buf, 1); \
         } else { \
             tphp_rt_free_all(); \

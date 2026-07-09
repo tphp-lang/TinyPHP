@@ -11,8 +11,14 @@
 #include "object/object.h"     // tp_obj_alloc/release — runtime.h 需要
 #include "array.h"             // arr_freelist/tphp_fn_arr_* — runtime.h 需要
 #include "runtime.h"           // tphp_fn_error + tphp_thread_cleanup 定义在此
-/* 线程库 — 在 runtime.h 之后引入，使 thread wrapper 能调用 tphp_thread_cleanup() */
-#define TPHP_THREAD_CLEANUP() tphp_thread_cleanup()
+/* 线程库 — 在 runtime.h 之后引入，使 thread wrapper 能调用 tphp_thread_cleanup()。
+ * TCC+macOS: _Thread_local 退化为普通 static（不隔离），子线程 cleanup 会破坏
+ *   主线程内存，跳过。TCC+Windows 通过 tls.h 真正隔离，正常 cleanup。 */
+#if defined(__TINYC__) && defined(__APPLE__)
+  #define TPHP_THREAD_CLEANUP() ((void)0)
+#else
+  #define TPHP_THREAD_CLEANUP() tphp_thread_cleanup()
+#endif
 #include "compat/tinycthread.h"
 #include "object/thread.h"      // Thread/Mutex/CondVar/WaitGroup COS 类
 #include "object/exception.h"   // tphp_class_Exception — tp_throw 需要 (前置以供后续内函数使用)
