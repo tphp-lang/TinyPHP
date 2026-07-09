@@ -78,15 +78,30 @@
   #include <signal.h>
   #include <sched.h>
   #include <unistd.h>
-  #include <errno.h>
+  /* TCC 在 Linux/macOS 自带的 errno.h 引用链不完整
+   * (bits/errno.h → linux/errno.h 找不到)。
+   * tinycthread 仅需 ETIMEDOUT（pthread_cond_timedwait 超时返回值），
+   * 手动定义以避免引入 TCC 损坏的 errno.h。 */
+  #if defined(__TINYC__)
+    #ifndef ETIMEDOUT
+      #ifdef __linux__
+        #define ETIMEDOUT 110
+      #else
+        #define ETIMEDOUT 60
+      #endif
+    #endif
+  #else
+    #include <errno.h>
+  #endif
 #elif defined(_TTHREAD_WIN32_)
   #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
   #endif
   #include <windows.h>
   #include <process.h>   /* _beginthreadex */
-  /* TCC 的 windows.h 缺少 SRWLOCK / CONDITION_VARIABLE — 手动补充 */
-  #if !defined(_TTHREAD_HAVE_SRWLOCK)
+  /* TCC 的 windows.h 缺少 SRWLOCK / CONDITION_VARIABLE — 手动补充。
+   * GCC/Clang (MSYS2) 的 windows.h 已包含完整定义，跳过以避免冲突。 */
+  #if defined(__TINYC__) && !defined(_TTHREAD_HAVE_SRWLOCK)
     typedef struct _TTHREAD_SRWLOCK {
       PVOID Ptr;
     } SRWLOCK, *PSRWLOCK;
@@ -96,7 +111,7 @@
     WINBASEAPI void    WINAPI ReleaseSRWLockExclusive(PSRWLOCK Lock);
     WINBASEAPI BOOLEAN WINAPI TryAcquireSRWLockExclusive(PSRWLOCK Lock);
   #endif
-  #if !defined(_TTHREAD_HAVE_CONDVAR)
+  #if defined(__TINYC__) && !defined(_TTHREAD_HAVE_CONDVAR)
     typedef struct _TTHREAD_CONDITION_VARIABLE {
       PVOID Ptr;
     } CONDITION_VARIABLE, *PCONDITION_VARIABLE;
