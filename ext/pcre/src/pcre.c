@@ -32,6 +32,9 @@ typedef enum {
     TP_ASSERT_LE,    // $ end of line (multiline)
     TP_ASSERT_BOUND, // \b word boundary
     TP_ASSERT_NBOUND,// \B non-word boundary
+    TP_LOOK_START,   // lookahead start: target_x=body, target_y=continuation; inverted=negative
+    TP_LOOK_END,     // lookahead body success: target_x=continuation; inverted=negative
+    TP_LOOK_FAIL,    // lookahead body failure handler: target_x=continuation; inverted=negative
 } tp_inst_type;
 
 typedef struct {
@@ -59,6 +62,10 @@ typedef struct {
     int   cap_size;
     int   backtrack_count;          // incremented per backtrack
     int   backtrack_limit_exceeded; // set when backtrack_count exceeds limit
+    // Lookahead stack (max 16 nesting levels): saves sp + stack_ptr checkpoint
+    int   look_sp[16];
+    int   look_off[16];
+    int   look_ptr;
 } tp_machine;
 
 // Compiled regex
@@ -106,6 +113,7 @@ typedef enum {
     TP_NODE_NSPACE, // \S
     TP_NODE_LOWER,  // \a
     TP_NODE_UPPER,  // \A
+    TP_NODE_LOOKAHEAD, // (?=...) or (?!...) — inverted flag = negative
 } tp_node_type;
 
 typedef struct tp_node {
@@ -319,10 +327,36 @@ static tp_node tp_parse_node_impl(tp_parser *p, int terminator, int *out_group_c
             p->pos += char_len;
             int idx = -1;
             bool cap = true;
+            bool is_lookahead = false;
 
             if (p->pos < p->len && p->pat[p->pos] == '?') {
                 p->pos++;
-                if (p->pos < p->len && (p->pat[p->pos] == 'i' || p->pat[p->pos] == 'm' || p->pat[p->pos] == 's')) {
+                if (p->pos < p->len && (p->pat[p->pos] == '=' || p->pat[p->pos] == '!')) {
+                    // Lookahead: (?=...) positive, (?!...) negative
+                    bool neg = (p->pat[p->pos] == '!');
+                    p->pos++;
+                    int sub_groups = 0;
+                    tp_node sub = tp_parse_node_impl(p, ')', &sub_groups);
+                    p->group_counter = sub_groups;
+                    node.typ = TP_NODE_LOOKAHEAD;
+                    node.inverted = neg;
+                    // Wrap body: if alternation, wrap in group; else use nodes directly
+                    if (sub.typ == TP_NODE_ALT) {
+                        tp_node *wrap = tp_alloc_nodes(1);
+                        wrap[0].typ = TP_NODE_GROUP;
+                        wrap[0].quant.min = 1; wrap[0].quant.max = 1; wrap[0].quant.greedy = true;
+                        wrap[0].group_idx = -1;
+                        wrap[0].alts = sub.alts;
+                        wrap[0].alts_len = sub.alts_len;
+                        node.nodes = wrap;
+                        node.nodes_len = 1;
+                    } else {
+                        node.nodes = sub.nodes;
+                        node.nodes_len = sub.nodes_len;
+                    }
+                    *out_group_count = p->group_counter;
+                    is_lookahead = true;
+                } else if (p->pos < p->len && (p->pat[p->pos] == 'i' || p->pat[p->pos] == 'm' || p->pat[p->pos] == 's')) {
                     // Inline flags (?i) (?m) (?s)
                     while (p->pos < p->len && p->pat[p->pos] != ')') {
                         char f = p->pat[p->pos];
@@ -357,26 +391,28 @@ static tp_node tp_parse_node_impl(tp_parser *p, int terminator, int *out_group_c
                 }
             }
 
-            if (cap) {
-                if (idx == -1) idx = p->group_counter;
-                p->group_counter++;
-            }
+            if (!is_lookahead) {
+                if (cap) {
+                    if (idx == -1) idx = p->group_counter;
+                    p->group_counter++;
+                }
 
-            int sub_groups = 0;
-            tp_node sub = tp_parse_node_impl(p, ')', &sub_groups);
-            p->group_counter = sub_groups;
-            node.typ = TP_NODE_GROUP;
-            node.group_idx = cap ? idx : -1;
-            node.nodes = sub.nodes;
-            node.nodes_len = sub.nodes_len;
-            // If sub was an alternation, preserve it
-            if (sub.typ == TP_NODE_ALT) {
-                node.typ = TP_NODE_ALT;
-                node.alts = sub.alts;
-                node.alts_len = sub.alts_len;
+                int sub_groups = 0;
+                tp_node sub = tp_parse_node_impl(p, ')', &sub_groups);
+                p->group_counter = sub_groups;
+                node.typ = TP_NODE_GROUP;
                 node.group_idx = cap ? idx : -1;
+                node.nodes = sub.nodes;
+                node.nodes_len = sub.nodes_len;
+                // If sub was an alternation, preserve it
+                if (sub.typ == TP_NODE_ALT) {
+                    node.typ = TP_NODE_ALT;
+                    node.alts = sub.alts;
+                    node.alts_len = sub.alts_len;
+                    node.group_idx = cap ? idx : -1;
+                }
+                *out_group_count = p->group_counter;
             }
-            *out_group_count = p->group_counter;
         } else if (chr == '[') {
             p->pos += char_len;
             int end = -1;
@@ -736,6 +772,29 @@ static void tp_emit_logic(tp_compiler *c, tp_node *node) {
         case TP_NODE_NWB:
             tp_emit(c, ((tp_inst){.typ = TP_ASSERT_NBOUND}));
             break;
+        case TP_NODE_LOOKAHEAD: {
+            // Layout:
+            //   TP_LOOK_START  target_x=L_body, target_y=L_fail   ; push frame(pc=L_fail), save sp/offset
+            //   TP_LOOK_FAIL   target_x=L_after                   ; body failure handler
+            //   L_body: <body expr>
+            //   TP_LOOK_END    target_x=L_after                   ; body success handler
+            //   L_after: ...
+            bool neg = node->inverted;
+            int start_idx = tp_emit(c, ((tp_inst){.typ = TP_LOOK_START, .inverted = neg}));
+            int fail_idx = tp_emit(c, ((tp_inst){.typ = TP_LOOK_FAIL, .inverted = neg}));
+            int body_start = c->prog_len;
+            c->prog[start_idx].target_x = body_start;
+            c->prog[start_idx].target_y = fail_idx; // fail handler address (for VM + optimizer)
+            // Emit body (lookahead is non-capturing, just emit children)
+            for (int i = 0; i < node->nodes_len; i++) {
+                tp_emit_node(c, &node->nodes[i]);
+            }
+            int end_idx = tp_emit(c, ((tp_inst){.typ = TP_LOOK_END, .inverted = neg}));
+            int after = c->prog_len;
+            c->prog[fail_idx].target_x = after;
+            c->prog[end_idx].target_x = after;
+            break;
+        }
         default:
             tp_emit_class(c, node);
             break;
@@ -747,7 +806,9 @@ static void tp_optimize(tp_compiler *c) {
     // Find jump targets (can't merge through them)
     bool *is_target = (bool *)calloc(c->prog_len + 1, sizeof(bool));
     for (int i = 0; i < c->prog_len; i++) {
-        if (c->prog[i].typ == TP_SPLIT || c->prog[i].typ == TP_JMP) {
+        tp_inst_type t = c->prog[i].typ;
+        if (t == TP_SPLIT || t == TP_JMP
+            || t == TP_LOOK_START || t == TP_LOOK_END || t == TP_LOOK_FAIL) {
             if (c->prog[i].target_x >= 0 && c->prog[i].target_x <= c->prog_len)
                 is_target[c->prog[i].target_x] = true;
             if (c->prog[i].target_y >= 0 && c->prog[i].target_y <= c->prog_len)
@@ -800,9 +861,12 @@ static void tp_optimize(tp_compiler *c) {
 
     // Fix jump targets
     for (int k = 0; k < new_len; k++) {
-        if (new_prog[k].typ == TP_SPLIT || new_prog[k].typ == TP_JMP) {
+        tp_inst_type t = new_prog[k].typ;
+        if (t == TP_SPLIT || t == TP_JMP
+            || t == TP_LOOK_START || t == TP_LOOK_END || t == TP_LOOK_FAIL) {
             new_prog[k].target_x = idx_map[new_prog[k].target_x];
-            new_prog[k].target_y = idx_map[new_prog[k].target_y];
+            if (t == TP_SPLIT || t == TP_LOOK_START)
+                new_prog[k].target_y = idx_map[new_prog[k].target_y];
         }
     }
 
@@ -893,6 +957,7 @@ static int tp_vm_match(const tp_regex *r, const char *text, int text_len,
     int sp = start_pos;
     int stack_ptr = 0;
     int cap_size = r->total_groups * 2;
+    m->look_ptr = 0; // reset lookahead stack
 
     // Clear captures
     for (int i = 0; i < cap_size; i++) m->captures[i] = -1;
@@ -1037,6 +1102,66 @@ static int tp_vm_match(const tp_regex *r, const char *text, int text_len,
                 }
                 break;
             }
+
+            case TP_LOOK_START: {
+                // Save sp and stack_ptr checkpoint, push backtrack frame for body failure
+                if (m->look_ptr >= 16) goto backtrack; // nesting overflow
+                int frame_size = cap_size + 2;
+                if (stack_ptr + frame_size >= m->stack_cap) {
+                    int new_cap = m->stack_cap * 2;
+                    if (new_cap > 1000000) goto backtrack;
+                    int *ns = (int *)realloc(m->stack, new_cap * sizeof(int));
+                    if (!ns) goto backtrack;
+                    m->stack = ns;
+                    m->stack_cap = new_cap;
+                }
+                m->look_sp[m->look_ptr] = sp;
+                m->look_off[m->look_ptr] = stack_ptr;
+                m->look_ptr++;
+                // Push backtrack frame: (captures, sp, pc=fail_handler)
+                // fail_handler = pc + 1 (the TP_LOOK_FAIL instruction right after TP_LOOK_START)
+                int off = stack_ptr;
+                for (int i = 0; i < cap_size; i++)
+                    m->stack[off + i] = m->captures[i];
+                m->stack[off + cap_size] = sp;
+                m->stack[off + cap_size + 1] = prog[pc].target_y; // fail handler address
+                stack_ptr += frame_size;
+                pc = prog[pc].target_x; // enter body
+                break;
+            }
+
+            case TP_LOOK_END: {
+                // Body succeeded
+                m->look_ptr--;
+                int saved_sp = m->look_sp[m->look_ptr];
+                int saved_off = m->look_off[m->look_ptr];
+                if (prog[pc].inverted) {
+                    // Negative: body succeeded → FAIL
+                    // Discard lookahead frame + body internals, then backtrack
+                    stack_ptr = saved_off;
+                    goto backtrack;
+                } else {
+                    // Positive: body succeeded → SUCCEED (zero-width)
+                    // Restore sp, discard lookahead frame + body internals, keep captures
+                    sp = saved_sp;
+                    stack_ptr = saved_off;
+                    pc = prog[pc].target_x; // continuation
+                }
+                break;
+            }
+
+            case TP_LOOK_FAIL: {
+                // Body failed — frame was popped by backtrack, captures/sp already restored
+                m->look_ptr--;
+                if (prog[pc].inverted) {
+                    // Negative: body failed → SUCCEED (zero-width, sp already restored)
+                    pc = prog[pc].target_x; // continuation
+                } else {
+                    // Positive: body failed → FAIL
+                    goto backtrack;
+                }
+                break;
+            }
         }
         continue;
 
@@ -1123,7 +1248,7 @@ static int tp_find_from(const tp_regex *r, const char *text, int text_len,
 #define TP_CACHE_SIZE 32
 
 typedef struct {
-    char      key[256];    // pattern string (with delimiters)
+    char      *key;        // pattern string (with delimiters), malloc 分配支持任意长度
     int       key_len;
     tp_regex *regex;
     bool      used;
@@ -1138,7 +1263,8 @@ static tp_regex *tp_get_or_compile(t_string pattern) {
 
     // Search cache
     for (int i = 0; i < TP_CACHE_SIZE; i++) {
-        if (tp_cache[i].used && tp_cache[i].key_len == key_len
+        if (tp_cache[i].used && tp_cache[i].key != NULL
+            && tp_cache[i].key_len == key_len
             && memcmp(tp_cache[i].key, key, key_len) == 0) {
             return tp_cache[i].regex;
         }
@@ -1173,12 +1299,16 @@ static tp_regex *tp_get_or_compile(t_string pattern) {
         }
         free(tp_cache[slot].regex->prog);
         free(tp_cache[slot].regex);
+        free(tp_cache[slot].key);
     }
 
     tp_cache[slot].used = true;
-    tp_cache[slot].key_len = key_len < 256 ? key_len : 255;
-    memcpy(tp_cache[slot].key, key, tp_cache[slot].key_len);
-    tp_cache[slot].key[tp_cache[slot].key_len] = 0;
+    tp_cache[slot].key_len = key_len;
+    tp_cache[slot].key = (char *)malloc((size_t)key_len + 1);
+    if (tp_cache[slot].key) {
+        memcpy(tp_cache[slot].key, key, key_len);
+        tp_cache[slot].key[key_len] = 0;
+    }
     tp_cache[slot].regex = r;
 
     return r;
@@ -1303,6 +1433,8 @@ t_array* tphp_fn_preg_match_all(t_string pattern, t_string subject) {
 }
 
 // preg_replace: $limit=-1 无限制；支持 $1/$2 反向引用
+// P3-6 优化：首次匹配时保存所有 captures，替换时直接查表（O(n+matches)），
+//           不再为每个 $N 反向引用重跑 tp_find_from（原 O(n×matches×backrefs)）
 t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
                               t_string subject, t_int limit) {
     g_pcre_last_error = PREG_NO_ERROR;
@@ -1328,9 +1460,11 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
     int pos = 0;
     int *match_starts = NULL;
     int *match_ends = NULL;
+    int *match_caps = NULL;       // P3-6: 每个匹配的完整 captures（match_count × cap_size）
     int match_count = 0;
     int match_cap = 0;
     int max_matches = (limit > 0) ? (int)limit : 0x7FFFFFFF;
+    int cap_sz = m.cap_size;      // 保存 cap_size 供后续使用（m 释放后仍需）
 
     while (pos <= text_len && match_count < max_matches) {
         int end = tp_find_from(r, text, text_len, pos, &m);
@@ -1342,16 +1476,20 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
             match_cap = match_cap > 0 ? match_cap * 2 : 16;
             match_starts = (int *)realloc(match_starts, match_cap * sizeof(int));
             match_ends = (int *)realloc(match_ends, match_cap * sizeof(int));
+            match_caps = (int *)realloc(match_caps, (size_t)match_cap * (cap_sz > 0 ? cap_sz : 1) * sizeof(int));
         }
         match_starts[match_count] = start;
         match_ends[match_count] = end;
+        if (cap_sz > 0) {
+            memcpy(match_caps + (size_t)match_count * cap_sz, m.captures, cap_sz * sizeof(int));
+        }
         match_count++;
         if (end > pos) pos = end; else pos++;
     }
 
     free(m.stack); free(m.captures);
 
-    if (match_count == 0) return subject;
+    if (match_count == 0) { free(match_starts); free(match_ends); free(match_caps); return subject; }
 
     int result_len = text_len;
     for (int i = 0; i < match_count; i++) {
@@ -1361,7 +1499,7 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
 
     // Use malloc for result buffer (str_pool_alloc causes issues with tphp_rt_str_free)
     char *result_buf = (char *)malloc(result_len + 1);
-    if (!result_buf) { free(match_starts); free(match_ends); return subject; }
+    if (!result_buf) { free(match_starts); free(match_ends); free(match_caps); return subject; }
 
     // Initialize buffer to avoid garbage
     memset(result_buf, 0, result_len + 1);
@@ -1370,26 +1508,19 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
     for (int mi = 0; mi < match_count; mi++) {
         int start = match_starts[mi], end = match_ends[mi];
         if (start > src_pos) { memcpy(result_buf + wpos, text + src_pos, start - src_pos); wpos += start - src_pos; }
+        // P3-6: 直接查表获取 captures，无需重跑 tp_find_from
+        int *caps = (cap_sz > 0) ? (match_caps + (size_t)mi * cap_sz) : NULL;
         // Copy replacement with $N backreference support
         for (int i = 0; i < repl_len; i++) {
             if (repl[i] == '$' && i + 1 < repl_len && repl[i+1] >= '1' && repl[i+1] <= '9') {
                 int g = repl[i+1] - '0';
-                if (g < r->total_groups) {
-                    // Re-run match to get captures
-                    tp_machine m2 = {0};
-                    m2.stack_cap = 4096;
-                    m2.stack = (int *)malloc(m2.stack_cap * sizeof(int));
-                    m2.cap_size = r->total_groups * 2;
-                    m2.captures = (int *)calloc(m2.cap_size, sizeof(int));
-                    tp_find_from(r, text, text_len, start, &m2);
-                    int gs = m2.captures[g * 2];
-                    int ge = m2.captures[g * 2 + 1];
+                if (g < r->total_groups && caps != NULL) {
+                    int gs = caps[g * 2];
+                    int ge = caps[g * 2 + 1];
                     if (gs >= 0 && ge >= gs) {
                         memcpy(result_buf + wpos, text + gs, ge - gs);
                         wpos += ge - gs;
                     }
-                    free(m2.stack);
-                    free(m2.captures);
                 }
                 i++;
             } else {
@@ -1401,7 +1532,7 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
     if (src_pos < text_len) { memcpy(result_buf + wpos, text + src_pos, text_len - src_pos); wpos += text_len - src_pos; }
     result_buf[wpos] = '\0';
 
-    free(match_starts); free(match_ends);
+    free(match_starts); free(match_ends); free(match_caps);
     return (t_string){.data = result_buf, .length = wpos, .is_local = false};
 }
 

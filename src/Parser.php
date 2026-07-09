@@ -28,6 +28,18 @@ declare(strict_types=1);
  */
 class Parser
 {
+    /** 标识符类 token — 可作为变量名/函数名/类名引用（替代 parsePrimary 中的巨型 || 链） */
+    private static array $identifierLikeTokens = [
+        TokenType::IDENTIFIER, TokenType::SELF_KW,
+        TokenType::VAR_DUMP, TokenType::COUNT, TokenType::EXIT, TokenType::DIE,
+        TokenType::ISSET, TokenType::EMPTY_KW, TokenType::UNSET,
+        TokenType::ERROR, TokenType::TIME, TokenType::DATE,
+        TokenType::SLEEP, TokenType::USLEEP, TokenType::HRTIME,
+        TokenType::IS_INT, TokenType::IS_FLOAT, TokenType::IS_STRING,
+        TokenType::IS_BOOL, TokenType::IS_ARRAY, TokenType::IS_OBJECT,
+        TokenType::IS_NULL, TokenType::IS_CALLABLE,
+    ];
+
     /** @var Token[] */
     private array $tokens;
     private int $current = 0;
@@ -159,6 +171,10 @@ class Parser
             } elseif ($this->check(TokenType::TRAIT_KW)) {
                 $cls = $this->parseTraitDecl();
                 $extraClasses[] = $cls;
+            } elseif ($this->check(TokenType::ENUM_KW)) {
+                // 允许 enum 在主声明循环中（与 class/interface 交错声明）
+                $this->advance();
+                $enums[] = $this->parseEnumDecl();
             } elseif ($this->check(TokenType::FUNCTION)) {
                 $functions[] = $this->parseFunction();
             } elseif ($this->check(TokenType::ECHO_KW) || $this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP)) {
@@ -226,7 +242,7 @@ class Parser
     }
 
     // ============================================================
-    // enum Name: int { case A = 1; case B = 2; }
+    // enum Name: int { case A = 1; case B = 2; public function label(): string {...} const MAX = 9; }
     // ============================================================
     private function parseEnumDecl(): EnumNode
     {
@@ -246,19 +262,37 @@ class Parser
             $this->error("Enum only supports int or string type, got '{$this->peek()->lexeme}'");
         }
 
+        // implements Interface1, Interface2 (recorded, not vtable-enforced)
+        $implements = [];
+        if ($this->match(TokenType::IMPLEMENTS_KW)) {
+            do {
+                $implements[] = $this->parseQualifiedName();
+            } while ($this->match(TokenType::COMMA));
+        }
+
         $this->consume(TokenType::LBRACE, 'Expected {');
         $cases = [];
+        $methods = [];
+        $classConsts = [];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
-            $this->consume(TokenType::CASE_KW, 'Expected case');
-            $caseName = $this->consume(TokenType::IDENTIFIER, 'Expected case name')->lexeme;
-            $this->consume(TokenType::EQUALS, 'Expected =');
-            $caseValue = $this->parsePrimary(); // 字面量
-            $this->consume(TokenType::SEMICOLON, 'Expected ;');
-            $cases[] = new EnumCaseNode($caseName, $caseValue);
+            if ($this->check(TokenType::CASE_KW)) {
+                $this->consume(TokenType::CASE_KW, 'Expected case');
+                $caseName = $this->consume(TokenType::IDENTIFIER, 'Expected case name')->lexeme;
+                $this->consume(TokenType::EQUALS, 'Expected =');
+                $caseValue = $this->parsePrimary(); // 字面量
+                $this->consume(TokenType::SEMICOLON, 'Expected ;');
+                $cases[] = new EnumCaseNode($caseName, $caseValue);
+            } elseif ($this->isClassConstStart()) {
+                $classConsts[] = $this->parseClassConstDecl($name);
+            } elseif ($this->check(TokenType::CONST_KW)) {
+                $this->error("Enum constants must have an explicit type declaration (e.g., 'public const int MAX = 9')");
+            } else {
+                $methods[] = $this->parseMethod();
+            }
         }
         $this->consume(TokenType::RBRACE, 'Expected }');
 
-        return new EnumNode($name, $bt, $cases, $this->currentNamespace);
+        return new EnumNode($name, $bt, $cases, $this->currentNamespace, $methods, $classConsts, $implements);
     }
 
     // ============================================================
@@ -1219,10 +1253,23 @@ class Parser
         return $this->setPos(new YieldExpr($key, $value), $line, $col);
     }
 
-    private function parseAssignStmt(?string $type = null): AssignStmtNode
+    private function parseAssignStmt(?string $type = null): StmtNode
     {
         $varName = $this->advance()->lexeme;
         $this->consume(TokenType::EQUALS, 'Expected =');
+
+        // 链式赋值: $a = $b = 1 → 展开为 $b = 1; $a = $b;
+        if ($this->check(TokenType::IDENTIFIER)
+            && str_starts_with($this->peek()->lexeme, '$')
+            && $this->checkNext(TokenType::EQUALS)) {
+            $innerVarName = $this->peek()->lexeme;
+            $innerStmt = $this->parseAssignStmt();
+            $outerStmt = new AssignStmtNode($varName, new VariableExpr($innerVarName), $type);
+            $stmts = $innerStmt instanceof BlockStmtNode ? $innerStmt->stmts : [$innerStmt];
+            $stmts[] = $outerStmt;
+            return new BlockStmtNode($stmts);
+        }
+
         $expr = $this->parseExpr();
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
         return new AssignStmtNode($varName, $expr, $type);
@@ -1555,62 +1602,39 @@ class Parser
     {
         $line = $this->peek()->line;
         $col  = $this->peek()->column;
+        $tok  = $this->peek()->type;
 
-        // yield（作为表达式：$x = yield 5; $y = yield $k => $v;）
-        if ($this->match(TokenType::YIELD_KW)) {
-            return $this->parseYieldExpr();
-        }
+        // ── 简单字面量 / 魔术常量 / 委托：match 分发 ──
+        // 各 arm 内 advance + 构造节点；default=null 表示复杂情况需后续 if-else 处理
+        // （advance() 返回 Token 恒为 truthy，三元 false 分支永不可达，仅为满足 match 类型一致性）
+        $simple = match ($tok) {
+            // 字面量（需要 token 的 literal 属性）
+            TokenType::STRING_LIT => $this->setPos(new StringLiteralExpr((string)$this->advance()->literal), $line, $col),
+            TokenType::INT_LIT    => $this->setPos(new IntLiteralExpr((int)$this->advance()->literal), $line, $col),
+            TokenType::FLOAT_LIT  => $this->setPos(new FloatLiteralExpr((float)$this->advance()->literal), $line, $col),
+            // 关键字字面量（不需要 token 数据）
+            TokenType::TRUE_KW    => $this->advance() ? $this->setPos(new BoolLiteralExpr(true), $line, $col) : null,
+            TokenType::FALSE_KW   => $this->advance() ? $this->setPos(new BoolLiteralExpr(false), $line, $col) : null,
+            TokenType::NULL_KW    => $this->advance() ? $this->setPos(new NullLiteralExpr(), $line, $col) : null,
+            TokenType::PARENT_KW  => $this->advance() ? $this->setPos(new VariableExpr('parent'), $line, $col) : null,
+            // 魔术常量（需要 token 的 lexeme 和 line）
+            TokenType::MAGIC_LINE, TokenType::MAGIC_FILE, TokenType::MAGIC_DIR,
+            TokenType::DIR_SEP, TokenType::MAGIC_CLASS, TokenType::MAGIC_METHOD,
+            TokenType::MAGIC_FUNCTION, TokenType::MAGIC_NAMESPACE
+                => $this->setPos(new MagicConstExpr($this->advance()->lexeme, $this->previous()->line), $line, $col),
+            // 委托（advance 后调用专用解析器，parseYieldExpr 内部自处理 setPos）
+            TokenType::YIELD_KW  => $this->advance() ? $this->parseYieldExpr() : null,
+            TokenType::FN_KW     => $this->advance() ? $this->setPos($this->parseArrowFunction(), $line, $col) : null,
+            TokenType::FUNCTION  => $this->advance() ? $this->setPos($this->parseClosure(), $line, $col) : null,
+            TokenType::LBRACKET  => $this->advance() ? $this->setPos($this->parseArrayLiteral(), $line, $col) : null,
+            TokenType::NEW_KW    => $this->advance() ? $this->setPos($this->parseNewExpr(), $line, $col) : null,
+            TokenType::MATCH     => $this->advance() ? $this->setPos($this->parseMatchExpr(), $line, $col) : null,
+            default => null,
+        };
+        if ($simple !== null) return $simple;
 
-        // 字符串
-        if ($this->match(TokenType::STRING_LIT)) {
-            return $this->setPos(new StringLiteralExpr((string)$this->previous()->literal), $line, $col);
-        }
-        // 数字
-        if ($this->match(TokenType::INT_LIT)) {
-            return $this->setPos(new IntLiteralExpr((int)$this->previous()->literal), $line, $col);
-        }
-        if ($this->match(TokenType::FLOAT_LIT)) {
-            return $this->setPos(new FloatLiteralExpr((float)$this->previous()->literal), $line, $col);
-        }
-        // 布尔 / null
-        if ($this->match(TokenType::TRUE_KW)) {
-            return $this->setPos(new BoolLiteralExpr(true), $line, $col);
-        }
-        if ($this->match(TokenType::FALSE_KW)) {
-            return $this->setPos(new BoolLiteralExpr(false), $line, $col);
-        }
-        if ($this->match(TokenType::NULL_KW)) {
-            return $this->setPos(new NullLiteralExpr(), $line, $col);
-        }
-        // __LINE__ / __FILE__ / __DIR__ / DIRECTORY_SEPARATOR / __CLASS__ / __METHOD__
-        $magicTokens = [TokenType::MAGIC_LINE, TokenType::MAGIC_FILE, TokenType::MAGIC_DIR, TokenType::DIR_SEP, TokenType::MAGIC_CLASS, TokenType::MAGIC_METHOD];
-        foreach ($magicTokens as $mt) {
-            if ($this->match($mt)) {
-                return $this->setPos(new MagicConstExpr($this->previous()->lexeme, $this->previous()->line), $line, $col);
-            }
-        }
-        // parent:: → special variable
-        if ($this->match(TokenType::PARENT_KW)) {
-            return $this->setPos(new VariableExpr('parent'), $line, $col);
-        }
-        // fn($x) => expr  箭头函数
-        if ($this->match(TokenType::FN_KW)) {
-            return $this->setPos($this->parseArrowFunction(), $line, $col);
-        }
-        // 匿名函数 / 闭包: function(): type { ... }
-        if ($this->match(TokenType::FUNCTION)) {
-            return $this->setPos($this->parseClosure(), $line, $col);
-        }
-        // 数组字面量: [ expr, expr, ... ]
-        if ($this->match(TokenType::LBRACKET)) {
-            return $this->setPos($this->parseArrayLiteral(), $line, $col);
-        }
-        // new ClassName(args)
-        if ($this->match(TokenType::NEW_KW)) {
-            return $this->setPos($this->parseNewExpr(), $line, $col);
-        }
         // 类型转换: (type) expr  |  括号分组: ( expr )
-        if ($this->check(TokenType::LPAREN)) {
+        if ($tok === TokenType::LPAREN) {
             $nextType = $this->peek(1);
             $typeTokens = [
                 TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
@@ -1626,12 +1650,8 @@ class Parser
                 return $inner; // 括号不产生额外 AST 节点，直接返回内部表达式
             }
         }
-        // match 表达式: match(expr) { arm, arm, ... }
-        if ($this->match(TokenType::MATCH)) {
-            return $this->setPos($this->parseMatchExpr(), $line, $col);
-        }
-        // 变量 / self 关键字
-        if ($this->check(TokenType::IDENTIFIER) || $this->check(TokenType::SELF_KW) || $this->check(TokenType::VAR_DUMP) || $this->check(TokenType::COUNT) || $this->check(TokenType::EXIT) || $this->check(TokenType::DIE) || $this->check(TokenType::ISSET) || $this->check(TokenType::EMPTY_KW) || $this->check(TokenType::UNSET) || $this->check(TokenType::ERROR) || $this->check(TokenType::TIME) || $this->check(TokenType::DATE) || $this->check(TokenType::SLEEP) || $this->check(TokenType::USLEEP) || $this->check(TokenType::HRTIME) || $this->check(TokenType::IS_INT) || $this->check(TokenType::IS_FLOAT) || $this->check(TokenType::IS_STRING) || $this->check(TokenType::IS_BOOL) || $this->check(TokenType::IS_ARRAY) || $this->check(TokenType::IS_OBJECT) || $this->check(TokenType::IS_NULL) || $this->check(TokenType::IS_CALLABLE)) {
+        // 变量 / self 关键字 / 标识符类函数名（静态集替代原巨型 || 链）
+        if (in_array($tok, self::$identifierLikeTokens, true)) {
             $name = $this->advance()->lexeme;
 
             // $obj->xxx / $obj?->xxx / Class::xxx
@@ -1641,9 +1661,11 @@ class Parser
                 $memberName = $this->parseMethodName()->lexeme;
 
                 // EnumName::CASE → 枚举访问（需解析命名空间 + use 导入）
+                //   但 EnumName::method(...) → 静态方法调用，走 CallExpr 路径
                 if ($opType === TokenType::DOUBLE_COLON) {
                     $enumFq = $this->resolveEnumName($name);
-                    if ($enumFq !== null && isset($this->enumNames[$enumFq])) {
+                    if ($enumFq !== null && isset($this->enumNames[$enumFq])
+                        && !$this->check(TokenType::LPAREN)) {
                         return $this->setPos(new EnumAccessExpr($enumFq, $memberName), $line, $col);
                     }
                 }
@@ -1829,12 +1851,41 @@ class Parser
         return new ClosureExpr($params, $retType, $body, []);
     }
 
-    /** 检查语句块是否包含 return 语句 */
+    /**
+     * 检查语句块是否包含 return 语句（递归搜索嵌套控制结构）
+     *
+     * 递归进入 if/else/for/while/foreach/switch/try/block 的函数体查找 ReturnStmtNode。
+     * 语义为"包含至少一个 return"（非"所有路径都 return"），匹配错误消息
+     * "must contain a return statement"。
+     */
     private function blockHasReturn(array $body): bool
     {
         foreach ($body as $stmt) {
             if ($stmt instanceof ReturnStmtNode) return true;
-            // 嵌套块也检查（但 if/for 等分支中的 return 不算保证返回，这里简化处理）
+            // 递归搜索嵌套控制结构的函数体
+            if ($stmt instanceof IfStmtNode) {
+                if ($this->blockHasReturn($stmt->thenBody)) return true;
+                foreach ($stmt->elseifs as $elif) {
+                    if ($this->blockHasReturn($elif->body)) return true;
+                }
+                if ($this->blockHasReturn($stmt->elseBody)) return true;
+            } elseif ($stmt instanceof WhileStmtNode || $stmt instanceof DoWhileStmtNode) {
+                if ($this->blockHasReturn($stmt->body)) return true;
+            } elseif ($stmt instanceof ForStmtNode || $stmt instanceof ForeachStmtNode) {
+                if ($this->blockHasReturn($stmt->body)) return true;
+            } elseif ($stmt instanceof SwitchStmtNode) {
+                foreach ($stmt->cases as $case) {
+                    if ($this->blockHasReturn($case->body)) return true;
+                }
+            } elseif ($stmt instanceof TryStmtNode) {
+                if ($this->blockHasReturn($stmt->tryBody)) return true;
+                foreach ($stmt->catchClauses as $catch) {
+                    if ($this->blockHasReturn($catch['body'])) return true;
+                }
+                if ($this->blockHasReturn($stmt->finallyBody)) return true;
+            } elseif ($stmt instanceof BlockStmtNode) {
+                if ($this->blockHasReturn($stmt->stmts)) return true;
+            }
         }
         return false;
     }

@@ -259,7 +259,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 > 文件: `array.h` + `std/array_extra.h`
 
-数组为 `t_array*` 指针（128 槽 LIFO 复用池 + 1.5× 增长因子）。
+数组为 `t_array*` 指针（128 槽 LIFO 复用池 + 1.5× 增长因子 + str/int 键双哈希索引，≥8 键触发 O(1) 查找）。
 
 ### 增删 / 统计
 
@@ -499,6 +499,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `sha1(string $string, bool $binary = false): string` | `sha1(string $string): string` | FIPS 180-4 纯 C | 无 `$binary` 参数；返回 40 字符小写 hex |
 | `hash(string $algo, string $data, bool $binary = false): string` | `sha256(string $string): string` | FIPS 180-4 纯 C | TinyPHP 直接提供 `sha256()` 内置函数（PHP 需 `hash('sha256', ...)`）；返回 64 字符小写 hex |
 | `hash(string $algo, string $data, bool $binary = false): string` | `sha512(string $string): string` | FIPS 180-4 纯 C | 同上；返回 128 字符小写 hex |
+| `hash_hmac(string $algo, string $data, string $key, bool $binary = false): string` | `hash_hmac(string $algo, string $data, string $key, bool $binary = false): string` | RFC 2104 纯 C，复用 SHA-256/SHA-512 | 支持 sha256/sha512；不支持 md5/sha1；`$binary=true` 返回原始摘要 |
 | `crc32(string $string): int` | `crc32(string $string): int` | 256 项查表法，O(n) | C 函数名 `tphp_fn_crc32_str` |
 
 ---

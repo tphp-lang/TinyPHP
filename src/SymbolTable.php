@@ -162,7 +162,13 @@ class SymbolTable
 
     public function addEnum(string $name, string $backing, string $cType): void
     {
-        $this->enums[$name] = ['backing' => $backing, 'cType' => $cType];
+        $this->enums[$name] = [
+            'backing' => $backing,
+            'cType'   => $cType,
+            'cName'   => rtrim($cType, '*'),
+            'cases'   => [],
+            'consts'  => [],
+        ];
     }
 
     public function getEnumBacking(string $name): string
@@ -175,10 +181,77 @@ class SymbolTable
         return $this->enums[$name]['cType'] ?? null;
     }
 
+    /** 枚举 C 结构体名（无 *），如 tphp_enum_Color */
+    public function getEnumCName(string $name): ?string
+    {
+        return $this->enums[$name]['cName'] ?? null;
+    }
+
     /** @return array<string,string> name => cType */
     public function allEnums(): array
     {
         return array_map(fn($i) => $i['cType'], $this->enums);
+    }
+
+    public function addEnumCase(string $name, string $caseName): void
+    {
+        if (!isset($this->enums[$name])) return;
+        $this->enums[$name]['cases'][] = $caseName;
+    }
+
+    public function hasEnumCase(string $name, string $caseName): bool
+    {
+        return isset($this->enums[$name]) && in_array($caseName, $this->enums[$name]['cases'], true);
+    }
+
+    /** @return string[] case names */
+    public function getEnumCases(string $name): array
+    {
+        return $this->enums[$name]['cases'] ?? [];
+    }
+
+    public function addEnumConst(string $name, string $constName, string $type): void
+    {
+        if (!isset($this->enums[$name])) return;
+        $this->enums[$name]['consts'][$constName] = $type;
+    }
+
+    public function getEnumConstType(string $name, string $constName): ?string
+    {
+        return $this->enums[$name]['consts'][$constName] ?? null;
+    }
+
+    public function addEnumMethod(string $name, string $methodName, MethodInfo $m): void
+    {
+        if (!isset($this->enums[$name])) return;
+        $this->enums[$name]['methods'][$methodName] = $m;
+    }
+
+    /** 按枚举名查方法 */
+    public function getEnumMethod(string $name, string $methodName): ?MethodInfo
+    {
+        return $this->enums[$name]['methods'][$methodName] ?? null;
+    }
+
+    /** 按枚举 C 结构体名（tphp_enum_X）查方法 */
+    public function getEnumMethodByCName(string $cName, string $methodName): ?MethodInfo
+    {
+        foreach ($this->enums as $info) {
+            if ($info['cName'] === $cName) {
+                return $info['methods'][$methodName] ?? null;
+            }
+        }
+        return null;
+    }
+
+    /** 判断 $x 是枚举名还是枚举 C 结构体名，返回 C 结构体名或 null */
+    public function resolveEnumCName(string $x): ?string
+    {
+        if (isset($this->enums[$x])) return $this->enums[$x]['cName'];
+        foreach ($this->enums as $info) {
+            if ($info['cName'] === $x) return $x;
+        }
+        return null;
     }
 
     // ──────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 # TinyPHP vs Native PHP 8.5 — 性能对比报告
 
 测试环境: Windows x64, PHP 8.5.1 NTS, TinyPHP + TCC/GCC 16.1/Clang 22.1  
-*更新: 2026-06-27 — SSO + Arena + 对象池 + implode/explode 全部落地*
+*更新: 2026-07-09 — SSO + Arena + 对象池 + implode/explode + str/int 键双哈希索引全部落地*
 
 ---
 
@@ -105,6 +105,11 @@
 | 22 | **ext_str.h 公共头** | 3 个扩展共享 ext_mk_str/ext_mk_substr, 消除重复定义 |
 | 23 | **core.h 去重** | 删除 4 个孤儿文件 (output/type/string/array_core.h) |
 | 24 | **默认值支持表达式** | 参数/属性默认值支持任意常量表达式 (1+2, "a"."b", 0xFF|0x10); 方法调用重载选择 |
+| 25 | **整数键哈希索引** (arr_intidx) | 稀疏整数键查询 O(n)→O(1) (≥8 键触发, 连续键直接下标); 与 arr_stridx 平行, 混合键数组双索引共存 |
+| 26 | **array_diff/intersect 哈希集** | 大数组 (≥16) O(n×m)→O(n+m), INT/STRING 类型分离保持语义 |
+| 27 | **pcre tp_cache 动态 key** | 长模式 (>255B) 可正常缓存命中 (原 key[256] 截断导致永远 miss) |
+| 28 | **preg_replace 反向引用** | captures 首次匹配时缓存, O(n×matches×backrefs)→O(n+matches) |
+| 29 | **try.h 动态异常消息** | char\* msg 替代 msg_buf[256], 支持任意长度异常消息 (malloc 绕过 rt_free_all) |
 
 ---
 
@@ -131,7 +136,7 @@
 - **1000 键查询**：270 倍提升（O(n)→O(1)，索引命中后单次 memcmp）
 - **小数组（<8 键）**：无开销（`ARR_HASH_THRESHOLD=8`，低于阈值不建索引）
 - **ksort 后查询**：索引失效重建后仍比基线快 34%（修复了 `_tphp_cmp_var` 的 SSO bug）
-- **整数键路径**：无回归（bench_tphp 全部项持平或小幅波动 ±6%）
+- **整数键路径**：稀疏整数键现已具备 arr_intidx 哈希索引（P3-2 落地后，≥8 键触发 O(1) 查找，连续键走直接下标）；bench_tphp 的 int key 读取项因使用连续键 (0..n-1)，本就走直接下标快路径，P3-2 前后无变化
 
 ---
 

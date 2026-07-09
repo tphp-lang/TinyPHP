@@ -193,7 +193,7 @@ ExprNode（抽象，含 line/column）
 
 ### 3.4 异常系统
 
-`setjmp/longjmp`（COS 风格），零外部依赖。`tp_throw` 先 `tphp_rt_free_all()` 再跳转，确保内存安全。异常消息 256B 栈帧内缓冲，不依赖堆分配。
+`setjmp/longjmp`（COS 风格），零外部依赖。`tp_throw` 先 `tphp_rt_free_all()` 再跳转，确保内存安全。异常消息通过 `malloc` 动态分配（`char* msg` 字段），支持任意长度消息；因 `tphp_rt_free_all()` 会在 `longjmp` 前释放 str_pool，故 msg 必须用 `malloc` 而非 `str_pool_alloc`，由各 catch 宏显式 `free`。
 
 ---
 
@@ -497,7 +497,7 @@ phpc 提供 4 个安全辅助函数处理 C 指针生命周期边界问题。修
 | `src/CodeGenerator.php` | ~4000 | C 代码生成（COS OOP/zeroReturn/自动释放/ROPE/230+ 内置函数） |
 | `include/types.h` | ~130 | C 类型系统 + SSO t_string + likely/unlikely |
 | `include/compat.h` | ~55 | 三编译器兼容（TCC round fallback/math 声明） |
-| `include/array.h` | ~869 | PHP 数组（128 槽复用池/sort/1.5× 增长） |
+| `include/array.h` | ~1152 | PHP 数组（128 槽复用池/sort/1.5× 增长/str+int 双哈希索引） |
 | `include/runtime.h` | ~402 | 运行时（128KB 字符串池+Arena/资源追踪/error/str_free SSO 感知） |
 | `include/builtin.h` | ~22 | 内置函数入口 (incl 8个 `include/std/` 子文件) |
 | `include/phpc.h` | ~280 | PHPC 互操作（类型/数组/对象/回调/thunk/内存释放/C 类型注解/安全 API） |

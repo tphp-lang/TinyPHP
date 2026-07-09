@@ -57,6 +57,8 @@ enum TokenType: string
     case PARENT_KW      = 'parent';
     case MAGIC_CLASS    = '__CLASS__';
     case MAGIC_METHOD   = '__METHOD__';
+    case MAGIC_FUNCTION = '__FUNCTION__';
+    case MAGIC_NAMESPACE = '__NAMESPACE__';
 
     // 魔术方法
     case CONSTRUCT = '__construct';

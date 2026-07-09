@@ -302,7 +302,7 @@ statement:
   | goto_stmt                  ✅
   | try_stmt                   ✅ (COS setjmp/longjmp)
   | throw_stmt                 ✅ (Exception 类)
-  | assign_stmt                ✅ (支持可选类型标记: `type? '$' IDENTIFIER '=' expr ';'`)
+  | assign_stmt                ✅ (支持可选类型标记: `type? '$' IDENTIFIER '=' expr ';'`; 支持链式 `$a = $b = 1`)
   | array_push_stmt            🔧 ($a[] = expr — TinyPHP 内联语法糖)
   | compound_assign            ✅ (+= -= *= /= .=)
   | list_destructure           ✅ (含键名 "key"=>$var)
@@ -482,6 +482,10 @@ primary:
   | MAGIC_FILE       ✅ (__FILE__)
   | MAGIC_DIR        ✅ (__DIR__)
   | DIR_SEP          ✅ (DIRECTORY_SEPARATOR)
+  | MAGIC_CLASS      ✅ (__CLASS__)
+  | MAGIC_METHOD     ✅ (__METHOD__)
+  | MAGIC_FUNCTION   ✅ (__FUNCTION__)
+  | MAGIC_NAMESPACE  ✅ (__NAMESPACE__)
   | IDENTIFIER       ✅ (变量 $var 或常量 CONST)
   | '(' expr ')'     ✅
   | '(' cast_type ')' expr          ✅ ((int)/(float)/(string)/(bool))
@@ -536,7 +540,8 @@ self                  ✅
 $GLOBALS              ❌
 __CLASS__             ✅
 __METHOD__            ✅
-__FUNCTION__          ⬜
+__FUNCTION__          ✅
+__NAMESPACE__         ✅
 __TRAIT__             ❌
 ```
 
@@ -629,7 +634,7 @@ phpc_memory:
 | `self::CONST` `Class::CONST` `self::method()` | — |
 | `__construct(public $x)` 属性提升 | — |
 | `__destruct` | 作用域结束自动调用 |
-| `__LINE__` `__FILE__` `__DIR__` `__CLASS__` `__METHOD__` `DIRECTORY_SEPARATOR` | 编译期替换 |
+| `__LINE__` `__FILE__` `__DIR__` `__CLASS__` `__METHOD__` `__FUNCTION__` `__NAMESPACE__` `DIRECTORY_SEPARATOR` | 编译期替换 |
 | `instanceof` | 遍历类链 |
 
 ### 🔧 TinyPHP 独有

@@ -52,6 +52,8 @@ class Lexer
         'parent'      => TokenType::PARENT_KW,
         '__CLASS__'   => TokenType::MAGIC_CLASS,
         '__METHOD__'  => TokenType::MAGIC_METHOD,
+        '__FUNCTION__' => TokenType::MAGIC_FUNCTION,
+        '__NAMESPACE__' => TokenType::MAGIC_NAMESPACE,
         'array'       => TokenType::TYPE_ARRAY,
         'mixed'       => TokenType::TYPE_MIXED,
         '__construct' => TokenType::CONSTRUCT,

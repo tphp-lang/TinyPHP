@@ -526,7 +526,7 @@ PHP 8.5.1 vs TinyPHP（GCC -O2），详见 [BENCHMARK_RESULTS.md](BENCHMARK_RESU
 - **字符串拼接**: ROPE 多片段展平，concat-4 快 6 倍
 - **编译器差距**: GCC/Clang -O2 比 TCC 再快 3-10x，`tphp -cc gcc` 即可获得
 
-已落地优化：SSO 小字符串、Arena Allocator、对象复用池、ROPE 拼接、implode O(N²)→O(N)、CodeGen 自动释放。
+已落地优化：SSO 小字符串、Arena Allocator、对象复用池、ROPE 拼接、implode O(N²)→O(N)、CodeGen 自动释放、str/int 键双哈希索引（O(n)→O(1)）。
 
 ## 编译流水线
 

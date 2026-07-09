@@ -96,7 +96,7 @@
 
 ## P2 — 功能扩展
 
-### P2-1. Generator 支持方法/闭包
+### ✅ P2-1. Generator 支持方法/闭包
 
 - **位置**: [src/CodeGenerator.php](file:///c:/project/php/TinyPHP/src/CodeGenerator.php) ~line 1075（方法抛错）、~line 2069（闭包抛错）
 - **影响**: 当前仅独立函数支持 Generator，方法和闭包显式抛 `"Generator methods/closures not yet supported"`。
@@ -104,8 +104,9 @@
   1. 方法：entry 函数需传递 `self` 指针到参数 struct，`mco_get_user_data` 解包后调用
   2. 闭包：use vars 与参数一起打包到 struct，entry 函数解包后重建闭包环境
   3. 注意 `this` 指针的 refcount 管理（entry 内 retain，wrapper 返回前 release）
+- **状态**: ✅ 已完成（2026-07-09）。新增 `emitGeneratorMethod`（模式与 `emitGeneratorFunction` 一致，params struct 含 `self` 指针作为首字段，包装方法签名与普通方法一致返回 `tphp_class_Generator*`）和 `emitGeneratorClosure`（use vars + params 打包进 generator params struct，包装函数签名与普通闭包一致接收 `void* _env`，返回 `t_callback`）。visitMethod/visitClosure 中的 throw 替换为分发调用。修复返回类型注册：方法第一遍预扫描（line 659）和 enum 方法注册（line 3895）对 `isGenerator` 使用 `tphp_class_Generator*`；`generateMethodOverloads`/`inferCallbackSig` 同步修复。修复 params struct typedef 段位置：从 SEC_FWDDECLS 移至 SEC_CLSIMPL（方法）/SEC_CLOSURES（闭包），确保在类结构体 typedef 定义之后。移除 enum 生成器方法的 throw（enum 方法经 `emitEnumImpl` → `visitMethod` 统一路径）。`self` 指针借用调用方引用（与独立生成器函数的对象参数一致，不做额外 retain/release——已知限制：generator 被放弃时 entry 尾部释放不执行，与字符串/数组一致）。测试 `test/object/gen_method.php`（基本生成器方法/访问 $this->property/带参数生成器方法/genRange while 循环）+ `test/object/gen_closure.php`（无捕获/带 use 捕获/带参数+捕获），109/109 通过。
 
-### P2-2. enum 支持方法/常量/`implements`
+### ✅ P2-2. enum 支持方法/常量/`implements`
 
 - **位置**: [src/Parser.php](file:///c:/project/php/TinyPHP/src/Parser.php) `parseEnumDecl`、CodeGenerator enum 发射逻辑
 - **影响**: PHP 8.1 enum 的 `Color::cases()` / `Color::from(int)` / `Color::tryFrom(int)` / enum 方法 / `implements` 接口约束全部缺失。
@@ -113,17 +114,19 @@
   1. Parser: enum body 允许 `case` + `method` + `const` + `implements`
   2. CodeGenerator: 为每个 enum 自动生成 `cases()`/`from()`/`tryFrom()` 静态方法
   3. enum 实现 interface 时，方法走正常 vtable（与 class 一致）
+- **状态**: ✅ 已完成（2026-07-09）。EnumNode AST 扩展 `methods`/`classConsts`/`implements` 字段；parseEnumDecl body 循环接受 case/method/const + implements 解析；主声明循环新增 enum 分支允许与 class/interface 交错声明；parsePrimary 中 `Color::method(` 走 CallExpr、`Color::CASE` 走 EnumAccessExpr。SymbolTable enum 条目扩展 cases/consts/methods + 双向查找（枚举名 ↔ C 结构体名 via `resolveEnumCName`）。CodeGenerator 两阶段发射：visitEnum (SEC_ENUMS: struct + 静态实例 + `#define TPHP_CONST_<CN>_<NAME>` + 方法前置声明 + 注册 cases/consts/methods 到 SymbolTable) + emitEnumImpl (SEC_CLSIMPL: 用户实例方法实现 + 自动 cases() 返回 `t_array*`、from() 线性查找找不到 `tp_throw`、tryFrom() 找不到返回 NULL)。emitEnumMethodCall 处理静态/实例方法调用 + 重载版本选择；inferCallReturnType/inferCallChainClass/inferType 支持 enum 静态调用 (callee=VariableExpr) 和实例调用 (callee=EnumAccessExpr)；castToStr 处理 enum 方法返回值、enum 常量按声明类型转换、TernaryExpr。implements 仅记录不强制 vtable（与 PHP enum 接口约束语义一致，方法直接定义在 enum struct 上）。测试 `test/object/enum_methods.php`（用户实例方法访问 $this->value/$this->name、枚举常量、cases() count、from/tryFrom with null 检查 if/else、链式 Color::from(1)->label()、string backing Direction），107/107 通过。
 
-### P2-3. pcre 支持 lookahead（无 lookbehind）
+### ✅ P2-3. pcre 支持 lookahead（无 lookbehind）
 
-- **位置**: [ext/pcre/pcre.c](file:///c:/project/php/TinyPHP/ext/pcre/pcre.c) 编译器与 VM
+- **位置**: [ext/pcre/src/pcre.c](file:///c:/project/php/TinyPHP/ext/pcre/src/pcre.c) 编译器与 VM
 - **影响**: `(?=...)` / `(?!...)` 是 PHP PCRE2 常用特性，当前缺失。lookbehind 需要变长回溯，复杂度高，暂不做。
 - **方案**:
   1. 编译器：`(?=expr)` 编译为 `SPLIT L1, L2; L1: <expr>; ASSERT_SUCCESS; L2:`，VM 在 L1 失败时整体失败
   2. `(?!expr)` 类似，但 L1 成功时整体失败
   3. 注意 lookahead 内的 group captures 语义（PHP 保留 lookahead 内捕获）
+- **状态**: ✅ 已完成（2026-07-09）。新增 3 个 opcode（`TP_LOOK_START`/`TP_LOOK_END`/`TP_LOOK_FAIL`）和 1 个 AST 节点（`TP_NODE_LOOKAHEAD`）。parser 在 `(?` 分支新增 `=`/`!` 检测，解析后复用 group body 解析。tp_machine 新增 `look_sp[16]`/`look_off[16]`/`look_ptr` 用于保存 lookahead 入口的 sp 和 stack_ptr 检查点。编译布局：`TP_LOOK_START → TP_LOOK_FAIL → <body> → TP_LOOK_END → L_after`，START 压回溯帧（pc=FAIL），body 成功时 END 恢复 sp 并丢弃 body 内部帧（零宽+不回溯入 body），body 失败时回溯到 FAIL 处理。正/负向通过 `inverted` 标志区分。优化器已更新，对 3 个新 opcode 的 target_x/target_y 正确标记和重映射。`tp_vm_match` 入口重置 `look_ptr=0`。支持正/负向、嵌套（max 16）、alternation body、lookahead 内捕获保留（positive）。测试 `test/pcre/test_lookahead.php`（8 组场景），106/106 通过。
 
-### P2-4. 链式赋值 `$a = $b = 1`
+### ✅ P2-4. 链式赋值 `$a = $b = 1`
 
 - **位置**: [src/Parser.php](file:///c:/project/php/TinyPHP/src/Parser.php) parseStmt、[src/AST/Node.php](file:///c:/project/php/TinyPHP/src/AST/Node.php)
 - **影响**: 赋值是 StmtNode 不是 ExprNode，无法出现在表达式位置，`$a = $b = 1` 解析失败。
@@ -132,85 +135,98 @@
   2. Parser: 赋值表达式优先级低于三元，解析为 AssignmentExpr
   3. CodeGenerator: `visitAssignmentExpr` 生成 `b = 1; a = b;`（或 `a = b = 1`）
   4. 现有 AssignStmtNode 保留，作为表达式语句的语法糖
+- **状态**: ✅ 已完成（2026-07-09）。采用语句级展开方案（非 ExprNode 方案）：`parseAssignStmt` 检测 `$var = $var = ...` 链式模式，递归解析后展开为 `BlockStmtNode([inner, outer])`。新增 `BlockStmtNode`（语句序列包装）+ `visitBlockStmt`。语义：`$a = $b = 1` → `$b = 1; $a = $b;`（值语义，与 PHP 一致）。支持 N 级链式（`$a = $b = $c = ...`）和类型标记（`int $a = $b = 42`，类型仅作用于首个变量）。测试 `test/math/chain_assign.php`（2-way int / 3-way string / typed / 表达式 RHS），105/105 通过。
 
-### P2-5. `hash_hmac` 支持
+### ✅ P2-5. `hash_hmac` 支持
 
 - **位置**: [include/hash.h](file:///c:/project/php/TinyPHP/include/hash.h)
 - **影响**: PHP 常用的 `hash_hmac('sha256', $data, $key)` 缺失，JWT/Webhook 签名场景必需。
 - **方案**: 实现 HMAC RFC 2104（`H(K XOR opad, H(K XOR ipad, text))`），复用现有 SHA-256/SHA-512 block 函数。新增 `tphp_fn_hash_hmac`/`tphp_fn_hash_hmac_algos`。
+- **状态**: ✅ 已完成（2026-07-09）。`tphp_fn_hash_hmac(t_string algo, t_string data, t_string key, t_bool binary)` 实现于 hash.h 末尾，支持 sha256/sha512，binary=true 返回原始摘要否则小写 hex。CodeGenerator `$simpleFnMap` 注册（4 参，binary 默认 false）+ `$builtinRetTypes` 注册 `hash_hmac => t_string`。修复 `_sha512_update` 长度双重计数 bug（循环内 `len[0]+=128` 与循环后 `len[0]+=len` 重复，仅对 ≥128 字节输入触发；改为循环前一次性累加，与 `_sha256_update` 一致）。测试 `test/builtin/hash_hmac_test.php`（RFC 4231 Test Case 2 向量 + binary 长度 + 不支持算法空串），104/104 通过。`hash_hmac_algos` 暂未实现（返回 array 需额外基础设施，核心场景仅需 hash_hmac）。
 
-### P2-6. `__FUNCTION__` / `__NAMESPACE__` 魔术常量
+### ✅ P2-6. `__FUNCTION__` / `__NAMESPACE__` 魔术常量
 
 - **位置**: [src/Lexer.php](file:///c:/project/php/TinyPHP/src/Lexer.php) Token 识别、[src/CodeGenerator.php](file:///c:/project/php/TinyPHP/src/CodeGenerator.php) `visitMagicConst`
 - **影响**: `__FUNCTION__` 标注 ⬜，`__NAMESPACE__` 未实现。调试与日志场景常用。
 - **方案**:
   1. Lexer: 新增 `T_FUNCTION_MAGIC`/`T_NAMESPACE_MAGIC` token
   2. CodeGenerator: `visitMagicConst` 根据 `currentClassName`/`currentMethodName`/`currentNamespace` 生成字符串字面量
+- **状态**: ✅ 已完成（2026-07-09）。TokenType 加 `MAGIC_FUNCTION`/`MAGIC_NAMESPACE`；Lexer 关键字表注册；Parser `$magicTokens` 数组补全；CodeGenerator 加 `currentFuncName`/`inMethod`/`currentNamespace` 字段并在 `emitClassImpl`/`visitMethod`/`visitFunction` 设置上下文。PHP 语义对齐：方法内 `__FUNCTION__`=方法名、`__METHOD__`=Class::method；全局函数内两者均=函数名；`__NAMESPACE__` 返回 PHP 命名空间名。测试 `test/object/magic_func_ns.php`（全局命名空间）+ `test/object/magic_ns_main.php`+`magic_ns_lib.php`（Demo\Sub 命名空间），103/103 通过。
 
 ---
 
 ## P3 — 性能与细节优化
 
-### P3-1. `array_diff`/`array_intersect` 改哈希集优化
+### ✅ P3-1. `array_diff`/`array_intersect` 改哈希集优化
 
 - **位置**: [include/std/array_extra.h](file:///c:/project/php/TinyPHP/include/std/array_extra.h)
 - **影响**: 当前双重循环 O(n×m)，大数组慢。
 - **方案**: 第二个数组建哈希集（khash），第一个数组遍历查找，降到 O(n+m)。
+- **状态**: ✅ 已完成（2026-07-09）。阈值分治：`a2->length < 16` 走原双循环（缓存友好，小数组无哈希开销），`≥ 16` 走哈希集 O(n+m)。哈希集利用现有 `str_index`（string-keyed O(1) 查找）：INT 值 snprintf 转十进制字符串后存入 `intSet`，STRING 值直接存入 `strSet`，类型分离保持原语义（INT 1 ≠ STRING "1"）。抽出 `_arr_diff_build_sets`/`_arr_diff_lookup` 共享辅助函数。测试 `test/array/test_diff_intersect.php`（6 场景：小数组 diff、大数组 diff、小数组 intersect、大数组 intersect、INT/STRING 类型分离、大字符串数组 diff）。112/112 测试通过。
 
-### P3-2. 整数键数组可选哈希索引
+### ✅ P3-2. 整数键数组可选哈希索引
 
-- **位置**: [include/array.h](file:///c:/project/php/TinyPHP/include/array.h)
+- **位置**: [include/array.h](file:///c:/project/php/TinyPHP/include/array.h)、[include/types.h](file:///c:/project/php/TinyPHP/include/types.h)
 - **影响**: 当前仅字符串键触发 arr_stridx，大整数键数组（如 ID→对象映射）查询仍是 O(n)。
 - **方案**: 新增 `arr_intidx`（hash→entry_index，key 为 int64），阈值同样 8。触发条件：数组键全部为 int 且长度 ≥8。
 - **注意**: 仅稀疏整数键（非 0,1,2... 连续）才需要，连续整数键直接 `entries[i]` 即可。
+- **状态**: ✅ 已完成（2026-07-09）。`struct _t_array` 新增 `void *int_index` 字段（parallel to `str_index`）。新增 `arr_intidx` 结构 + 6 个函数（free/build/ensure/lookup/insert/delete），mirror `arr_stridx` 布局（open-addressing，slot=0 empty/-1 tomb/>0 entry_idx+1），哈希用 splitmix64 finalizer（`_arr_int_hash`）。`tphp_fn_arr_get_int`/`tphp_fn_arr_set_int` 三级路径：(1) 连续键直接下标 `entries[key]` O(1)（检查 `entries[key].key._int == key`），(2) 哈希索引 O(1)（≥8 惰性建/查），(3) 小数组线性扫描 O(n)。所有位置变更操作（pop/shift/unshift/shuffle/sort/rsort/asort/arsort/ksort/krsort）添加 `arr_intidx_free(a)`；pop 额外 `arr_intidx_delete` 弹出的 int 键；`arr_pool_put` 释放两套索引。测试 `test/array/test_int_index.php`（11 场景：连续键 get/set、小数组稀疏键、大数组构建/查找/覆盖/插入、pop/shift/sort 索引失效+重建、混合 int/string 键）。113/113 测试通过。
 
-### P3-3. `resolveMethodClass` 缓存
+### ✅ P3-3. `resolveMethodClass` 缓存
 
 - **位置**: [src/CodeGenerator.php](file:///c:/project/php/TinyPHP/src/CodeGenerator.php) `resolveMethodClass`
 - **影响**: 线性扫描父类链 O(depth) per call，无缓存，热路径性能隐患。
 - **方案**: 新增 `self::$methodClassCache[cname][methodName] = resolvedClass`，编译期一次性建立。
+- **状态**: ✅ 已完成（2026-07-09）。加 `private array $methodClassCache` 字段（key=`cn\0method`），`resetState()` 中清空。命中直接返回缓存值，未命中走原线性扫描后写入缓存。101/101 测试通过。
 
-### P3-4. 类型推断缓存
+### ⏸️ P3-4. 类型推断缓存（评估后搁置）
 
 - **位置**: [src/CodeGenerator.php](file:///c:/project/php/TinyPHP/src/CodeGenerator.php) `inferType`
 - **影响**: 每次 `inferType` 都重走 AST，大型项目编译慢。
 - **方案**: 给 ExprNode 加 `inferredType` 字段，首次推断后缓存。注意 AST 节点可能在多函数中共享（闭包），需验证缓存失效场景。
+- **状态**: ⏸️ 评估后搁置（2026-07-09）。经分析 61 处 `inferType` 调用，大多在 visitor 方法中每节点调用一次，收益低。`inferType` 强依赖可变作用域状态（`$this->varTypes`、`$this->arrValueTypes`、`$this->arrElementTypes`、`$this->arrNestedTypes`、`$this->className`），进入不同方法/函数时这些状态会变化，缓存失效逻辑复杂且风险高。AST 节点在闭包 use vars 捕获等场景可能跨作用域引用，一旦缓存未失效会导致隐蔽的类型推断 bug。属过早优化，编译器已足够快。
 
-### P3-5. pcre `tp_cache` key 长度限制
+### ✅ P3-5. pcre `tp_cache` key 长度限制
 
-- **位置**: [ext/pcre/pcre.c](file:///c:/project/php/TinyPHP/ext/pcre.c) `tp_cache` 结构
+- **位置**: [ext/pcre/src/pcre.c](file:///c:/project/php/TinyPHP/ext/pcre/src/pcre.c) `tp_cache` 结构
 - **影响**: `key[256]` 截断长模式（>255 字节无法缓存）。
 - **方案**: 改为 `char* key` + 动态分配，LRU 淘汰时 `free`。或改用哈希值作为 key（碰撞时回退到线性扫描）。
+- **状态**: ✅ 已完成（2026-07-09）。`tp_cache_entry.key` 从 `char key[256]` 改为 `char* key`（malloc 动态分配）。修复前 `key_len` 被截断为 255，导致长模式缓存 lookup 时 `key_len == key_len` 永远为 false，长模式每次重新编译（性能损失）。修复后完整 key_len 存储，长模式可正常命中缓存。LRU 淘汰路径增加 `free(tp_cache[slot].key)`；lookup 增加 `key != NULL` 守卫防止 malloc 失败时 memcmp(NULL) UB。测试 `test/pcre/test_long_pattern.php`（4 场景：300 字节字面量匹配、第二个不同长模式、重复命中缓存、共享前缀的不同长模式不冲突）。111/111 测试通过。
 
-### P3-6. pcre `preg_replace` 反向引用性能
+### ✅ P3-6. pcre `preg_replace` 反向引用性能
 
-- **位置**: [ext/pcre/pcre.c](file:///c:/project/php/TinyPHP/ext/pcre/pcre.c) `preg_replace`
+- **位置**: [ext/pcre/src/pcre.c](file:///c:/project/php/TinyPHP/ext/pcre/src/pcre.c) `preg_replace`
 - **影响**: `$N` 反向引用重跑 `tp_find_from` 获取 captures，性能 O(n×matches)。
 - **方案**: 替换前一次性收集所有 captures，存入 `captures[N][start,end]` 数组，替换时直接查表。降到 O(n+matches)。
+- **状态**: ✅ 已完成（2026-07-09）。首次匹配循环中增加 `match_caps` 数组（`match_count × cap_size`），每次 `tp_find_from` 后 `memcpy` 保存完整 captures。替换阶段直接查表 `caps = match_caps + mi * cap_sz`，`caps[g*2]`/`caps[g*2+1]` 获取 group 边界，消除每个 `$N` 反向引用的 `tp_find_from` 重跑 + `tp_machine` 分配/释放开销。复杂度从 O(n×matches×backrefs) 降到 O(n+matches)。无分组模式（`cap_size=0`）跳过 captures 分配。所有 `free` 路径（正常/early-return/match_count=0）均补齐 `free(match_caps)`。112/112 测试通过，含现有 `backref=World!` 回归测试。
 
-### P3-7. static buf 线程安全
+### ⏸️ P3-7. static buf 线程安全（暂缓）
 
 - **位置**: [include/conv.h](file:///c:/project/php/TinyPHP/include/conv.h) `decbin/decoct/dechex`、[ext/posix/posix.c](file:///c:/project/php/TinyPHP/ext/posix/posix.c) `getcwd`
 - **影响**: 使用 static buf 非线程安全。当前 TinyPHP 无多线程，但未来扩展可能引入。
 - **方案**: 改为调用方传入缓冲区，或返回 t_string（SSO + str_pool_alloc）。
+- **状态**: ⏸️ 暂缓（2026-07-09）。当前 TinyPHP 运行时单线程，无实际收益。修改会改变公共 API（调用方需传缓冲区或处理 t_string 返回），连锁影响大，待多线程支持落地后再评估。
 
-### P3-8. `try.h` msg_buf 固定长度
+### ✅ P3-8. `try.h` msg_buf 固定长度
 
 - **位置**: [include/object/try.h](file:///c:/project/php/TinyPHP/include/object/try.h) `tp_ex_frame.msg_buf[256]`
 - **影响**: 长异常消息（>255 字节）截断。
 - **方案**: 改为 `char* msg` + 动态分配（str_pool_alloc），或用 `t_string` 字段。注意异常 frame 在栈上，需避免悬垂指针。
+- **状态**: ✅ 已完成（2026-07-09）。`tp_ex_frame` 字段从 `char msg_buf[256]` 改为 `char* msg`（malloc 动态分配）。关键约束：`tphp_rt_free_all()` 在 `longjmp` 前调用，str_pool 内存会被释放，因此必须用 `malloc`（非 `str_pool_alloc`）分配 msg，使其在 catch 处理器运行时仍有效。新增 `_tp_dup_msg`/`_tp_dup_msg_n` 辅助函数；TP_CATCH/TP_CATCH_EX/TP_CATCH_ANY/TP_END_TRY 各自在使用后 `free(_tp_f.msg)`；TP_END_TRY re-throw 路径用 `_tp_dup_msg` 复制到父帧。附带修复 `tp_throw` 宏参数名与结构体字段 `msg` 的命名冲突（改名为 `_tp_msg`）；CodeGenerator 的 `throw $strVar` 生成从 `.data` 改为 `STR_PTR_V()`（正确处理 SSO + 避免 TCC 匿名 union 兼容性问题）。测试 `test/error/long_message.php`（4 场景：Exception 长消息、短消息回归、纯字符串长消息、嵌套 re-throw）。110/110 测试通过。
 
-### P3-9. `parsePrimary` 巨型 if-else 重构
+### ✅ P3-9. `parsePrimary` 巨型 if-else 重构
 
-- **位置**: [src/Parser.php](file:///c:/project/php/TinyPHP/src/Parser.php) ~line 1633
+- **位置**: [src/Parser.php](file:///c:/project/php/TinyPHP/src/Parser.php) ~line 1601
 - **影响**: 检查 ~25 个 TokenType 的巨型 if-else，新增 token 易遗漏，脆弱。
 - **方案**: 改为 `match ($token->type)`（PHP 8 match）或分发表 `self::$primaryHandlers`。
+- **状态**: ✅ 已完成（2026-07-09）。两项重构：(1) 提取 23 个标识符类 token（IDENTIFIER/SELF_KW/VAR_DUMP/COUNT/EXIT/...IS_CALLABLE）到 `self::$identifierLikeTokens` 静态集，替代原 22 个 `||` 的巨型 `check()` 链；(2) 15 个简单情况（STRING_LIT/INT_LIT/FLOAT_LIT/TRUE_KW/FALSE_KW/NULL_KW/PARENT_KW + 8 个魔术常量 + YIELD_KW/FN_KW/FUNCTION/LBRACKET/NEW_KW/MATCH）从 if-else 改为 `match ($tok)` 分发，`default => null` 穿透到复杂情况（LPAREN 转换/分组、标识符类方法/属性/数组访问）。80 行 if-else 缩减为 ~25 行 match + 简化 if-else。新增 token 只需在 match 或静态集中添加一行。112/112 测试通过，纯重构零行为变更。
 
-### P3-10. `blockHasReturn()` 浅扫描
+### ✅ P3-10. `blockHasReturn()` 浅扫描
 
 - **位置**: [src/Parser.php](file:///c:/project/php/TinyPHP/src/Parser.php) `blockHasReturn`
 - **影响**: 仅检查顶层 return，不递归 if/for，可能误判函数是否返回（导致 non-void 函数漏 return 检查失效）。
 - **方案**: 递归检查 if/else/for/while/try 的所有分支是否都有 return（PHP 语义）。
+- **状态**: ✅ 已完成（2026-07-09）。`blockHasReturn` 从浅扫描改为递归搜索：进入 `IfStmtNode`（thenBody/elseifs/elseBody）、`WhileStmtNode`/`DoWhileStmtNode`（body）、`ForStmtNode`/`ForeachStmtNode`（body）、`SwitchStmtNode`（cases[].body）、`TryStmtNode`（tryBody/catchClauses/finallyBody）、`BlockStmtNode`（stmts）查找 `ReturnStmtNode`。语义保持"包含至少一个 return"（匹配错误消息 "must contain a return statement"），非"所有路径都 return"。修复前：箭头函数 `fn(): int => { if ($x) { return 1; } else { return 2; } }` 因无顶层 return 被误报错误。测试在 `test/type/arrow_block.php` 新增 "Arrow fn block with nested return" 场景（if/else 内 return + for 循环内 return）。112/112 测试通过。
 
 ---
 

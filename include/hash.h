@@ -247,8 +247,8 @@ static void _sha512_transform(uint64_t *h, const uint8_t *data) {
 }
 
 static void _sha512_update(_sha512_ctx *c, const uint8_t *data, size_t len) {
-    for(size_t i=0;i<len;i++){c->buf[c->pos++]=data[i];if(c->pos==128){_sha512_transform(c->h,c->buf);c->len[0]+=128;if(c->len[0]<128)c->len[1]++;c->pos=0;}}
     c->len[0]+=(uint64_t)len;if(c->len[0]<(uint64_t)len)c->len[1]++;
+    for(size_t i=0;i<len;i++){c->buf[c->pos++]=data[i];if(c->pos==128){_sha512_transform(c->h,c->buf);c->pos=0;}}
 }
 
 static void _sha512_final(_sha512_ctx *c, uint8_t *digest) {
@@ -278,3 +278,90 @@ static t_string tphp_fn_sha512(t_string s) {
 #undef _BSIG1_64
 #undef _SSIG0_64
 #undef _SSIG1_64
+
+/* ─── HMAC (RFC 2104) ────────────────────────────────── */
+/* H(K XOR opad, H(K XOR ipad, text)) — 复用 SHA-256/SHA-512 */
+/* 支持 sha256 / sha512，binary=true 返回原始摘要，否则小写 hex */
+
+static t_string tphp_fn_hash_hmac(t_string algo, t_string data, t_string key, t_bool binary) {
+    const char *a = STR_PTR(algo) ? STR_PTR(algo) : "";
+    int is256 = (strcmp(a, "sha256") == 0);
+    int is512 = (strcmp(a, "sha512") == 0);
+    if (!is256 && !is512) return (t_string){NULL, 0};
+
+    int bs = is256 ? 64 : 128;   /* block size */
+    int ds = is256 ? 32 : 64;    /* digest size */
+    const uint8_t *k = (const uint8_t*)(STR_PTR(key) ? STR_PTR(key) : "");
+    int klen = key.length;
+    const uint8_t *d = (const uint8_t*)(STR_PTR(data) ? STR_PTR(data) : "");
+    int dlen = data.length;
+
+    /* Step 1: prepare K0 (block_size bytes; hash first if key too long) */
+    uint8_t k0[128];
+    memset(k0, 0, (size_t)bs);
+    if (klen > bs) {
+        if (is256) {
+            _sha256_ctx kc; _sha256_init(&kc);
+            _sha256_update(&kc, k, (size_t)klen);
+            _sha256_final(&kc, k0);
+        } else {
+            _sha512_ctx kc; _sha512_init(&kc);
+            _sha512_update(&kc, k, (size_t)klen);
+            _sha512_final(&kc, k0);
+        }
+    } else {
+        memcpy(k0, k, (size_t)klen);
+    }
+
+    /* Step 2: K XOR ipad / K XOR opad */
+    uint8_t ipad[128], opad[128];
+    for (int i = 0; i < bs; i++) {
+        ipad[i] = (uint8_t)(k0[i] ^ 0x36);
+        opad[i] = (uint8_t)(k0[i] ^ 0x5C);
+    }
+
+    /* Step 3: inner = H(K XOR ipad || data) */
+    uint8_t inner[64];
+    if (is256) {
+        _sha256_ctx ic; _sha256_init(&ic);
+        _sha256_update(&ic, ipad, (size_t)bs);
+        _sha256_update(&ic, d, (size_t)dlen);
+        _sha256_final(&ic, inner);
+    } else {
+        _sha512_ctx ic; _sha512_init(&ic);
+        _sha512_update(&ic, ipad, (size_t)bs);
+        _sha512_update(&ic, d, (size_t)dlen);
+        _sha512_final(&ic, inner);
+    }
+
+    /* Step 4: result = H(K XOR opad || inner) */
+    uint8_t result[64];
+    if (is256) {
+        _sha256_ctx oc; _sha256_init(&oc);
+        _sha256_update(&oc, opad, (size_t)bs);
+        _sha256_update(&oc, inner, 32);
+        _sha256_final(&oc, result);
+    } else {
+        _sha512_ctx oc; _sha512_init(&oc);
+        _sha512_update(&oc, opad, (size_t)bs);
+        _sha512_update(&oc, inner, 64);
+        _sha512_final(&oc, result);
+    }
+
+    /* Step 5: output (raw binary or lowercase hex) */
+    if (binary) {
+        char *buf = str_pool_alloc(ds);
+        if (!buf) return (t_string){NULL, 0};
+        memcpy(buf, result, (size_t)ds);
+        return (t_string){buf, ds};
+    }
+    static const char hx[] = "0123456789abcdef";
+    int hexLen = ds * 2;
+    char *buf = str_pool_alloc(hexLen);
+    if (!buf) return (t_string){NULL, 0};
+    for (int i = 0; i < ds; i++) {
+        buf[i*2]   = hx[result[i] >> 4];
+        buf[i*2+1] = hx[result[i] & 0xf];
+    }
+    return (t_string){buf, hexLen};
+}

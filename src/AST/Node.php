@@ -465,6 +465,20 @@ class ExprStmtNode extends StmtNode
     }
 }
 
+// 块语句：语句序列（用于链式赋值 $a = $b = 1 展开）
+class BlockStmtNode extends StmtNode
+{
+    /** @param StmtNode[] $stmts */
+    public function __construct(
+        public readonly array $stmts,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitBlockStmt($this);
+    }
+}
+
 // === 表达式 ===
 
 abstract class ExprNode extends ASTNode
@@ -636,16 +650,24 @@ class ConstNode extends ASTNode
     }
 }
 
-// 枚举声明: enum Name: int { case A = 1; case B = 2; }
+// 枚举声明: enum Name: int { case A = 1; case B = 2; public function label(): string {...} const MAX = 9; }
 class EnumNode extends ASTNode
 {
     /** @param EnumCaseNode[] $cases */
+    /** @param MethodNode[] $methods */
+    /** @param ConstNode[] $classConsts */
     public function __construct(
         public readonly string $name,
         public readonly string $backingType,   // 'int' | 'string'
         /** @var EnumCaseNode[] */
         public readonly array $cases,
         public readonly string $namespace = '',
+        /** @var MethodNode[] 实例/静态方法 */
+        public readonly array $methods = [],
+        /** @var ConstNode[] 枚举常量 */
+        public readonly array $classConsts = [],
+        /** @var string[] 实现的接口名（记录用，不做 vtable 强制） */
+        public readonly array $implements = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -890,6 +912,7 @@ interface ASTVisitor
     public function visitAssignArrayStmt(AssignArrayStmtNode $node): string;
     public function visitAssignArrayPushStmt(AssignArrayPushStmtNode $node): string;
     public function visitExprStmt(ExprStmtNode $node): string;
+    public function visitBlockStmt(BlockStmtNode $node): string;
     public function visitStringLiteral(StringLiteralExpr $node): string;
     public function visitIntLiteral(IntLiteralExpr $node): string;
     public function visitFloatLiteral(FloatLiteralExpr $node): string;

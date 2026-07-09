@@ -13,6 +13,12 @@ class CodeGenerator implements ASTVisitor
     private array $varTypes = [];
     /** 当前方法名字（用于 __METHOD__） */
     private string $currentMethodName = '';
+    /** P2-6: 当前 PHP 函数名（全局函数用，方法用 currentMethodName） */
+    private string $currentFuncName = '';
+    /** P2-6: 当前是否在类方法内（区分 __FUNCTION__/__METHOD__ 语义） */
+    private bool $inMethod = false;
+    /** P2-6: 当前 PHP 命名空间名（用于 __NAMESPACE__） */
+    private string $currentNamespace = '';
     /** 数组元素类型追踪：varName → C 类型（int key 的默认类型） */
     private array $arrElementTypes = [];
     /** 数组 per-key 类型追踪：arrVarName → [strKey → CType]（字符串键专用） */
@@ -61,7 +67,7 @@ class CodeGenerator implements ASTVisitor
         'date' => 't_string', 'implode' => 't_string', 'join' => 't_string', 'json_encode' => 't_string',
         'htmlspecialchars' => 't_string', 'nl2br' => 't_string', 'base64_encode' => 't_string',
         'base64_decode' => 't_string', 'http_build_query' => 't_string', 'sha256' => 't_string', 'sha512' => 't_string',
-        'password_hash' => 't_string', 'base_convert' => 't_string', 'mb_substr' => 't_string',
+        'password_hash' => 't_string', 'base_convert' => 't_string', 'mb_substr' => 't_string', 'hash_hmac' => 't_string',
         'sprintf' => 't_string', 'str_replace' => 't_string', 'strtolower' => 't_string', 'strtoupper' => 't_string',
         'trim' => 't_string', 'ltrim' => 't_string', 'rtrim' => 't_string', 'substr' => 't_string',
         'file_get_contents' => 't_string', 'strval' => 't_string', 'chr' => 't_string', 'getenv' => 't_string',
@@ -222,6 +228,7 @@ class CodeGenerator implements ASTVisitor
         'range'              => ['cName' => 'tphp_fn_range', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '1']],
         'iconv_mime_encode'  => ['cName' => 'tphp_fn_iconv_mime_encode', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => 'NULL']],
         'password_hash'      => ['cName' => 'tphp_fn_password_hash', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [0 => 'STR_LIT("")', 1 => '1', 2 => 'NULL']],
+        'hash_hmac'          => ['cName' => 'tphp_fn_hash_hmac', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [3 => 'false']],
         // ── 三参 direct + direct + wraparr ──
         'array_fill'         => ['cName' => 'tphp_fn_arr_fill', 'modes' => ['direct', 'direct', 'wraparr']],
         // ── 四参带默认值 ──
@@ -245,6 +252,9 @@ class CodeGenerator implements ASTVisitor
     private int $thunkCounter = 0;
     /** #callback 声明的回调签名: name → ['ret'=>'int32_t','params_str'=>'int32_t a, double b'] */
     private array $phpcCallbackSigs = [];
+
+    /** P3-3: resolveMethodClass 缓存 (cn\0method → resolvedClass) */
+    private array $methodClassCache = [];
 
     // ── 多段输出 (V-style multi-section codegen) ──────────
     // 所有代码生成写入命名段，最后由 renderSections() 按序组装
@@ -345,6 +355,11 @@ class CodeGenerator implements ASTVisitor
         // ── SEC_ENUMS ──
         foreach ($node->enums as $e) {
             $this->sectionBlock(self::SEC_ENUMS, $e->accept($this));
+        }
+        // ── SEC_CLSIMPL: 枚举方法实现 + 自动 cases()/from()/tryFrom() ──
+        // （前置声明在 SEC_ENUMS 中，渲染顺序 ENUMS < CLSIMPL 保证声明在前）
+        foreach ($node->enums as $e) {
+            $this->sectionBlock(self::SEC_CLSIMPL, $this->emitEnumImpl($e));
         }
 
         $allClasses = array_merge(
@@ -478,6 +493,10 @@ class CodeGenerator implements ASTVisitor
         $this->closureCounter = 0;
         $this->capTypeCounter = 0;
         $this->thunkCounter = 0;
+        $this->methodClassCache = [];
+        $this->currentFuncName = '';
+        $this->inMethod = false;
+        $this->currentNamespace = '';
         $this->sections = [];
         $this->inGenerator = false;
         $this->symbols = new SymbolTable();
@@ -637,7 +656,7 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass($cn)->methods['__construct'] = new MethodInfo('void');
         $this->symbols->getClass($cn)->methods['__destruct']  = new MethodInfo('void');
         foreach ($methods as $m) {
-            $mr = $this->mapType($m->returnType);
+            $mr = $m->isGenerator ? 'tphp_class_Generator*' : $this->mapType($m->returnType);
             $pts = array_map(fn($p) => $this->mapType($p->type), $m->params);
             $tp = count($m->params);
             $dc = 0;
@@ -742,6 +761,8 @@ class CodeGenerator implements ASTVisitor
         if ($class->isAbstract && $class->parentName === null && empty($class->properties)) {
             return '';
         }
+        $this->currentNamespace = $class->namespace; // P2-6: __NAMESPACE__ 上下文
+        $this->inMethod = true; // P2-6: 标记进入类方法生成阶段
         $cn = self::classCName($class);
         $ctor = $dtor = null;
         $methods = [];
@@ -914,6 +935,9 @@ class CodeGenerator implements ASTVisitor
         if ($node->isGenerator) {
             return $this->emitGeneratorFunction($node);
         }
+        $this->currentFuncName = $node->name; // P2-6: __FUNCTION__ 全局函数名
+        $this->inMethod = false;
+        $this->currentNamespace = $node->namespace; // P2-6: __NAMESPACE__
         $this->declaredVars = [];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
@@ -1108,6 +1132,152 @@ class CodeGenerator implements ASTVisitor
     }
 
     /**
+     * 生成器方法变换：与 emitGeneratorFunction 类似，但 self 指针打包进 params struct。
+     *
+     *   1) 协程入口 static void tphp_gen_{cn}_{name}_entry(mco_coro* co) { 方法体 }
+     *   2) 包装方法   tphp_class_Generator* {cn}_{name}({cn}* self, params) { 创建协程 }
+     *
+     * self 指针借用调用方引用（与独立生成器函数的对象参数一致，不做额外 retain/release）。
+     */
+    private function emitGeneratorMethod(MethodNode $node): string
+    {
+        $cn = $this->className;  // e.g., tphp_class_Foo / tphp_enum_Color
+        $fnCName = "{$cn}_{$node->name}";
+        $entryName = 'tphp_gen_' . $fnCName . '_entry';
+        $paramsStruct = '_gen_params_' . $fnCName;
+
+        // 保存状态
+        $savedDeclaredVars = $this->declaredVars;
+        $savedVarTypes = $this->varTypes;
+        $savedCurrentRetType = $this->currentRetType;
+        $savedInGenerator = $this->inGenerator;
+        $savedCurrentMethodName = $this->currentMethodName;
+        $savedCurrentFuncName = $this->currentFuncName;
+        $savedInMethod = $this->inMethod;
+
+        // 重置作用域
+        $this->declaredVars = ['self' => true];
+        $this->varTypes = ['self' => $cn . '*'];
+        $this->symbols->clearScopeObjects();
+        $this->symbols->clearScopeVars();
+        $this->funcScopeDecls = [];
+        $this->currentRetType = 't_var';
+        $this->inGenerator = true;
+        $this->currentMethodName = $node->name;
+        $this->currentFuncName = $node->name;
+        $this->inMethod = true;
+
+        // 检查默认值参数 → 生成重载
+        $hasDefaults = false;
+        foreach ($node->params as $p) {
+            if ($p->default !== null) { $hasDefaults = true; break; }
+        }
+
+        $overloadCode = '';
+        if ($hasDefaults) {
+            $overloadCode = $this->generateMethodOverloads($node) . "\n\n";
+        }
+
+        // params struct 包含 self + 用户参数
+        $paramVars = ['self' => true];
+        $paramFields = ["    {$cn}* self;"];
+        $paramLocalDecls = ["    {$cn}* self;"];
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $ct = self::paramCType($p);
+            $this->declaredVars[$vn] = true;
+            $this->varTypes[$vn] = $ct;
+            $paramVars[$vn] = true;
+            $paramFields[] = "    {$ct} {$vn};";
+            $paramLocalDecls[] = "    {$ct} {$vn};";
+        }
+
+        // 解包参数：从 user_data 复制到局部变量
+        $unpackLines = [];
+        $unpackLines[] = "    {$paramsStruct}* _p = ({$paramsStruct}*)mco_get_user_data(co);";
+        $unpackLines[] = "    self = _p->self;";
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $unpackLines[] = "    {$vn} = _p->{$vn};";
+        }
+        $unpackLines[] = '    free(_p);';
+        $unpackLines[] = '    int _auto_key = 0;';
+
+        // 生成函数体
+        $bodyLines = [];
+        if ($node->body === null) {
+            return $overloadCode; // abstract method — no body
+        }
+        foreach ($node->body as $s) {
+            $bodyLines[] = $this->ind($s->accept($this));
+        }
+
+        // for 循环提升声明
+        $declLines = [];
+        foreach ($this->funcScopeDecls as $vn => $ct) {
+            $declLines[] = $this->ind("{$ct} {$vn};");
+        }
+
+        // 末尾释放
+        $tailLines = [];
+        foreach ($this->generateScopeCleanup($paramVars) as $l) {
+            $tailLines[] = $l;
+        }
+        foreach ($this->symbols->scopeObjects() as $ov) {
+            $tailLines[] = $this->ind("tp_obj_release({$ov});");
+        }
+
+        // 恢复状态
+        $this->declaredVars = $savedDeclaredVars;
+        $this->varTypes = $savedVarTypes;
+        $this->currentRetType = $savedCurrentRetType;
+        $this->inGenerator = $savedInGenerator;
+        $this->currentMethodName = $savedCurrentMethodName;
+        $this->currentFuncName = $savedCurrentFuncName;
+        $this->inMethod = $savedInMethod;
+
+        // params struct typedef → SEC_CLSIMPL（在类结构体定义之后，方法实现之前）
+        $typedef = "typedef struct {\n" . implode("\n", $paramFields) . "\n} {$paramsStruct};";
+        $this->sectionLine(self::SEC_CLSIMPL, $typedef);
+
+        // 协程入口函数
+        $entryLines = array_merge(
+            ["static void {$entryName}(mco_coro* co) {"],
+            $paramLocalDecls,
+            $unpackLines,
+            $declLines,
+            $bodyLines,
+            $tailLines,
+            ["}"]
+        );
+        $entryFn = implode("\n", $entryLines);
+
+        // 包装方法（方法签名与普通方法一致，返回 tphp_class_Generator*）
+        $paramDecls = array_map(fn($p) => self::paramDecl($p), $node->params);
+        $wrapperParams = "{$cn}* self" . (empty($paramDecls) ? '' : ', ' . implode(', ', $paramDecls));
+        $paramAssigns = ["    _p->self = self;"];
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $paramAssigns[] = "    _p->{$vn} = {$vn};";
+        }
+        $wrapperLines = array_merge(
+            ["tphp_class_Generator* {$fnCName}({$wrapperParams}) {"],
+            ["    if (self == NULL) return NULL;"],
+            ["    {$paramsStruct}* _p = ({$paramsStruct}*)calloc(1, sizeof({$paramsStruct}));"],
+            $paramAssigns,
+            ["    mco_desc desc = mco_desc_init({$entryName}, 0);"],
+            ["    desc.user_data = _p;"],
+            ["    mco_coro* co;"],
+            ["    if (mco_create(&co, &desc) != MCO_SUCCESS) { free(_p); return NULL; }"],
+            ["    return new_tphp_class_Generator(co);"],
+            ["}"]
+        );
+        $wrapperFn = implode("\n", $wrapperLines);
+
+        return $overloadCode . $entryFn . "\n\n" . $wrapperFn;
+    }
+
+    /**
      * 为有默认值的函数生成重载版本
      * 例如: function foo(int $a, int $b = 10, int $c = 20)
      * 生成: foo_2($a) → foo($a, 10, 20)
@@ -1176,9 +1346,11 @@ class CodeGenerator implements ASTVisitor
     public function visitMethod(MethodNode $node): string
     {
         if ($node->isGenerator) {
-            throw new \RuntimeException("Generator methods not yet supported (in method {$node->name})");
+            return $this->emitGeneratorMethod($node);
         }
         $this->currentMethodName = $node->name;
+        $this->currentFuncName = $node->name; // P2-6: __FUNCTION__ 在方法内返回方法名
+        $this->inMethod = true;
         $this->declaredVars = ['self' => true];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
@@ -1204,6 +1376,8 @@ class CodeGenerator implements ASTVisitor
 
         // 生成主方法（完整参数版本）
         $this->currentMethodName = $node->name;
+        $this->currentFuncName = $node->name; // P2-6
+        $this->inMethod = true;
         $this->declaredVars = ['self' => true];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
@@ -1260,7 +1434,7 @@ class CodeGenerator implements ASTVisitor
     private function generateMethodOverloads(MethodNode $node): string
     {
         $parts = [];
-        $ret = $this->mapType($node->returnType);
+        $ret = $node->isGenerator ? 'tphp_class_Generator*' : $this->mapType($node->returnType);
         $methodImpl = $this->methodImpl($node);
         // 获取类名（从 methodImpl 中提取）
         $cn = $this->className;
@@ -1706,7 +1880,12 @@ class CodeGenerator implements ASTVisitor
             return $t;
         }
         if ($expr instanceof EnumAccessExpr) {
-            return $this->symbols->getEnumCType($expr->enumName) ?? 't_int';
+            // case 访问 → enum 实例指针类型；常量访问 → 常量声明类型
+            if ($this->symbols->hasEnumCase($expr->enumName, $expr->caseName)) {
+                return $this->symbols->getEnumCType($expr->enumName) ?? 't_int';
+            }
+            $ct = $this->symbols->getEnumConstType($expr->enumName, $expr->caseName);
+            return $ct ?? 't_int';
         }
         if ($expr instanceof PropertyAccessExpr) {
             // C->CONST — C constant/enum/macro, default to t_int
@@ -1858,13 +2037,34 @@ class CodeGenerator implements ASTVisitor
                 $objType = ($objKey === '$this' || $objKey === 'self')
                     ? $this->className
                     : ($this->varTypes[$objKey] ?? '');
+                // 枚举静态调用 Color::cases() — callee=VariableExpr(Color)，varTypes 无此键
+                //   但名称是已知枚举 → 用枚举 C 结构体名
+                if ($objType === '' && $this->symbols->resolveEnumCName($expr->callee->name) !== null) {
+                    $objType = $this->symbols->resolveEnumCName($expr->callee->name);
+                }
             } elseif ($expr->callee instanceof CallExpr) {
                 // 链式调用：递归推导
                 $objType = $this->inferCallChainClass($expr->callee);
+            } elseif ($expr->callee instanceof EnumAccessExpr) {
+                // Color::Red->method() → 实例方法
+                $enumCName = $this->symbols->getEnumCName($expr->callee->enumName);
+                if ($enumCName !== null) {
+                    $mi = $this->symbols->getEnumMethodByCName($enumCName, $expr->name);
+                    if ($mi !== null && $mi->retType !== 'void') return $mi->retType;
+                }
+                return 't_int';
             } else {
                 return 't_int';
             }
             $objClean = rtrim($objType, '*');
+            // 枚举静态方法调用 Color::cases() 等 → callee 是 VariableExpr(name=Color)
+            //   此时 $objType 是枚举名或 C 结构体名，先查枚举方法
+            $enumCName = $this->symbols->resolveEnumCName($objClean);
+            if ($enumCName !== null) {
+                $mi = $this->symbols->getEnumMethodByCName($enumCName, $expr->name);
+                if ($mi !== null && $mi->retType !== 'void') return $mi->retType;
+                return 't_int';
+            }
             if ($objClean !== '') {
                 $mInfo = $this->symbols->getClassMethod($objClean, $expr->name);
                 if ($mInfo !== null) {
@@ -2051,6 +2251,15 @@ class CodeGenerator implements ASTVisitor
         return $node->expr->accept($this) . ';';
     }
 
+    public function visitBlockStmt(BlockStmtNode $node): string
+    {
+        $code = '';
+        foreach ($node->stmts as $stmt) {
+            $code .= $stmt->accept($this);
+        }
+        return $code;
+    }
+
     // ============================================================
     public function visitStringLiteral(StringLiteralExpr $node): string
     {
@@ -2099,7 +2308,20 @@ class CodeGenerator implements ASTVisitor
         if ($node->name === '__DIR__')  return 'tphp_rt_str_dup((t_string){.data="' . str_replace('\\', '\\\\', dirname($this->phpFile)) . '", .length=' . strlen(dirname($this->phpFile)) . ', .is_lit=true})';
         if ($node->name === 'DIRECTORY_SEPARATOR') return PHP_OS_FAMILY === 'Windows' ? 'STR_LIT("\\\\")' : 'STR_LIT("/")';
         if ($node->name === '__CLASS__')  return 'STR_LIT("' . $this->className . '")';
-        if ($node->name === '__METHOD__') return 'STR_LIT("' . $this->className . '::' . ($this->currentMethodName ?? '') . '")';
+        if ($node->name === '__METHOD__') {
+            // 方法内: Class::method；全局函数内: 函数名
+            if ($this->inMethod) return 'STR_LIT("' . $this->className . '::' . ($this->currentMethodName ?? '') . '")';
+            return 'STR_LIT("' . $this->currentFuncName . '")';
+        }
+        if ($node->name === '__FUNCTION__') {
+            // 方法内: 仅方法名；全局函数内: 函数名
+            return 'STR_LIT("' . ($this->inMethod ? ($this->currentMethodName ?? '') : $this->currentFuncName) . '")';
+        }
+        if ($node->name === '__NAMESPACE__') {
+            $ns = $this->currentNamespace;
+            $escaped = str_replace('\\', '\\\\', $ns);
+            return 'STR_LIT("' . $escaped . '")';
+        }
         return 'STR_LIT("")';
     }
 
@@ -2184,7 +2406,7 @@ class CodeGenerator implements ASTVisitor
     public function visitClosure(ClosureExpr $node): string
     {
         if ($node->isGenerator) {
-            throw new \RuntimeException("Generator closures not yet supported");
+            return $this->emitGeneratorClosure($node);
         }
         $id = ++$this->closureCounter;
         $name  = "_closure_{$id}";
@@ -2297,6 +2519,210 @@ class CodeGenerator implements ASTVisitor
 
 
         return "({ {$ret} {$name}({$fwdParams});\n{$envDecl}\n  })";
+    }
+
+    /**
+     * 生成器闭包变换：use vars + params 打包进 generator params struct。
+     *
+     *   1) 协程入口 static void tphp_gen__closure_N_entry(mco_coro* co) { 闭包体 }
+     *   2) 包装函数   tphp_class_Generator* _closure_N(params, void* _env) { 创建协程 }
+     *
+     * 返回 t_callback{.func=_closure_N, .env=_cap_N_ptr}（与普通闭包一致的调用接口）。
+     */
+    private function emitGeneratorClosure(ClosureExpr $node): string
+    {
+        $id = ++$this->closureCounter;
+        $name  = "_closure_{$id}";
+        $capName = "_cap_{$id}";
+        $genStruct = "_gen_params_{$name}";
+        $entryName = "tphp_gen_{$name}_entry";
+        $hasCapture = !empty($node->useVars);
+
+        // 查询捕获变量的类型（外层作用域）
+        $capFields = [];
+        $capInits  = [];
+        $capDecls  = [];
+        $capAssigns = [];
+        $capTypes = [];  // 保存捕获变量 C 类型（用于 genStruct 字段）
+        foreach ($node->useVars as [$vn, $_]) {
+            $ct = $this->varTypes[$vn] ?? 't_int';
+            if ($ct === 'null') {
+                $ct = 'void*';
+            } elseif (str_contains($ct, 'tphp_class_') && !str_ends_with($ct, '*')) {
+                $ct .= '*';
+            }
+            $capTypes[$vn] = $ct;
+            $capFields[]  = "    {$ct} {$vn};";
+            $capInits[]   = "    .{$vn} = {$vn}";
+            $capDecls[]   = "    {$ct} {$vn} = _e->{$vn};";
+            $capAssigns[] = "    _env_{$id}->{$vn} = {$vn};";
+        }
+
+        // 保存外层状态
+        $savedDeclared = $this->declaredVars;
+        $savedObjs = $this->symbols->scopeObjects();
+        $savedTypes    = $this->varTypes;
+        $savedIndent   = $this->indent;
+        $savedRetType  = $this->currentRetType;
+        $savedInGenerator = $this->inGenerator;
+
+        // 重置作用域
+        $this->declaredVars = [];
+        $this->symbols->clearScopeObjects();
+        $this->symbols->clearScopeVars();
+        $this->varTypes     = [];
+        $this->indent       = 0;
+        $this->currentRetType = 't_var';
+        $this->inGenerator = true;
+        $this->funcScopeDecls = [];
+
+        // 注册参数到局部变量表
+        $paramVars = [];
+        $paramFields = [];   // genStruct 的参数字段
+        $paramLocalDecls = []; // entry 函数的局部声明
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $ct = self::mapType($p->type);
+            $this->declaredVars[$vn] = true;
+            $this->varTypes[$vn] = $ct;
+            $paramVars[$vn] = true;
+            $paramFields[] = "    {$ct} {$vn};";
+            $paramLocalDecls[] = "    {$ct} {$vn};";
+        }
+        // 注册捕获变量到局部变量表
+        if ($hasCapture) {
+            foreach ($node->useVars as [$vn, $_]) {
+                $this->declaredVars[$vn] = true;
+                $this->varTypes[$vn] = $capTypes[$vn];
+                $paramVars[$vn] = true;
+            }
+        }
+
+        // 解包：从 user_data 复制到局部变量
+        $unpackLines = [];
+        $unpackLines[] = "    {$genStruct}* _p = ({$genStruct}*)mco_get_user_data(co);";
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $unpackLines[] = "    {$vn} = _p->{$vn};";
+        }
+        if ($hasCapture) {
+            foreach ($node->useVars as [$vn, $_]) {
+                $unpackLines[] = "    {$vn} = _p->{$vn};";
+            }
+        }
+        $unpackLines[] = '    free(_p);';
+        $unpackLines[] = '    int _auto_key = 0;';
+
+        // 生成函数体
+        $bodyLines = [];
+        if (empty($node->body)) {
+            foreach ($node->params as $p) {
+                $bodyLines[] = '    (void)' . self::varName($p->name) . ';';
+            }
+        } else {
+            foreach ($node->body as $s) {
+                $bodyLines[] = '    ' . $s->accept($this);
+            }
+        }
+
+        // for 循环提升声明
+        $declLines = [];
+        foreach ($this->funcScopeDecls as $vn => $ct) {
+            $declLines[] = "    {$ct} {$vn};";
+        }
+
+        // 末尾释放
+        $tailLines = [];
+        foreach ($this->generateScopeCleanup($paramVars) as $l) {
+            $tailLines[] = '    ' . $l;
+        }
+        foreach ($this->symbols->scopeObjects() as $ov) {
+            $tailLines[] = '    ' . "tp_obj_release({$ov});";
+        }
+
+        // 恢复外层作用域
+        $this->declaredVars = $savedDeclared;
+        $this->symbols->clearScopeObjects(); foreach($savedObjs as $so) $this->symbols->addScopeObject($so);
+        $this->varTypes     = $savedTypes;
+        $this->indent       = $savedIndent;
+        $this->currentRetType = $savedRetType;
+        $this->inGenerator = $savedInGenerator;
+
+        // capture struct 定义 → SEC_CAPTYPES
+        if ($hasCapture) {
+            $capDef = "typedef struct {\n" . implode("\n", $capFields) . "\n} {$capName};";
+            $this->sectionBlock(self::SEC_CAPTYPES, $capDef);
+        }
+
+        // generator params struct 定义 → SEC_CLOSURES（在类结构体定义之后）
+        $allFields = array_merge($paramFields, $hasCapture ? $capFields : []);
+        $genTypeDef = "typedef struct {\n" . implode("\n", $allFields) . "\n} {$genStruct};";
+        $this->sectionLine(self::SEC_CLOSURES, $genTypeDef);
+
+        // 协程入口函数 → SEC_CLOSURES
+        $entryLines = array_merge(
+            ["static void {$entryName}(mco_coro* co) {"],
+            $paramLocalDecls,
+            $hasCapture ? array_map(fn($f) => '    ' . ltrim($f), $capFields) : [],
+            $unpackLines,
+            $declLines,
+            $bodyLines,
+            $tailLines,
+            ["}"]
+        );
+        $this->sectionBlock(self::SEC_CLOSURES, implode("\n", $entryLines));
+
+        // 包装函数（闭包 func）→ SEC_CLOSURES
+        $paramDecls = array_map(fn($p) => $this->visitParam($p), $node->params);
+        $paramDecls[] = "void* _env";
+        $paramStr = implode(', ', $paramDecls);
+        $packAssigns = [];
+        foreach ($node->params as $p) {
+            $vn = self::varName($p->name);
+            $packAssigns[] = "    _p->{$vn} = {$vn};";
+        }
+        $unpackEnv = [];
+        if ($hasCapture) {
+            $unpackEnv[] = "    {$capName}* _e = ({$capName}*)_env;";
+            foreach ($node->useVars as [$vn, $_]) {
+                $packAssigns[] = "    _p->{$vn} = _e->{$vn};";
+            }
+        }
+        $wrapperLines = array_merge(
+            ["tphp_class_Generator* {$name}({$paramStr}) {"],
+            $hasCapture ? $unpackEnv : ["    (void)_env;"],
+            ["    {$genStruct}* _p = ({$genStruct}*)calloc(1, sizeof({$genStruct}));"],
+            ["    if (_p == NULL) return NULL;"],
+            $packAssigns,
+            ["    mco_desc desc = mco_desc_init({$entryName}, 0);"],
+            ["    desc.user_data = _p;"],
+            ["    mco_coro* co;"],
+            ["    if (mco_create(&co, &desc) != MCO_SUCCESS) { free(_p); return NULL; }"],
+            ["    return new_tphp_class_Generator(co);"],
+            ["}"]
+        );
+        $this->sectionBlock(self::SEC_CLOSURES, implode("\n", $wrapperLines));
+
+        // 记录闭包签名（返回类型为 Generator*）
+        $sig = [
+            'ret'    => 'tphp_class_Generator*',
+            'params' => implode(', ', array_map(fn($p) => self::mapType($p->type), $node->params)),
+        ];
+        $this->symbols->addClosureSig($name, $sig);
+
+        // 生成 GNU 复合表达式（与普通闭包一致：创建 env 并返回 t_callback）
+        $fwdParams = implode(', ', array_map(fn($p) => $this->visitParam($p), $node->params));
+        $fwdParams = ($fwdParams ? $fwdParams . ', ' : '') . "void* _env";
+        $envDecl = $hasCapture
+            ? "    {$capName}* _env_{$id} = ({$capName}*)calloc(1, sizeof({$capName}));\n"
+              . "    if (_env_{$id} != NULL) {\n"
+              . implode("\n", $capAssigns) . "\n"
+              . "    }\n"
+              . "    tphp_rt_register((void*)_env_{$id}, 3);\n"
+              . "    (t_callback){ .func = (void*){$name}, .env = _env_{$id} };"
+            : "    (t_callback){ .func = (void*){$name}, .env = NULL };";
+
+        return "({ tphp_class_Generator* {$name}({$fwdParams});\n{$envDecl}\n  })";
     }
 
     /** 生成 C thunk：包装 TinyPHP 闭包为无 env 的 C 回调
@@ -3063,6 +3489,9 @@ class CodeGenerator implements ASTVisitor
         } elseif ($node->callee instanceof CallExpr) {
             // 链式调用：从上一个调用的返回类型推导
             $cn = $this->inferCallChainClass($node->callee);
+        } elseif ($node->callee instanceof EnumAccessExpr) {
+            // Color::Red->method() — 实例方法，cn 取枚举 C 结构体名
+            $cn = $this->symbols->getEnumCName($node->callee->enumName) ?? $callee;
         } else {
             $cn = $callee;
         }
@@ -3072,6 +3501,11 @@ class CodeGenerator implements ASTVisitor
         }
         // Strip trailing * + resolve parent class for inherited methods
         $cnClean = rtrim($cn, '*');
+        // ── 枚举方法调用（静态 Color::method() 或实例 Color::Red->method()）──
+        $enumCName = $this->symbols->resolveEnumCName($cnClean);
+        if ($enumCName !== null) {
+            return $this->emitEnumMethodCall($node, $enumCName, $callee, $args);
+        }
         $useParent = false;
         if ($cnClean !== '' && $this->symbols->getClassMethod($cnClean, $node->name) === null) {
             $parentCN = $this->resolveMethodClass($cnClean, $node->name);
@@ -3112,16 +3546,76 @@ class CodeGenerator implements ASTVisitor
         return $call;
     }
 
+    /**
+     * 枚举方法调用发射：
+     *   - 静态: Color::cases() / Color::from($v) / Color::tryFrom($v) → Color_cases(), ...
+     *   - 实例: Color::Red->label() → Color_label(&$e_..._Red, ...)
+     * 自动方法（cases/from/tryFrom）为静态无 self；用户方法为实例方法带 self。
+     */
+    private function emitEnumMethodCall(CallExpr $node, string $enumCName, string $calleeCode, array $args): string
+    {
+        $method = $node->name;
+        $mInfo = $this->symbols->getEnumMethodByCName($enumCName, $method);
+        if ($mInfo === null) {
+            throw new \RuntimeException(sprintf(
+                "[%d:%d] Call to undefined enum method %s::%s()",
+                $node->line, $node->column, $enumCName, $method
+            ));
+        }
+        $methodCName = "{$enumCName}_{$method}";
+        $argCount = count($node->args);
+        // 静态自动方法（cases/from/tryFrom）：无 self 参数
+        if ($mInfo->isStatic) {
+            // 重载版本选择（自动方法无默认值，但用户静态方法理论上可走此分支——目前用户方法都是实例）
+            if ($mInfo->defaultCount > 0 && $argCount < $mInfo->totalParams) {
+                $missing = $mInfo->totalParams - $argCount;
+                $methodCName = $methodCName . '_' . $missing;
+            }
+            return "{$methodCName}(" . implode(', ', $args) . ')';
+        }
+        // 实例方法：self 作为第一个参数
+        // calleeCode 对于 EnumAccessExpr 已是 "&_e_<prefix>_<case>"
+        $allArgs = array_merge([$calleeCode], $args);
+        if ($mInfo->defaultCount > 0 && $argCount < $mInfo->totalParams) {
+            $missing = $mInfo->totalParams - $argCount;
+            $methodCName = $methodCName . '_' . $missing;
+        }
+        $call = "{$methodCName}(" . implode(', ', $allArgs) . ')';
+        // nullsafe 包装（实例方法才可能）
+        if ($node->isNullsafe) {
+            $ret = $mInfo->retType;
+            if ($ret === 'void') {
+                return "({ if ((void*){$calleeCode} != NULL) {{ {$call}; }} })";
+            }
+            $tmp = '_nsr_' . (++$this->tmpVarCounter);
+            $zero = match ($ret) { 't_float' => '0.0', 't_string' => '(t_string){NULL,0}', default => '0' };
+            return "({ {$ret} {$tmp} = {$zero}; if ((void*){$calleeCode} != NULL) {{ $tmp = {$call}; }} {$tmp}; })";
+        }
+        return $call;
+    }
+
     /** 推断链式调用的返回类名 */
     private function inferCallChainClass(CallExpr $expr): string
     {
         if ($expr->callee === null) return '';
         if ($expr->callee instanceof VariableExpr) {
             $key = self::varName($expr->callee->name);
+            // 枚举静态调用链：Color::from($v)->label() → callee=VariableExpr(Color)
+            //   返回枚举 C 结构体名，供后续 emitEnumMethodCall 识别
+            $enumCName = $this->symbols->resolveEnumCName($key);
+            if ($enumCName !== null) return $enumCName;
+            // 枚举名（FQN 或短名）→ C 结构体名
+            $enumCName = $this->symbols->getEnumCName($expr->callee->name);
+            if ($enumCName !== null) return $enumCName;
             return $this->varTypes[$key] ?? '';
         }
         if ($expr->callee instanceof CallExpr) {
-            return $this->inferCallChainClass($expr->callee);
+            // 嵌套调用：用返回类型推导
+            return rtrim($this->inferCallReturnType($expr->callee), '*');
+        }
+        if ($expr->callee instanceof EnumAccessExpr) {
+            // Color::Red->method()->chain() → enum 实例类型
+            return $this->symbols->getEnumCName($expr->callee->enumName) ?? '';
         }
         return '';
     }
@@ -3189,7 +3683,7 @@ class CodeGenerator implements ASTVisitor
     private function inferCallbackSig(ExprNode $expr): ?array
     {
         if ($expr instanceof ClosureExpr) {
-            $ret = self::mapType($expr->returnType);
+            $ret = $expr->isGenerator ? 'tphp_class_Generator*' : self::mapType($expr->returnType);
             $params = array_map(fn($p) => self::mapType($p->type), $expr->params);
             return ['ret' => $ret, 'params' => $params];
         }
@@ -3711,15 +4205,175 @@ class CodeGenerator implements ASTVisitor
             $lines[] = "    .name = STR_LIT(\"{$case->name}\"),";
             $lines[] = "    .value = {$valCode},";
             $lines[] = "};";
+            // 注册 case（FQN + 短名）
+            $this->symbols->addEnumCase($fqName, $case->name);
+            $this->symbols->addEnumCase($node->name, $case->name);
         }
+        $lines[] = '';
+
+        // 枚举常量 → #define（与类常量命名一致：TPHP_CONST_<CN>_<NAME>）
+        foreach ($node->classConsts as $cc) {
+            $cname = 'TPHP_CONST_' . strtoupper($cName . '_' . $cc->name);
+            $vis = $cc->visibility ?? 'public';
+            $declCType = self::mapType($cc->type);
+            $this->symbols->addEnumConst($fqName, $cc->name, $declCType);
+            $this->symbols->addEnumConst($node->name, $cc->name, $declCType);
+            $this->symbols->addConst($cName . '_' . $cc->name, $declCType, $vis);
+            $this->symbols->addConst($cname, $declCType, $vis);
+            if ($cc->value instanceof StringLiteralExpr) {
+                $val = str_replace('"', '\\"', $cc->value->value);
+                $lines[] = "#define {$cname} STR_LIT(\"{$val}\")";
+            } elseif ($cc->value instanceof IntLiteralExpr) {
+                $lines[] = "#define {$cname} {$cc->value->value}";
+            } elseif ($cc->value instanceof FloatLiteralExpr) {
+                $fv = $cc->value->value;
+                $lines[] = '#define ' . $cname . ' ' .
+                    (($fv == (float)(int)$fv) ? sprintf('%.1f', $fv) : rtrim(rtrim(sprintf('%.15g', $fv), '0'), '.'));
+            } elseif ($cc->value instanceof BoolLiteralExpr) {
+                $lines[] = "#define {$cname} " . ($cc->value->value ? 'true' : 'false');
+            }
+        }
+        if (!empty($node->classConsts)) $lines[] = '';
+
+        // 注册用户方法 + 自动 cases()/from()/tryFrom() 到 SymbolTable
+        $autoStatic = [
+            'cases'    => 't_array*',
+            'from'     => $cName . '*',
+            'tryFrom'  => $cName . '*',
+        ];
+        foreach ($node->methods as $m) {
+            $mr = $m->isGenerator ? 'tphp_class_Generator*' : self::mapType($m->returnType);
+            $pts = array_map(fn($p) => $this->mapType($p->type), $m->params);
+            $tp = count($m->params);
+            $dc = 0;
+            for ($i = $tp - 1; $i >= 0; $i--) {
+                if ($m->params[$i]->default !== null) { $dc++; } else { break; }
+            }
+            $mi = new MethodInfo($mr, $pts, false, 'public', $dc, $tp);
+            $this->symbols->addEnumMethod($fqName, $m->name, $mi);
+            $this->symbols->addEnumMethod($node->name, $m->name, $mi);
+        }
+        // 自动方法注册（静态）
+        $paramCType = ($node->backingType === 'int') ? 't_int' : 't_string';
+        foreach ($autoStatic as $mname => $mret) {
+            $mi = new MethodInfo($mret, [$paramCType], true, 'public', 0, 1);
+            // cases() 无参数
+            if ($mname === 'cases') {
+                $mi = new MethodInfo($mret, [], true, 'public', 0, 0);
+            }
+            $this->symbols->addEnumMethod($fqName, $mname, $mi);
+            $this->symbols->addEnumMethod($node->name, $mname, $mi);
+        }
+
+        // 方法前置声明（用户实例方法 + 自动静态方法）
+        $fwd = [];
+        foreach ($node->methods as $m) {
+            $ret = $m->isGenerator ? 'tphp_class_Generator*' : self::mapType($m->returnType);
+            $params = array_map(fn($p) => $this->visitParam($p), $m->params);
+            $fwd[] = "{$ret} {$cName}_{$m->name}({$cName}* self" .
+                (empty($params) ? '' : ', ' . implode(', ', $params)) . ');';
+        }
+        // 自动方法前置声明（静态，无 self）
+        $fwd[] = "t_array* {$cName}_cases();";
+        $fwd[] = "{$cName}* {$cName}_from({$paramCType} value);";
+        $fwd[] = "{$cName}* {$cName}_tryFrom({$paramCType} value);";
+        $lines = array_merge($lines, $fwd);
         $lines[] = '';
 
         return implode("\n", $lines);
     }
 
-    // EnumAccessExpr → 返回 static 实例指针
+    /**
+     * Phase 2: 枚举方法实现 + 自动 cases()/from()/tryFrom() 实现
+     * 输出到 SEC_CLSIMPL（在 SEC_ENUMS 前置声明之后）
+     */
+    private function emitEnumImpl(EnumNode $node): string
+    {
+        $fqName = ($node->namespace !== '') ? $node->namespace . '\\' . $node->name : $node->name;
+        if ($node->namespace !== '') {
+            $cName = 'tphp_na_' . self::mangleCName($node->namespace) . '_tphp_enum_' . $node->name;
+        } else {
+            $cName = 'tphp_enum_' . $node->name;
+        }
+        $prefix = self::mangleCName($fqName);
+        $savedClassName = $this->className;
+        $savedNamespace = $this->currentNamespace;
+        $savedInMethod = $this->inMethod;
+        $this->className = $cName;
+        $this->currentNamespace = $node->namespace;
+        $this->inMethod = true;
+
+        $parts = [];
+        $parts[] = "/* ── Enum impl: {$fqName} ──────────────────── */";
+
+        // 用户实例方法实现
+        foreach ($node->methods as $m) {
+            $parts[] = $this->visitMethod($m);
+        }
+
+        // 自动 cases(): 返回 t_array*，元素为 enum 实例指针（VAR_OBJ 包裹）
+        $casesImpl = [];
+        $casesImpl[] = "t_array* {$cName}_cases() {";
+        $casesImpl[] = $this->ind("t_array* a = tphp_fn_arr_create(" . count($node->cases) . ");");
+        $casesImpl[] = $this->ind("tphp_rt_register((void*)a, 1);");
+        foreach ($node->cases as $case) {
+            $casesImpl[] = $this->ind("a = tphp_fn_arr_push(a, VAR_OBJ(&_e_{$prefix}_{$case->name}));");
+        }
+        $casesImpl[] = $this->ind("return a;");
+        $casesImpl[] = "}";
+        $parts[] = implode("\n", $casesImpl);
+
+        // 自动 from(): 找不到抛 tp_throw
+        $paramCType = ($node->backingType === 'int') ? 't_int' : 't_string';
+        $fromImpl = [];
+        $fromImpl[] = "{$cName}* {$cName}_from({$paramCType} value) {";
+        foreach ($node->cases as $case) {
+            if ($node->backingType === 'int') {
+                $fromImpl[] = $this->ind("if (value == _e_{$prefix}_{$case->name}.value) return &_e_{$prefix}_{$case->name};");
+            } else {
+                $fromImpl[] = $this->ind("if (tphp_rt_str_eq(value, _e_{$prefix}_{$case->name}.value)) return &_e_{$prefix}_{$case->name};");
+            }
+        }
+        $fromImpl[] = $this->ind("tp_throw(\"{$node->name}::from(): value not found in enum cases\");");
+        $fromImpl[] = $this->ind("return NULL;");
+        $fromImpl[] = "}";
+        $parts[] = implode("\n", $fromImpl);
+
+        // 自动 tryFrom(): 找不到返回 NULL
+        $tryImpl = [];
+        $tryImpl[] = "{$cName}* {$cName}_tryFrom({$paramCType} value) {";
+        foreach ($node->cases as $case) {
+            if ($node->backingType === 'int') {
+                $tryImpl[] = $this->ind("if (value == _e_{$prefix}_{$case->name}.value) return &_e_{$prefix}_{$case->name};");
+            } else {
+                $tryImpl[] = $this->ind("if (tphp_rt_str_eq(value, _e_{$prefix}_{$case->name}.value)) return &_e_{$prefix}_{$case->name};");
+            }
+        }
+        $tryImpl[] = $this->ind("return NULL;");
+        $tryImpl[] = "}";
+        $parts[] = implode("\n", $tryImpl);
+
+        $this->className = $savedClassName;
+        $this->currentNamespace = $savedNamespace;
+        $this->inMethod = $savedInMethod;
+
+        return implode("\n\n", $parts);
+    }
+
+    // EnumAccessExpr → 返回 static 实例指针（case 访问）或常量引用（const 访问）
     public function visitEnumAccess(EnumAccessExpr $node): string
     {
+        // case 访问 → static 实例指针
+        if ($this->symbols->hasEnumCase($node->enumName, $node->caseName)) {
+            $prefix = self::mangleCName($node->enumName);
+            return "&_e_{$prefix}_{$node->caseName}";
+        }
+        // 枚举常量访问 → #define 引用
+        $cName = $this->symbols->getEnumCName($node->enumName);
+        if ($cName !== null) {
+            return 'TPHP_CONST_' . strtoupper($cName . '_' . $node->caseName);
+        }
+        // 兜底：当作 case（向后兼容旧路径）
         $prefix = self::mangleCName($node->enumName);
         return "&_e_{$prefix}_{$node->caseName}";
     }
@@ -4169,9 +4823,11 @@ class CodeGenerator implements ASTVisitor
         if (str_starts_with($type, 'tphp_class_') && str_ends_with($type, '*')) {
             return "tp_throw_ex({$code});";
         }
-        // throw "string" → tp_throw(msg.data)
+        // throw "string" → tp_throw(STR_PTR_V(msg))
+        // 使用 STR_PTR_V 而非 .data：既正确处理 SSO 短串（≤23B 内联在 .local），
+        // 又避免 TCC 对匿名 union 成员直接访问的兼容性问题
         if ($type === 't_string') {
-            return "tp_throw({$code}.data);";
+            return "tp_throw(STR_PTR_V({$code}));";
         }
         return "tp_throw((char*)(uintptr_t)(" . $code . "));";
     }
@@ -4609,13 +5265,30 @@ class CodeGenerator implements ASTVisitor
             if ($pt === 't_float') return "tphp_rt_str_from_float({$code})";
         }
 
-        // CallExpr：查找返回类型（内置函数 + 方法调用）
+        // CallExpr：查找返回类型（内置函数 + 方法调用 + 枚举方法）
         if ($expr instanceof CallExpr) {
             // 内置函数返回 t_string（date 等）
             if ($expr->callee === null) {
                 $rt = $this->inferCallReturnType($expr);
                 if ($rt === 't_string') return $code;
                 if ($rt === 't_float') return "tphp_rt_str_from_float({$code})";
+            }
+            // 枚举方法调用（静态 Color::cases() 或实例 Color::Red->label()）
+            $enumCName = null;
+            if ($expr->callee instanceof EnumAccessExpr) {
+                $enumCName = $this->symbols->getEnumCName($expr->callee->enumName);
+            } elseif ($expr->callee instanceof VariableExpr) {
+                $enumCName = $this->symbols->resolveEnumCName($expr->callee->name);
+            } elseif ($expr->callee instanceof CallExpr) {
+                $chain = $this->inferCallChainClass($expr->callee);
+                $enumCName = $this->symbols->resolveEnumCName(rtrim($chain, '*'));
+            }
+            if ($enumCName !== null) {
+                $mi = $this->symbols->getEnumMethodByCName($enumCName, $expr->name);
+                if ($mi !== null) {
+                    if ($mi->retType === 't_string') return $code;
+                    if ($mi->retType === 't_float') return "tphp_rt_str_from_float({$code})";
+                }
             }
             // 方法调用
             if ($expr->callee !== null) {
@@ -4635,8 +5308,16 @@ class CodeGenerator implements ASTVisitor
             }
         }
 
-        // EnumAccessExpr → 用 ->value 取值后转字符串
+        // EnumAccessExpr → case 访问取 ->value 转 str；常量访问按声明类型转换
         if ($expr instanceof EnumAccessExpr) {
+            // 常量访问 → 按声明类型转换
+            if (!$this->symbols->hasEnumCase($expr->enumName, $expr->caseName)) {
+                $ct = $this->symbols->getEnumConstType($expr->enumName, $expr->caseName);
+                if ($ct === 't_string') return $code;
+                if ($ct === 't_float') return "tphp_rt_str_from_float({$code})";
+                return "tphp_rt_str_from_int({$code})";
+            }
+            // case 访问 → 用 ->value 取值后转字符串
             $bt = $this->enumBackingType($expr->enumName);
             return ($bt === 'string') ? "({$code})->value" : "tphp_rt_str_from_int(({$code})->value)";
         }
@@ -4645,6 +5326,14 @@ class CodeGenerator implements ASTVisitor
         if ($expr instanceof MatchExpr) {
             $bt = $this->inferType($expr);
             return ($bt === 't_string') ? $code : "tphp_rt_str_from_int({$code})";
+        }
+
+        // TernaryExpr → 查 inferType 决定如何转字符串
+        if ($expr instanceof TernaryExpr) {
+            $bt = $this->inferType($expr);
+            if ($bt === 't_string') return $code;
+            if ($bt === 't_float') return "tphp_rt_str_from_float({$code})";
+            return "tphp_rt_str_from_int({$code})";
         }
 
         // ArrayAccessExpr：字符串键读取返回 t_string
@@ -4939,11 +5628,20 @@ class CodeGenerator implements ASTVisitor
     /** Resolve which class owns a method (for COS inheritance) */
     private function resolveMethodClass(string $cn, string $method): string
     {
+        // P3-3: 编译期缓存，避免重复线性扫描父类链
+        $cacheKey = $cn . "\0" . $method;
+        if (isset($this->methodClassCache[$cacheKey])) {
+            return $this->methodClassCache[$cacheKey];
+        }
         $cur = $cn;
         while ($this->symbols->hasClass($cur) && $this->symbols->getClassParent($cur) !== '') {
             $cur = $this->symbols->getClassParent($cur);
-            if ($this->symbols->getClassMethod($cur, $method) !== null) return $cur;
+            if ($this->symbols->getClassMethod($cur, $method) !== null) {
+                $this->methodClassCache[$cacheKey] = $cur;
+                return $cur;
+            }
         }
+        $this->methodClassCache[$cacheKey] = '';
         return '';
     }
 

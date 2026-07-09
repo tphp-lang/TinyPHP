@@ -165,6 +165,145 @@ static inline void arr_stridx_delete(t_array *a, t_string key) {
     }
 }
 
+// ============================================================
+// Int Key Hash Index — same open-addressing layout as arr_stridx
+//
+//   Slot values:  0 = empty, -1 = tombstone, >0 = entry_idx+1
+//   Key verification reads entries[ei].key.value._int directly,
+//   so the index survives arr_grow's realloc (entry indices stable).
+//
+//   仅对稀疏整数键（非 0,1,2... 连续）有意义；连续键走
+//   tphp_fn_arr_get_int/set_int 的直接下标快路径，无需哈希。
+// ============================================================
+
+typedef struct {
+    int *slots;    // entry_idx+1 (0=empty, -1=tomb)
+    int  cap;      // power of 2
+    int  count;    // active entries (excludes tombstones)
+} arr_intidx;
+
+static inline uint32_t _arr_int_hash(t_int key) {
+    // Mix30 splitmix64-style finalizer — good avalanche for int64
+    uint64_t k = (uint64_t)key;
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccdULL;
+    k ^= k >> 33;
+    return (uint32_t)k;
+}
+
+/** Free the int hash index (safe to call if NULL). */
+static inline void arr_intidx_free(t_array *a) {
+    if (a->int_index != NULL) {
+        arr_intidx *idx = (arr_intidx*)a->int_index;
+        free(idx->slots);
+        free(idx);
+        a->int_index = NULL;
+    }
+}
+
+/** Build int index from all existing int keys. No-op if already built. */
+static inline void arr_intidx_build(t_array *a) {
+    if (a->int_index != NULL) return;
+    int cap = 16;
+    while (cap < a->length * 2) cap *= 2;
+    arr_intidx *idx = (arr_intidx*)malloc(sizeof(arr_intidx));
+    if (idx == NULL) return;
+    idx->slots = (int*)calloc((size_t)cap, sizeof(int));
+    if (idx->slots == NULL) { free(idx); return; }
+    idx->cap = cap;
+    idx->count = 0;
+    a->int_index = idx;
+    int mask = cap - 1;
+    for (int i = 0; i < a->length; i++) {
+        if (a->entries[i].key.type == TYPE_INT) {
+            uint32_t h = _arr_int_hash(a->entries[i].key.value._int);
+            int slot = (int)(h & mask);
+            while (idx->slots[slot] != 0)
+                slot = (slot + 1) & mask;
+            idx->slots[slot] = i + 1;
+            idx->count++;
+        }
+    }
+}
+
+/** Lazily build int index if array is large enough. */
+static inline void arr_intidx_ensure(t_array *a) {
+    if (a->int_index == NULL && a->length >= ARR_HASH_THRESHOLD)
+        arr_intidx_build(a);
+}
+
+/** O(1) lookup. Returns entry index or -1. */
+static inline int arr_intidx_lookup(t_array *a, t_int key) {
+    if (a->int_index == NULL) return -1;
+    arr_intidx *idx = (arr_intidx*)a->int_index;
+    uint32_t h = _arr_int_hash(key);
+    int mask = idx->cap - 1;
+    int slot = (int)(h & mask);
+    while (idx->slots[slot] != 0) {
+        int ei = idx->slots[slot] - 1;
+        if (ei >= 0 && ei < a->length &&
+            a->entries[ei].key.type == TYPE_INT &&
+            a->entries[ei].key.value._int == key)
+            return ei;
+        slot = (slot + 1) & mask;
+    }
+    return -1;
+}
+
+/** Insert a new (key → entry_idx) mapping. Auto-resizes at 0.75 load. */
+static inline void arr_intidx_insert(t_array *a, t_int key, int entry_idx) {
+    if (a->int_index == NULL) return;
+    arr_intidx *idx = (arr_intidx*)a->int_index;
+    // Resize if load factor > 0.75
+    if (idx->count * 4 >= idx->cap * 3) {
+        int newcap = idx->cap * 2;
+        int *ns = (int*)calloc((size_t)newcap, sizeof(int));
+        if (ns == NULL) return;
+        int nmask = newcap - 1, ncount = 0;
+        for (int i = 0; i < idx->cap; i++) {
+            if (idx->slots[i] > 0) {
+                int ei = idx->slots[i] - 1;
+                uint32_t h = _arr_int_hash(a->entries[ei].key.value._int);
+                int s = (int)(h & nmask);
+                while (ns[s] != 0) s = (s + 1) & nmask;
+                ns[s] = ei + 1;
+                ncount++;
+            }
+        }
+        free(idx->slots);
+        idx->slots = ns;
+        idx->cap = newcap;
+        idx->count = ncount;
+    }
+    uint32_t h = _arr_int_hash(key);
+    int mask = idx->cap - 1;
+    int slot = (int)(h & mask);
+    while (idx->slots[slot] > 0)
+        slot = (slot + 1) & mask;
+    idx->slots[slot] = entry_idx + 1;
+    idx->count++;
+}
+
+/** Delete a key from the index (sets tombstone). */
+static inline void arr_intidx_delete(t_array *a, t_int key) {
+    if (a->int_index == NULL) return;
+    arr_intidx *idx = (arr_intidx*)a->int_index;
+    uint32_t h = _arr_int_hash(key);
+    int mask = idx->cap - 1;
+    int slot = (int)(h & mask);
+    while (idx->slots[slot] != 0) {
+        int ei = idx->slots[slot] - 1;
+        if (ei >= 0 && ei < a->length &&
+            a->entries[ei].key.type == TYPE_INT &&
+            a->entries[ei].key.value._int == key) {
+            idx->slots[slot] = -1;
+            idx->count--;
+            return;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
 // === Array Freelist Pool (LIFO, up to 128 cached arrays) ===
 
 #ifndef ARR_POOL_MAX
@@ -177,6 +316,7 @@ static int       arr_freelist_count = 0;
 static inline void arr_pool_put(t_array *a) {
     if (unlikely(a == NULL)) return;
     arr_stridx_free(a);  // free hash index before recycling or freeing
+    arr_intidx_free(a);  // free int hash index before recycling or freeing
     if (arr_freelist_count >= ARR_POOL_MAX) { free(a); return; }
     // 重置状态
     a->length   = 0;
@@ -283,20 +423,50 @@ static inline t_array* tphp_fn_arr_push(t_array *a, t_var val) {
 
 static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
     if (unlikely(a == NULL || key < 0)) return a;
-    // 线性扫描：如果已存在同键则覆盖
-    for (int i = 0; i < a->length; i++) {
-        if (likely(a->entries[i].key.type == TYPE_INT) &&
-            a->entries[i].key.value._int == key) {
-            a->entries[i].val = val;
+    // 快路径 1: 连续整数键 (0,1,2,...,n-1) — 直接下标 O(1)
+    if (key < a->length &&
+        a->entries[key].key.type == TYPE_INT &&
+        a->entries[key].key.value._int == key) {
+        a->entries[key].val = val;
+        return a;
+    }
+    // 快路径 2: 哈希索引 O(1)（稀疏整数键，如 ID→对象映射）
+    if (a->int_index != NULL) {
+        int idx = arr_intidx_lookup(a, key);
+        if (idx >= 0) {
+            a->entries[idx].val = val;
             return a;
         }
+    } else if (a->length >= ARR_HASH_THRESHOLD) {
+        // 大数组但索引未建：先建索引再查
+        arr_intidx_build(a);
+        int idx = arr_intidx_lookup(a, key);
+        if (idx >= 0) {
+            a->entries[idx].val = val;
+            return a;
+        }
+    } else {
+        // 小数组：线性扫描
+        for (int i = 0; i < a->length; i++) {
+            if (likely(a->entries[i].key.type == TYPE_INT) &&
+                a->entries[i].key.value._int == key) {
+                a->entries[i].val = val;
+                return a;
+            }
+        }
     }
-    // 追加
+    // 追加新 entry
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_INT;
     a->entries[a->length].key.value._int = key;
     a->entries[a->length].val = val;
+    int new_idx = a->length;
     a->length++;
+    // 维护索引：已存在则插入，达到阈值则构建
+    if (a->int_index != NULL)
+        arr_intidx_insert(a, key, new_idx);
+    else if (a->length >= ARR_HASH_THRESHOLD)
+        arr_intidx_build(a);
     return a;
 }
 
@@ -340,6 +510,20 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
 
 static inline t_var* tphp_fn_arr_get_int(t_array *a, t_int key) {
     if (unlikely(a == NULL)) return NULL;
+    // 快路径 1: 连续整数键 (0,1,2,...,n-1) — 直接下标 O(1)
+    if (key >= 0 && key < a->length &&
+        a->entries[key].key.type == TYPE_INT &&
+        a->entries[key].key.value._int == key) {
+        return &a->entries[key].val;
+    }
+    // 快路径 2: 哈希索引 O(1)（稀疏整数键）
+    arr_intidx_ensure(a);  // 大数组惰性建索引
+    if (a->int_index != NULL) {
+        int idx = arr_intidx_lookup(a, key);
+        if (idx >= 0) return &a->entries[idx].val;
+        return NULL;  // 索引覆盖所有 int 键，未命中即不存在
+    }
+    // 小数组：线性扫描
     for (int i = 0; i < a->length; i++) {
         if (a->entries[i].key.type == TYPE_INT && a->entries[i].key.value._int == key)
             return &a->entries[i].val;
@@ -436,11 +620,14 @@ static inline bool tphp_fn_arr_pop(t_array *a, t_var *out) {
     if (a == NULL || a->length == 0) return false;
     a->length--;
     if (out != NULL) *out = a->entries[a->length].val;
-    // 释放被弹出 entry 的 string key（堆分配）
+    // 释放被弹出 entry 的 key（int 键从 int_index 删除，string 键释放内存+从 str_index 删除）
     if (a->entries[a->length].key.type == TYPE_STRING) {
         if (a->str_index != NULL)
             arr_stridx_delete(a, a->entries[a->length].key.value._string);
         tphp_rt_str_free(&a->entries[a->length].key.value._string);
+    } else if (a->entries[a->length].key.type == TYPE_INT) {
+        if (a->int_index != NULL)
+            arr_intidx_delete(a, a->entries[a->length].key.value._int);
     }
     return true;
 }
@@ -501,6 +688,7 @@ static inline bool tphp_fn_arr_shift(t_array *a, t_var *out) {
         tphp_rt_str_free(&a->entries[0].key.value._string);
     // Invalidate index — shifting changes entry positions
     arr_stridx_free(a);
+    arr_intidx_free(a);
     // Shift remaining entries left
     memmove(&a->entries[0], &a->entries[1],
             (size_t)(a->length - 1) * sizeof(t_arr_entry));
@@ -526,6 +714,7 @@ static inline int tphp_fn_arr_unshift(t_array *a, t_var val) {
     a->length++;
     // Invalidate index — prepending changes entry positions
     arr_stridx_free(a);
+    arr_intidx_free(a);
     return a->length;
 }
 
@@ -645,6 +834,7 @@ static inline t_int tphp_fn_arr_search(t_array *a, t_var needle) {
 static inline void tphp_fn_shuffle(t_array *a) {
     if (unlikely(a == NULL || a->length <= 1)) return;
     arr_stridx_free(a);  // shuffling changes entry positions
+    arr_intidx_free(a);  // shuffling changes entry positions
     for (int i = a->length - 1; i > 0; i--) {
         int j = rand() % (i + 1);
         if (j != i) {
@@ -677,6 +867,7 @@ static inline int _arr_sort_cmp_desc(const void *a, const void *b) {
 static inline void tphp_fn_sort(t_array *a) {
     if (unlikely(a == NULL || a->length <= 1)) return;
     arr_stridx_free(a);  // sorting changes entry positions
+    arr_intidx_free(a);  // sorting changes entry positions
     qsort(a->entries, (size_t)a->length, sizeof(t_arr_entry), _arr_sort_cmp_asc);
     // Re-key int keys after sort
     for (int i = 0; i < a->length; i++) {
@@ -688,6 +879,7 @@ static inline void tphp_fn_sort(t_array *a) {
 static inline void tphp_fn_rsort(t_array *a) {
     if (unlikely(a == NULL || a->length <= 1)) return;
     arr_stridx_free(a);  // sorting changes entry positions
+    arr_intidx_free(a);  // sorting changes entry positions
     qsort(a->entries, (size_t)a->length, sizeof(t_arr_entry), _arr_sort_cmp_desc);
     for (int i = 0; i < a->length; i++) {
         if (a->entries[i].key.type == TYPE_INT)
@@ -1019,6 +1211,7 @@ static int _cmp_key_r(const void *a, const void *b) {
 static inline void tphp_fn_asort(t_array* a) {
     if (a == NULL || a->length < 2) return;
     arr_stridx_free(a);  // sorting changes entry positions
+    arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
     if (!ptrs) return;
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
@@ -1032,6 +1225,7 @@ static inline void tphp_fn_asort(t_array* a) {
 static inline void tphp_fn_arsort(t_array* a) {
     if (a == NULL || a->length < 2) return;
     arr_stridx_free(a);  // sorting changes entry positions
+    arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
     if (!ptrs) return;
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
@@ -1045,6 +1239,7 @@ static inline void tphp_fn_arsort(t_array* a) {
 static inline void tphp_fn_ksort(t_array* a) {
     if (a == NULL || a->length < 2) return;
     arr_stridx_free(a);  // sorting changes entry positions
+    arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
     if (!ptrs) return;
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
@@ -1058,6 +1253,7 @@ static inline void tphp_fn_ksort(t_array* a) {
 static inline void tphp_fn_krsort(t_array* a) {
     if (a == NULL || a->length < 2) return;
     arr_stridx_free(a);  // sorting changes entry positions
+    arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
     if (!ptrs) return;
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
