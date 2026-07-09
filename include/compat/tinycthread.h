@@ -817,7 +817,10 @@ static inline int _tphp_cas32(volatile int *ptr, int expected, int desired) {
   );
   return (int)result;
 #else
-  #error "Unsupported platform for CAS — define _TPHP_SPINLOCK_REAL 0 or add platform support"
+  /* TCC aarch64 等无 CAS 平台: 返回 0 (不会到达此路径 — _TPHP_SPINLOCK_REAL=0 时
+   * spin lock/unlock 走 mtx 降级，不调用本函数)。仅满足 static inline 编译。 */
+  (void)ptr; (void)expected; (void)desired;
+  return 0;
 #endif
 }
 
