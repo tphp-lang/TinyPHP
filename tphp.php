@@ -1133,7 +1133,12 @@ function extractPharDir(string $pharDir, string $destDir): void
 function showHelp(): never
 {
     echo <<<HELP
-TinyPHP — PHP -> C transpiler (multi-file support, cross-compile)
+  _____ _             ____  _   _ ____  
+ |_   _(_)_ __  _   _|  _ \| | | |  _ \ 
+   | | | | '_ \| | | | |_) | |_| | |_) |
+   | | | | | | | |_| |  __/|  _  |  __/ 
+   |_| |_|_| |_|\__, |_|   |_| |_|_|    
+                |___/                   
 
 Usage:
   tphp <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>] [-os <target>] [-arch <arch>]
