@@ -230,6 +230,257 @@
 
 ---
 
+## P4 — 多线程支持（规划中，未开始实施）
+
+> 基于 2026-07-09 对 klib / vlang / tinycthread 三个线程库的对比分析。
+> 目标：为 TinyPHP 提供 `tphp_class_Thread` / `tphp_class_Mutex` / `tphp_class_CondVar` 的 OOP 线程 API。
+> 核心约束：TCC 兼容、零运行时依赖、COS 封装风格、4 平台覆盖（Win x64 / Linux x64+aarch64 / macOS aarch64）。
+
+### P4-0. 三个线程库对比分析（选型决策记录）
+
+#### 候选库对比
+
+| 维度 | klib (kt_for) | vlang (sync) | tinycthread |
+|------|--------------|--------------|-------------|
+| **设计目标** | 数据并行计算 | 语言级并发（spawn/lock/shared/chan） | C11 threads API 跨平台封装 |
+| **代码量** | ~260 行 C | 数千行 V + 1800 行 C 头 | ~590 行 C（1 头 + 1 实现） |
+| **API 模型** | `kt_for`/`kt_pipeline`（函数指针） | `spawn`/`shared`/`chan`（编译器代码生成） | `thrd_create`/`mtx_t`/`cnd_t`/`tss_t`（C11 子集） |
+| **平台抽象** | 无（纯 POSIX） | 5+ 平台分支 | `_TTHREAD_WIN32_` vs `_TTHREAD_POSIX_`（仅 2 分支） |
+| **原子操作** | `__sync_fetch_and_add`（TCC 不支持 ❌） | 完整 stdatomic 兼容层（FFmpeg 衍生） | 不使用原子操作 ✅ |
+| **运行时依赖** | 零（仅 libc） | 重（V GC/string/panic） | 零（仅 libc + pthread/Win32）✅ |
+| **TCC 兼容** | ❌ `__sync_*` 不支持 | ⚠️ 需 libatomic（路径搜索复杂） | ✅ 完全兼容 |
+| **License** | MIT | MIT | zlib（最宽松）✅ |
+
+#### 选型结论
+
+**选定 tinycthread 作为基础**，原因：
+1. **TCC 兼容性最佳**：完全不用原子操作（mutex 内部由 OS 保证原子性），避免 klib 的 `__sync_*` 硬伤和 vlang 的 libatomic 路径搜索复杂度
+2. **零运行时依赖**：仅 libc + pthread/Win32，不依赖任何 GC/string/panic，可直接嵌入 TinyPHP
+3. **平台分支简洁**：仅 Win32/POSIX 两分支，TinyPHP 的 4 平台全覆盖
+4. **C11 标准命名**：`thrd_t`/`mtx_t`/`cnd_t`/`tss_t` 与 C11 `<threads.h>` 一致，未来可平滑替换
+5. **zlib License 最宽松**：允许商用、修改、重分发
+
+**参考 vlang 的部分**：
+- stdatomic 兼容头文件（`thirdparty/stdatomic/`）— 若后续需要 SpinLock（CAS 操作）可借用
+- Windows SRWLOCK + CONDITION_VARIABLE 优化方案（替代 tinycthread 的 CRITICAL_SECTION + Event）
+- WaitGroup 的「高32位任务数 + 低32位等待数」单 u64 state 设计
+
+**不采用 klib 的原因**：`__sync_fetch_and_add` TCC 不支持，且数据并行模型（kt_for）不适合通用线程 API
+
+**不采用 vlang 的原因**：运行时依赖重（V GC/string/panic），spawn/shared/lock 强绑定 V 编译器代码生成
+
+### P4-1. tinycthread 集成 + 优化（前置任务）
+
+- **位置**: 新建 `include/compat/tinycthread.h` + `include/compat/tinycthread.c`（或合并为单头 `tinycthread.h`）
+- **来源**: [tinycthread v1.1](file:///C:/Users/28249/Desktop/tinycthread-1.1/source/tinycthread.h)（zlib license，Marcus Geelnard）
+- **影响**: 为 TinyPHP 提供跨平台线程原语（thrd_t/mtx_t/cnd_t/tss_t），是 P4-2/P4-3 的基础
+- **方案**: 拷贝 tinycthread 到 `include/compat/`，保留 zlib license 声明，然后修复以下不足
+
+#### tinycthread 的已知不足 + 优化方案
+
+| # | 不足 | 优化方案 | 优先级 |
+|---|------|---------|--------|
+| 1 | **Windows mutex 用 CRITICAL_SECTION**（重量级，~24 字节） | 改用 **SRWLOCK**（轻量，指针大小，Vista+ 内置） | 高 |
+| 2 | **Windows 非递归 mutex 用 `Sleep(1000)` 模拟死锁检测**（[tinycthread.c:86](file:///C:/Users/28249/Desktop/tinycthread-1.1/source/tinycthread.c#L86)，有竞态） | SRWLOCK 本身非递归，移除 `mAlreadyLocked`/`mRecursive` 字段和 Sleep 循环；递归需求走单独的 `mtx_recursive` 实现（可用 CRITICAL_SECTION 保留） | 高 |
+| 3 | **Windows condvar 用 2 Event + CRITICAL_SECTION 模拟**（复杂、低效） | 改用 **CONDITION_VARIABLE**（Vista+ 内置，`SleepConditionVariableSRW`） | 高 |
+| 4 | **`thrd_detach` 未实现**（FIXME，返回 `thrd_error`） | POSIX: `pthread_detach`；Windows: `CloseHandle`（detach 语义） | 中 |
+| 5 | **`mtx_timedlock` 未实现**（FIXME，返回 `thrd_error`） | POSIX: `pthread_mutex_timedlock`；Windows: SRWLOCK 无超时，用 `TryAcquireSRWLockExclusive` 轮询 | 低 |
+| 6 | **Windows `tss_create` 不支持析构函数** | 用 `FLS`（Fiber-Local Storage，`FlsAlloc`/`FlsSetCallback`）替代 `TlsAlloc`，支持析构 | 低 |
+| 7 | **Windows `thrd_create` 用 `_beginthreadex`**（需 `<process.h>`） | 可保留，或改用 `CreateThread`（更标准，但 `_beginthreadex` 对 CRT 初始化更安全） | 无需改 |
+| 8 | **`thrd_sleep` 用 `usleep`/`Sleep`**（粗粒度） | POSIX 保留 `usleep`；Windows 可用 `WaitForSingleObject` 配合 `CreateWaitableTimer` 精确到 100ns | 低 |
+| 9 | **`cnd_broadcast` POSIX 实现有 bug**（[tinycthread.c:226](file:///C:/Users/28249/Desktop/tinycthread-1.1/source/tinycthread.c#L226) 用 `pthread_cond_signal` 而非 `pthread_cond_broadcast`） | 改为 `pthread_cond_broadcast` | 高（正确性） |
+| 10 | **无 SpinLock**（短临界区用 mutex 开销大） | 参考 vlang SpinLock（CAS + 指数退避），需引入原子操作（借用 vlang stdatomic 头文件） | 中 |
+| 11 | **无 WaitGroup**（等待 N 个线程完成的常用模式） | 参考 vlang WaitGroup（单 u64 state：高32位任务数 + 低32位等待数 + Semaphore） | 中 |
+| 12 | **Windows 平台检测用 `_WIN32`/`__WIN32__`/`__WINDOWS__`** | 与 TinyPHP 现有平台检测宏统一（`_WIN32`） | 低 |
+
+#### 优化后的预期 API
+
+```c
+// Thread（补 thrd_detach 实现）
+int thrd_create(thrd_t *thr, thrd_start_t func, void *arg);
+int thrd_detach(thrd_t thr);          // 补实现
+int thrd_join(thrd_t thr, int *res);
+thrd_t thrd_current(void);
+int thrd_equal(thrd_t thr0, thrd_t thr1);
+void thrd_exit(int res);
+void thrd_yield(void);
+int thrd_sleep(const struct timespec *time_point, struct timespec *remaining);
+
+// Mutex（Windows 改 SRWLOCK，保留 recursive 选项走 CRITICAL_SECTION）
+int mtx_init(mtx_t *mtx, int type);   // type: mtx_plain | mtx_timed | mtx_try | mtx_recursive
+int mtx_lock(mtx_t *mtx);
+int mtx_trylock(mtx_t *mtx);
+int mtx_unlock(mtx_t *mtx);
+void mtx_destroy(mtx_t *mtx);
+
+// CondVar（Windows 改 CONDITION_VARIABLE）
+int cnd_init(cnd_t *cond);
+int cnd_wait(cnd_t *cond, mtx_t *mtx);
+int cnd_timedwait(cnd_t *cond, mtx_t *mtx, const struct timespec *ts);
+int cnd_signal(cnd_t *cond);
+int cnd_broadcast(cnd_t *cond);       // 修复 POSIX 的 pthread_cond_signal bug
+void cnd_destroy(cnd_t *cond);
+
+// TLS（Windows 可选改 FLS 支持析构）
+int tss_create(tss_t *key, tss_dtor_t dtor);
+void tss_delete(tss_t key);
+void *tss_get(tss_t key);
+int tss_set(tss_t key, void *val);
+```
+
+### P4-2. 运行时线程安全改造（前置任务）
+
+- **位置**: [include/runtime.h](file:///c:/project/php/TinyPHP/include/runtime.h)、[include/array.h](file:///c:/project/php/TinyPHP/include/array.h)、[include/object/object.h](file:///c:/project/php/TinyPHP/include/object/object.h)、[ext/pcre/src/pcre.c](file:///c:/project/php/TinyPHP/ext/pcre/src/pcre.c)
+- **影响**: 引入多线程后，以下全局状态非线程安全，会导致堆损坏/双重释放/竞态
+- **方案**: 两种策略二选一（见下），建议先 A 后 B 渐进实施
+
+#### 需要改造的全局状态
+
+| 全局状态 | 位置 | 风险 | 改造方案 |
+|---------|------|------|---------|
+| `str_pool`（128KB Arena） | runtime.h | 多线程同时分配 → 堆损坏 | mutex 包装或 thread-local |
+| `arr_freelist`（128 槽池） | array.h | 同时回收 → 双重释放 | mutex 或 thread-local |
+| `obj_freelist`（128 槽池） | object.h | 同上 | 同上 |
+| `tphp_rt_registry`（GC 表） | runtime.h | 同时注册 → 竞态 | mutex |
+| `tp_cache`（pcre 编译缓存） | pcre.c | 同时编译 → 重复编译 | mutex 或 double-checked |
+
+#### 策略 A：Thread-Local 运行时（推荐先行）
+
+- 每个线程独立 str_pool/arr_pool/obj_pool
+- 线程间只能传递**值类型**（int/float/string 的只读指针）
+- 优点：无锁，性能好
+- 缺点：线程无法直接操作主线程的对象/数组，需通过 Mutex/Channel 显式同步
+- 适用：Thread 函数限制为纯计算（策略 A 限制模式）
+
+#### 策略 B：全局 mutex（简单但慢）
+
+- 所有运行时 API 加细粒度锁
+- 优点：线程可自由操作任何数据
+- 缺点：锁竞争大，多线程可能比单线程还慢
+- 适用：需要在线程内自由操作共享数据的场景
+
+### P4-3. `tphp_class_Thread` OOP 封装
+
+- **位置**: 新建 `include/object/thread.h`（或 `include/os/thread.h`）
+- **影响**: PHP 层提供 `Thread`/`Mutex`/`CondVar` 类，符合 TinyPHP COS 封装风格
+- **依赖**: P4-1（tinycthread）、P4-2（运行时线程安全）
+- **方案**: 参考 [tphp_class_File](file:///c:/project/php/TinyPHP/include/os/file_obj.h) 的封装模式，将 tinycthread 的 C API 包装成 COS 类
+
+#### 类设计
+
+```php
+// Thread 类（基于 thrd_t）
+class Thread {
+    public function __construct(callable $fn): void;
+    public function start(): bool;           // thrd_create
+    public function join(): int;             // thrd_join
+    public function detach(): bool;          // thrd_detach
+    public static function yield(): void;    // thrd_yield
+    public static function id(): int;        // thrd_current
+}
+
+// Mutex 类（基于 mtx_t）
+class Mutex {
+    public function __construct(bool $recursive = false): void;
+    public function lock(): bool;            // mtx_lock
+    public function tryLock(): bool;         // mtx_trylock
+    public function unlock(): bool;          // mtx_unlock
+}
+
+// CondVar 类（基于 cnd_t）
+class CondVar {
+    public function __construct(): void;
+    public function wait(Mutex $m): bool;            // cnd_wait
+    public function signal(): bool;                  // cnd_signal
+    public function broadcast(): bool;               // cnd_broadcast
+    public function timedWait(Mutex $m, int $ms): bool;  // cnd_timedwait
+}
+```
+
+#### COS 封装规范（遵循 [tphp_class_File](file:///c:/project/php/TinyPHP/include/os/file_obj.h) 模式）
+
+```c
+// 1. Struct（t_object _obj 必须第一位）
+typedef struct {
+    t_object _obj;
+    thrd_t   handle;    // tinycthread 线程句柄
+    int      state;     // 0=未启动, 1=运行中, 2=已结束
+    // ...
+} tphp_class_Thread;
+
+// 2. 类描述符（静态常量，dtor 指向 __destruct）
+static const t_class _class_tphp_class_Thread = {
+    .name = "Thread",
+    .parent = NULL,
+    .instance_size = sizeof(tphp_class_Thread),
+    .dtor = (void*)tphp_class_Thread___destruct,
+    // ...
+};
+
+// 3. 方法签名（self 第一参数，热路径 static inline）
+void tphp_class_Thread___construct(tphp_class_Thread* self, /* callable wrapper */);
+void tphp_class_Thread___destruct(tphp_class_Thread* self);
+t_bool tphp_class_Thread_start(tphp_class_Thread* self);
+t_int  tphp_class_Thread_join(tphp_class_Thread* self);
+// ...
+```
+
+#### CodeGenerator 登记（必需，否则 PHP 无法引用）
+
+在 [src/CodeGenerator.php](file:///c:/project/php/TinyPHP/src/CodeGenerator.php) 的 `registerBuiltinClasses()` 中登记：
+```php
+$this->symbols->addClass('tphp_class_Thread');
+$this->symbols->addClassName('Thread', 'tphp_class_Thread');
+$this->symbols->getClass('tphp_class_Thread')->methods['__construct'] = new MethodInfo('void', ['callable']);
+$this->symbols->getClass('tphp_class_Thread')->methods['start'] = new MethodInfo('t_bool');
+$this->symbols->getClass('tphp_class_Thread')->methods['join']  = new MethodInfo('t_int');
+// ...
+```
+
+#### callable 跨线程传递的关键问题
+
+PHP 的 `callable` 在 TinyPHP 中编译为闭包结构体指针，包含捕获的变量。跨线程传递需注意：
+- **值捕获**：深拷贝捕获的变量（避免共享指针）
+- **use 引用捕获**：禁止跨线程传递（或强制要求 Mutex 保护）
+- **闭包内分配**：若策略 A（thread-local 运行时），线程内有独立 str_pool，可自由分配；结果通过 join 的 int 返回值或共享 Mutex 保护的数组传回
+
+### P4-4. `Parallel` 数据并行 API（可选，高层封装）
+
+- **位置**: 新建 `include/sync/parallel.h`
+- **依赖**: P4-3
+- **方案**: 参考 klib `kt_for` 的 work-stealing 模型，提供 `Parallel::map`/`Parallel::for` 静态方法
+- **限制**: 回调必须为纯函数（只用参数，不访问外部变量），编译期或运行时约束
+
+```php
+class Parallel {
+    // 纯函数并行：回调只能用参数，不能访问外部变量
+    public static function map(array $data, callable $fn, int $threads = 0): array;
+    public static function for(int $n, callable $fn, int $threads = 0): void;
+}
+```
+
+### P4 实施路线建议
+
+| 阶段 | 内容 | 风险 | 前置依赖 |
+|------|------|------|---------|
+| **P4-1a** | 拷贝 tinycthread 到 `include/compat/`，修复 9 个不足中的高优先级项（#1/#2/#3/#9） | 低 | 无 |
+| **P4-1b** | 补中优先级项（#4 thrd_detach / #10 SpinLock / #11 WaitGroup） | 低 | P4-1a |
+| **P4-2a** | 运行时 thread-local 改造（str_pool/arr_pool/obj_pool 独立） | 中 | P4-1a |
+| **P4-3a** | `tphp_class_Thread`/`Mutex`/`CondVar` COS 封装 + CodeGenerator 登记 | 中 | P4-1a + P4-2a |
+| **P4-3b** | callable 跨线程传递（值捕获深拷贝） | 中 | P4-3a |
+| **P4-4** | `Parallel::map`/`for` 数据并行（可选） | 低 | P4-3a |
+
+### P4 参考资源
+
+- tinycthread 源码: `C:\Users\28249\Desktop\tinycthread-1.1\source\`（zlib license）
+- vlang stdatomic 兼容头: `C:\Users\28249\Desktop\v-master\thirdparty\stdatomic\{nix,win}\atomic.h`（FFmpeg 衍生，LGPL 2.1+）
+- vlang sync 模块: `C:\Users\28249\Desktop\v-master\vlib\sync\`（Mutex/RwMutex/SpinLock/Semaphore/WaitGroup/Channel）
+- klib kthread: `C:\Users\28249\Desktop\klib-master\kthread.c`（kt_for/kt_pipeline work-stealing）
+- TinyPHP COS 封装蓝本: [include/os/file_obj.h](file:///c:/project/php/TinyPHP/include/os/file_obj.h)（tphp_class_File）
+- TinyPHP 已有 pthread 用法: [include/object/generator.h](file:///c:/project/php/TinyPHP/include/object/generator.h)（macOS+TCC 线程模拟协程）
+
+---
+
 ## 测试覆盖待补强
 
 | 目录 | 现状 | 待补 |
