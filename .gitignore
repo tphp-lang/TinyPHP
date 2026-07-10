@@ -10,3 +10,7 @@ tcc-src/
 *.phar
 tmp/
 _test_fio.txt
+# 测试运行时生成的临时文件
+/t_*.jpg
+/t_*.tif
+/test_exif.jpg

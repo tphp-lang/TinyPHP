@@ -45,7 +45,7 @@ int $x = 42;           // 等价于 $x = 42;
 string $s = "hello";
 Point $p = new Point(1, 2);
 callable $fn = function(int $a): int { return $a; };
-C.FILE $f = c_open("file.txt");   // phpc 互操作 C 类型
+C.FILE* $f = c_open("file.txt");   // phpc 互操作 C 类型
 
 // 全局/命名空间常量（可选类型标记）
 const int MAX = 100;   // 等价于 const MAX = 100;
@@ -489,7 +489,7 @@ primary:
   | MAGIC_NAMESPACE  ✅ (__NAMESPACE__)
   | IDENTIFIER       ✅ (变量 $var 或常量 CONST)
   | '(' expr ')'     ✅
-  | '(' cast_type ')' expr          ✅ ((int)/(float)/(string)/(bool))
+  | '(' cast_type ')' expr          ✅ ((int)/(float)/(string)/(bool)/(C.XXX))
   | 'array' '(' args ')'            ✅
   | '[' args ']'                    ✅
   | 'new' name '(' args ')'         ✅
@@ -557,6 +557,7 @@ __TRAIT__             ❌
   | '#flag' compiler? platform? flags   ✅ (编译器/平台过滤标志)
   | '#callback' type IDENTIFIER '(' params ')'   ✅ (声明 C 回调签名)
   | '#import' name   ✅ (按需引入 ext/name/src/*.php + *.c)
+  | '#cstruct' IDENTIFIER '{' fields '}'   ✅ (声明 C 结构体字段布局,支持 $p->field 原生访问)
 ```
 
 ---
@@ -569,18 +570,33 @@ c_call:
   | 'C->' IDENTIFIER                ✅ (直接 C 常量/枚举/宏访问，无括号)
 
 c_type_annotation:                  ✅ (借鉴 vlang C.Type 命名空间设计)
-    'C.' IDENTIFIER                 → C 类型注解（函数参数/返回值）
-  // C.int → int, C.double → double, C.char_ptr → char*
-  // C.void_ptr → void*, C.FILE → FILE*（结构体指针默认）
+    'C.' IDENTIFIER ['*'+]          → C 类型注解（函数参数/返回值）
+  // 值类型直译: C.int → int, C.double → double, C.char → char, C.bool → bool
+  // 定宽整数: C.int32 → int32_t, C.uint64 → uint64_t 等
+  // 指针用 * 后缀: C.void* → void*, C.char* → char*, C.int* → int*
+  // 结构体: C.Point → Point（值类型）, C.Point* → Point*（指针需显式 *）
+
+c_cast:                             ✅ (C 类型 cast,参考 vlang 直接类型映射)
+    '(' 'C.' IDENTIFIER ['*'+] ')' expr    → C 类型转换
+  // 值类型: (C.int)65, (C.double)3.14, (C.char)66, (C.bool)1
+  // 定宽整数: (C.int32)1000, (C.int64)5e9, (C.uint32)4e9, (C.uint64)8e9
+  // 指针类型: (C.void*)$ptr, (C.char*)$raw, (C.Point*)$p
+
+c_struct:                           ✅ (#cstruct 声明,原生字段访问)
+    '#cstruct' IDENTIFIER '{' fields '}'
+  // #cstruct Point { C.double x; C.double y; }
+  // $p->x → ((Point*)$p)->x (编译期展开,无需 C getter/setter)
 
 c_type_bridge:
-    'c_int(' expr ')'       ✅ → int32_t
-  | 'c_float(' expr ')'     ✅ → double
-  | 'c_str(' expr ')'       ✅ → const char*
-  | 'php_int(' expr ')'     ✅ → t_int
-  | 'php_float(' expr ')'   ✅ → t_float
-  | 'php_str(' expr ')'     ✅ → t_string (深拷贝，复用 C 内存)
-  | 'php_str_clone(' expr ')' ✅ → t_string (深拷贝，明确克隆语义)
+    'c_int(' expr ')'       ✅ → int32_t (宏,零开销)
+  | 'c_float(' expr ')'     ✅ → double (宏,零开销)
+  | 'c_str(' expr ')'       ✅ → const char* (static inline,STR_PTR 单次求值)
+  | 'c_void_ptr(' expr ')'  ✅ → void* 透传 (宏,显式类型标记)
+  | 'php_int(' expr ')'     ✅ → t_int (宏,零开销)
+  | 'php_float(' expr ')'   ✅ → t_float (宏,零开销)
+  | 'php_str(' expr ')'     ✅ → t_string (深拷贝,参数 const char*;static inline)
+  | 'php_str_ptr(' expr ')' ✅ → t_string (接受 void*,宏展开为 php_str)
+  | 'php_str_clone(' expr ')' ✅ → t_string (深拷贝,宏展开为 php_str)
 
 phpc_array:
     'phpc_arr_int(' expr ')'       ✅ → int32_t* (malloc，类型不匹配抛 tp_throw)
@@ -608,9 +624,14 @@ phpc_callback:
   | 'phpc_env_unpin(' env ')'      ✅ → void (解除固定)
 
 phpc_memory:
-    'phpc_free(' ptr ')'           ✅ → free(ptr) + 自动置零变量防 UAF
+    'phpc_auto(' ptr ')'           ✅ → void* (通用 C 指针自动注册,程序结束/异常自动 free)
+  | 'phpc_free(' ptr ')'           ✅ → free(ptr) + 先注销注册防 double-free + 自动置零变量防 UAF
   | 'phpc_free_str_arr(' p,p ')'   ✅ → 释放字符串数组 + 自动置零
   | 'phpc_assert_ptr(' p,name ')'  ✅ → 断言非 NULL，否则抛 tp_throw
+
+phpc_ptr_bridge:
+    'phpc_ptr_to_int(' ptr ')'     ✅ → t_int (void* → t_int,用 intptr_t 保证可移植性)
+  | 'phpc_int_to_ptr(' v ')'       ✅ → void* (t_int → void*,函数内部转回调用 C 库)
 ```
 
 ---
@@ -646,14 +667,17 @@ phpc_memory:
 | `#include <sys.h>` | 系统头文件 |
 | `#flag [CC] [OS] flags` | 编译器/平台过滤链接标志 |
 | `#callback type name(params)` | 声明 C 回调签名 |
+| `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,`$p->field` 原生访问 |
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
 | `C->func(args)` | 直接 C 函数调用 |
 | `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
-| `C.Type` | C 类型注解（函数参数/返回值，如 `C.Point` → `Point*`） |
-| `c_int/c_float/c_str` | PHP → C 类型桥接 |
-| `php_int/php_float/php_str/php_str_clone` | C → PHP 类型桥接 |
+| `C.Type` | C 类型注解（函数参数/返回值。值类型 `C.int`→`int`/`C.double`→`double`/`C.char`→`char`；定宽 `C.int32`→`int32_t`/`C.uint64`→`uint64_t`；指针 `C.void*`→`void*`/`C.Point*`→`Point*`，用 `*` 后缀） |
+| `(C.XXX) expr` | C 类型 cast（值类型 `(C.int)`/`(C.double)`/`(C.char)`/`(C.bool)`；定宽 `(C.int32)`/`(C.uint64)`；指针 `(C.void*)`/`(C.char*)`/`(C.Point*)`） |
+| `c_int/c_float/c_str/c_void_ptr` | PHP → C 类型桥接(前 3 个宏零开销,c_str 保持 inline) |
+| `php_int/php_float/php_str/php_str_ptr/php_str_clone` | C → PHP 类型桥接(前 2 个宏零开销,php_str 保持 inline) |
 | `phpc_arr_*` `phpc_obj` `phpc_new_obj` `phpc_unregister_obj` `phpc_obj_steal` `phpc_fn_*` `phpc_thunk` `phpc_env_pin` `phpc_env_unpin` | 数组/对象/回调互操作 |
-| `phpc_free` `phpc_free_str_arr` `phpc_assert_ptr` | C 内存释放/安全断言 |
+| `phpc_auto` `phpc_free` `phpc_free_str_arr` `phpc_assert_ptr` | C 内存自动管理/释放/安全断言 |
+| `phpc_ptr_to_int` `phpc_int_to_ptr` | 指针↔整数桥接(让 C 指针以 t_int 在 PHP 层流转) |
 | `#import pcntl` | 按需引入扩展（自动加载 ext/pcntl/src/） |
 | `int &$x` | 引用传参（int/float/bool/string/array/对象全类型支持） |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | 多线程 OOP API（tinycthread 封装，Thread-Local 运行时无锁竞争） |

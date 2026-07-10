@@ -43,6 +43,7 @@ enum TokenType: string
     case HASH_IMPORT   = '#import';
     case CC_FLAG       = '#flag';
     case HASH_CALLBACK = '#callback';
+    case HASH_CSTRUCT  = '#cstruct';
     case HASH_DEBUG    = '#debug';
     case TRY_KW       = 'try';
     case CATCH_KW     = 'catch';
