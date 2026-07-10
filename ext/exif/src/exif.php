@@ -262,12 +262,14 @@ function exif_parse_tiff(int $fp, int $tiff_start, array $result): array
 /**
  * exif_imagetype(string $filename): int
  *
- * 检测图像类型（只看文件头魔数）。失败返回 0。
+ * 检测图像类型（只看文件头魔数）。
+ * 文件无法打开 → throw Exception（I/O 错误，可 try-catch）
+ * 未知图像格式 → 返回 0（合理零值）
  */
 function exif_imagetype(string $filename): int
 {
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("rb")));
-    if ($fp == 0) { return 0; }
+    if ($fp == 0) { throw new Exception("exif_imagetype: unable to open file: " . $filename); }
     C.void* $f = phpc_int_to_ptr($fp);
     $b0 = php_int(C->fgetc($f));
     $b1 = php_int(C->fgetc($f));
@@ -298,12 +300,14 @@ function exif_tagname(int $index): string
  *
  * 读取 JPEG/TIFF 文件的 EXIF 头信息。
  * $sections/$arrays/$thumbnail 参数为 PHP 兼容性保留，当前实现忽略。
+ * 文件无法打开 → throw Exception（I/O 错误，可 try-catch）
+ * 无 EXIF 数据 → 返回空数组（合理空结果）
  */
 function exif_read_data(string $filename, string $sections = "",
                         bool $arrays = false, bool $thumbnail = false): array
 {
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("rb")));
-    if ($fp == 0) { return []; }
+    if ($fp == 0) { throw new Exception("exif_read_data: unable to open file: " . $filename); }
 
     C.void* $f = phpc_int_to_ptr($fp);
 
@@ -372,7 +376,9 @@ function exif_read_data(string $filename, string $sections = "",
 /**
  * exif_thumbnail(string $filename): array
  *
- * 读取图像的缩略图信息。无缩略图返回空数组。
+ * 读取图像的缩略图信息。
+ * 文件无法打开 → throw Exception（由 exif_imagetype 传播）
+ * 无缩略图 → 返回 width=0/height=0 的数组（合理空结果）
  */
 function exif_thumbnail(string $filename): array
 {

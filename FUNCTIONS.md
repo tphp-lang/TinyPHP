@@ -25,11 +25,12 @@
 | `ext/pcre` | `ext/pcre/` | 8 |
 | `include/filter` | `filter.h` | 3 |
 | `include/password` (bcrypt) | `os/password.h` | 2 |
+| `ext/exif` (纯 phpc) | `ext/exif/src/exif.php` | 4 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **277+** |
+| **合计** | | **281+** |
 
 ---
 
@@ -757,6 +758,62 @@ filter_var("5", FILTER_VALIDATE_INT, $opts);               // NULL
 filter_var("077", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL);  // int(63)
 filter_var("0xff", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX);   // int(255)
 ```
+
+---
+
+## exif — EXIF 图像元数据
+
+> 文件: `ext/exif/src/exif.php`，按需引入 `#import exif`
+>
+> **纯 phpc 实现**，无自定义 C 代码。仅通过 C 标准库函数 (fopen/fgetc/fseek/ftell) 实现二进制 JPEG/TIFF EXIF 格式解析。
+> 所有函数参数/返回值使用 tphp 类型 (int/string/array)，C 类型转换封装在函数内部:
+> FILE* 指针通过 `phpc_ptr_to_int()` 转为 `t_int` 在 PHP 层流转，函数内部用 `phpc_int_to_ptr()` 转回 void* 调用 C 库。
+
+### 常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `IMAGETYPE_GIF` | 1 | GIF 图像 |
+| `IMAGETYPE_JPEG` | 2 | JPEG 图像 |
+| `IMAGETYPE_PNG` | 3 | PNG 图像 |
+| `IMAGETYPE_BMP` | 6 | BMP 图像 |
+| `IMAGETYPE_TIFF_II` | 7 | TIFF (Intel 字节序, LE) |
+| `IMAGETYPE_TIFF_MM` | 8 | TIFF (Motorola 字节序, BE) |
+| `IMAGETYPE_WEBP` | 18 | WebP 图像 |
+
+### 函数
+
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `exif_imagetype(string $filename): int\|false` | `exif_imagetype(string $filename): int` | 读取文件头魔数 (2 字节)，O(1) | 文件无法打开 `tp_throw`（可 try-catch）；未知格式返回 `0`；支持 JPEG/GIF/PNG/BMP/TIFF_II/TIFF_MM |
+| `exif_read_data(string $filename, string $sections = "", bool $arrays = false, bool $thumbnail = false): array\|false` | `exif_read_data(string $filename): array` | 逐字节解析 JPEG APP1/TIFF IFD，O(n) | 仅 1 参（无 `$sections`/`$arrays`/`$thumbnail`）；文件无法打开 `tp_throw`；无 EXIF 数据返回空数组；支持 IFD0/EXIF IFD/GPS IFD；支持 LE/BE 双字节序 |
+| `exif_thumbnail(string $filename, int &$width, int &$height, int &$imagetype): string\|false` | `exif_thumbnail(string $filename): array` | 解析 IFD1 缩略图 | 返回关联数组 `["data"=>string, "width"=>int, "height"=>int, "imagetype"=>int]`（PHP 返回 string + byRef 参数）；无缩略图返回空数组 |
+| `exif_tagname(int $index): string\|false` | `exif_tagname(int $index): string` | 预定义标签表 `strcmp` 查找 | 未知标签返回空字符串（非 `false`） |
+
+### 支持的 EXIF 标签
+
+| IFD | 标签 |
+|-----|------|
+| IFD0 (主图像) | Make, Model, Orientation, DateTime, Artist, Copyright, ImageDescription |
+| EXIF IFD (拍摄参数) | ExposureTime, FNumber, ISOSpeedRatings, FocalLength, ExposureBiasValue, MeteringMode, Flash, WhiteBalance, ColorSpace, ExifImageWidth, ExifImageLength |
+| GPS IFD | GPSLatitudeRef, GPSLatitude, GPSLongitudeRef, GPSLongitude, GPSAltitudeRef, GPSAltitude |
+
+### 设计模式
+
+```php
+// 公开 API 纯 PHP 签名
+function exif_read_data(string $filename): array {
+    // 内部用 phpc 桥接 C 标准库
+    C.void* $fp = C->fopen(php_str_ptr($filename), "rb");  // FILE* → void* → t_int
+    // ... 逐字节解析 EXIF 二进制格式 ...
+}
+
+// FILE* 以 t_int 在 PHP 层流转
+$fp_int = phpc_ptr_to_int($fp);  // void* → t_int
+$byte = exif_rd_byte($fp_int, $offset);  // 内部 phpc_int_to_ptr 转回 void*
+```
+
+> 测试: `test/exif/test_exif.php` (34 项检查，覆盖 JPEG LE/BE、TIFF II/MM、边界情况、thumbnail) 全部通过。
 
 ---
 

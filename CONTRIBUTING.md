@@ -28,7 +28,7 @@ include/                         C 运行时头文件（全 static inline）
   ├── runtime.h                  运行时（128KB 字符串池 + Arena、对象/数组/字符串池、资源追踪）
   ├── builtin.h                  内置函数入口 (incl 8个 std/ 子文件, 230+ 函数)
   ├── rand.h                     CSPRNG 随机数 (Win→rand_s, Unix→/dev/urandom)
-  ├── phpc.h                     C 互操作（类型桥/数组/对象/回调/thunk）
+  ├── phpc.h                     C 互操作（类型桥/数组/对象/回调/thunk/C 类型注解/C.XXX* 指针语法）
   ├── tphp_math.h                扩展数学（pi/deg2rad/intdiv/pow/三角函数）
   ├── conv.h                     进制转换 + number_format
   ├── hash.h                     MD5/SHA1/CRC32
@@ -342,6 +342,9 @@ ext/
 │   └── src/
 │       ├── demo.c
 │       └── demo.php
+├── exif/               ← 纯 phpc 实现（零自定义 C 代码）
+│   └── src/
+│       └── exif.php
 ├── pcntl/              ← C 直接模式（仅 .c，推荐）
 │   ├── pcntl.h
 │   └── src/
@@ -522,4 +525,4 @@ phpc 提供 4 个安全辅助函数处理 C 指针生命周期边界问题。修
 | `include/hash.h` | ~134 | MD5/SHA1/CRC32 |
 | `include/conv.h` | ~125 | 进制转换 |
 | `include/tphp_math.h` | ~55 | 扩展数学 |
-| `test/` | 114+ 文件 | 全部 `#debug` 标注，四平台 CI |
+| `test/` | 138+ 文件 | 全部 `#debug` 标注，四平台 CI |

@@ -14,7 +14,7 @@
 #debug 5. TIFF_II: 7
 #debug 6. TIFF_MM: 8
 #debug 7. unknown: 0
-#debug 8. not-exist: 0
+#debug 8. not-exist: caught1
 #debug
 #debug -- tagname --
 #debug 9. Make(0x010F): Make
@@ -50,7 +50,7 @@
 #debug
 #debug -- edge cases --
 #debug 31. no-exif JPEG count: 0
-#debug 32. not-exist count: 0
+#debug 32. not-exist: caught1
 #debug
 #debug -- thumbnail --
 #debug 33. thumb imagetype: 2
@@ -79,7 +79,13 @@ class Main {
         echo "5. TIFF_II: " . exif_imagetype("t_t2.jpg") . "\n";
         echo "6. TIFF_MM: " . exif_imagetype("t_t3.jpg") . "\n";
         echo "7. unknown: " . exif_imagetype("t_unk.jpg") . "\n";
-        echo "8. not-exist: " . exif_imagetype("no_such_file.jpg") . "\n";
+        $caught1 = 0;
+        try {
+            exif_imagetype("no_such_file.jpg");
+        } catch (Exception $e) {
+            $caught1 = 1;
+        }
+        echo "8. not-exist: caught" . $caught1 . "\n";
 
         // ── tagname ──
         echo "\n-- tagname --\n";
@@ -132,8 +138,13 @@ class Main {
         exif_make_test_header("t_noexif.jpg", 0xFF, 0xD8);
         $d5 = exif_read_data("t_noexif.jpg");
         echo "31. no-exif JPEG count: " . count($d5) . "\n";
-        $d6 = exif_read_data("no_such_file.jpg");
-        echo "32. not-exist count: " . count($d6) . "\n";
+        $caught2 = 0;
+        try {
+            exif_read_data("no_such_file.jpg");
+        } catch (Exception $e) {
+            $caught2 = 1;
+        }
+        echo "32. not-exist: caught" . $caught2 . "\n";
 
         // ── thumbnail ──
         echo "\n-- thumbnail --\n";

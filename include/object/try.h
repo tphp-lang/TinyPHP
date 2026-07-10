@@ -33,8 +33,9 @@
 //     tp_throw("plain string message");
 //
 //   注意：msg 字段使用 malloc 动态分配（非 str_pool_alloc），
-//   因为 tp_throw/tp_throw_ex 会在 longjmp 前调用 tphp_rt_free_all()，
-//   str_pool 内存会被释放。malloc 分配的 msg 在 catch 宏中显式 free。
+//   以便跨 longjmp 安全传递（str_pool 是 bump allocator，不单独释放）。
+//   caught 路径不调 tphp_rt_free_all()，避免释放 catch 后仍需访问的资源；
+//   仅 uncaught 路径（exit 前）调 tphp_rt_free_all() 做最终清理。
 // ============================================================
 
 #include <setjmp.h>
@@ -148,6 +149,8 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
     } while(0);
 
 // tp_throw_ex 接收原始对象指针（Exception 子类实例），内部通过 cls->exception_offset 计算 Exception*
+// 注意：caught 路径不调 tphp_rt_free_all() — 那会释放 catch 后仍需访问的已注册数组/对象，
+// 导致 unset 时 double-free。str_pool 是 bump allocator 不会单独释放，arena 块在 thread cleanup 回收。
 #define tp_throw_ex(ex) \
     do { \
         void *_orig = (void*)(ex); \
@@ -159,23 +162,8 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
                 ? _tp_dup_msg_n(STR_PTR_V(_e->message), _e->message.length) \
                 : NULL; \
             _tp_ex_top->thrown  = 1; \
-            /* 把 Exception 从全局注册列表移除，避免被 tphp_rt_free_all 释放（catch 块还需访问它） */ \
+            /* 把 Exception 从全局注册列表移除，避免被后续 free_all 释放（catch 块还需访问它） */ \
             if (_orig != NULL) tphp_rt_unregister(_orig); \
-            /* Exception::message 可能指向 str_pool/arena，tphp_rt_free_all 后变野指针。
-             * free_all 前用 malloc 备份，free_all 后重建 message 指向 malloc 副本。
-             * SSO 短串(≤23B)内联在 t_string.local 中不受影响，跳过即可。 */ \
-            char *_msg_backup = NULL; int _msg_len = 0; \
-            if (_e && !_e->message.is_local && _e->message.length > 0) { \
-                _msg_len = _e->message.length; \
-                _msg_backup = _tp_dup_msg_n(STR_PTR_V(_e->message), _msg_len); \
-            } \
-            tphp_rt_free_all(); \
-            if (_msg_backup != NULL) { \
-                _e->message.data = _msg_backup; \
-                _e->message.length = _msg_len; \
-                _e->message.is_local = false; \
-                _e->message.is_lit = false; \
-            } \
             longjmp(_tp_ex_top->jmp_buf, 1); \
         } else { \
             tphp_rt_free_all(); \
@@ -194,7 +182,6 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
             _tp_ex_top->msg = _tp_dup_msg(_tp_msg); \
             _tp_ex_top->ex_obj  = NULL; \
             _tp_ex_top->thrown  = 1; \
-            tphp_rt_free_all(); \
             longjmp(_tp_ex_top->jmp_buf, 1); \
         } else { \
             tphp_rt_free_all(); \
