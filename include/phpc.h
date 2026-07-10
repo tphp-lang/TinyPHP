@@ -22,33 +22,37 @@
 #include "object/try.h"
 
 // ── 1. 基础类型：PHP → C ──────────────────────────────────
+//   纯透传函数用宏实现（参考 vlang:简单表达式用 #define,零开销 + 常量折叠）
+//   c_str 涉及 STR_PTR(多次求值),保持 static inline 确保单次求值
 
-static inline int32_t  tphp_fn_c_int(t_int v)     { return (int32_t)v; }
-static inline double   tphp_fn_c_float(t_float v) { return (double)v; }
+#define tphp_fn_c_int(v)      ((int32_t)(v))
+#define tphp_fn_c_float(v)    ((double)(v))
 static inline const char* tphp_fn_c_str(t_string v) { return STR_PTR(v); }
 
 // ── 2. 基础类型：C → PHP ──────────────────────────────────
 
-static inline t_int   tphp_fn_php_int(int32_t v)   { return (t_int)v; }
-static inline t_float tphp_fn_php_float(double v)  { return (t_float)v; }
+#define tphp_fn_php_int(v)    ((t_int)(v))
+#define tphp_fn_php_float(v)  ((t_float)(v))
 
 // php_str: 复用 C 内存（深拷贝到 arena，C 端原指针仍由 C 管理）
 //   适用：C 函数返回的栈字符串/静态字符串/调用方不持有所有权的字符串
-//   参数为 t_int（指针值），内部 cast 为 const char*，兼容 C->func() 返回值
-static inline t_string tphp_fn_php_str(t_int ptr) {
-    const char* s = (const char*)ptr;
+//   参数为 const char*，类型安全
+//   有 strlen+dup 逻辑,保持 static inline（宏会多次求值 s）
+static inline t_string tphp_fn_php_str(const char* s) {
     return s ? tphp_rt_str_dup((t_string){(char*)s, (int)strlen(s)}) : (t_string){.data = NULL, .length = 0, .is_local = false};
 }
 
-// php_str_clone: 同 php_str（语义别名，明确表示"克隆"语义）
-//   与 c_str() 形成对照：c_str() 复用 PHP 内存给 C，php_str_clone() 复制 C 内存给 PHP
-static inline t_string tphp_fn_php_str_clone(t_int ptr) {
-    return tphp_fn_php_str(ptr);
-}
+// php_str_ptr / php_str_clone: 宏展开为对 php_str 的单次调用,参数仅求值一次
+#define tphp_fn_php_str_ptr(ptr)    tphp_fn_php_str((const char*)(ptr))
+#define tphp_fn_php_str_clone(s)    tphp_fn_php_str(s)
+
+// c_void_ptr: 透传 void*,让 void* 在 PHP 层显式流转（类型标记用途）
+#define tphp_fn_c_void_ptr(p) (p)
 
 // ── 3. 数组：PHP → C（严格类型检查，不匹配抛 tp_throw 异常）────
 //   返回 malloc 的 C 数组指针，长度通过 count($arr) 获取
-//   调用方负责 free()
+//   自动注册到运行时（type 3），程序结束/异常时由 tphp_rt_free_all 自动释放
+//   可提前调用 phpc_free() 手动释放（会先注销注册，防 double-free）
 
 // 提取为 int32_t 数组 — 所有元素必须为 TYPE_INT
 static inline int32_t* tphp_fn_phpc_arr_int(t_array* a) {
@@ -64,6 +68,7 @@ static inline int32_t* tphp_fn_phpc_arr_int(t_array* a) {
         }
         out[i] = (int32_t)a->entries[i].val.value._int;
     }
+    tphp_rt_register(out, 3);
     return out;
 }
 
@@ -84,10 +89,12 @@ static inline double* tphp_fn_phpc_arr_dbl(t_array* a) {
             tp_throw(_buf);
         }
     }
+    tphp_rt_register(out, 3);
     return out;
 }
 
 // 提取为 C 字符串数组 — 所有元素必须为 TYPE_STRING
+//   注意:字符串数组需逐元素释放,不自动注册,调用方需用 phpc_free_str_arr(arr, len) 手动释放
 static inline char** tphp_fn_phpc_arr_str(t_array* a) {
     if (!a || a->length == 0) return NULL;
     char** out = (char**)malloc((size_t)a->length * sizeof(char*));
@@ -149,9 +156,7 @@ static inline t_array* tphp_fn_phpc_new_arr(void) {
 
 // PHP 对象 → 底层 C 结构体指针（借用语义，不转移所有权）
 //   返回 NULL 时安全（C 端应自行检查）
-static inline void* tphp_fn_phpc_obj(void* obj) {
-    return obj;  // NULL 透传，调用方负责检查
-}
+#define tphp_fn_phpc_obj(obj) (obj)
 
 // C 结构体指针 → PHP 对象（接管语义，class descriptor 控制析构生命周期）
 //   注意：ptr 由 TinyPHP 注册管理，C 端不应再自行 free
@@ -172,16 +177,12 @@ static inline void tphp_fn_phpc_unregister_obj(void* ptr) {
 }
 
 // ── 6. 回调：PHP ↔ C 函数指针 ────────────────────────────
+//   纯字段访问,用宏实现零开销
 
-static inline void* tphp_fn_phpc_fn(t_callback cb)   { return cb.func; }
-static inline void* tphp_fn_phpc_env(t_callback cb)  { return cb.env; }
-
-static inline t_callback tphp_fn_phpc_new_fn(void* func) {
-    return (t_callback){ .func = func, .env = NULL };
-}
-static inline t_callback tphp_fn_phpc_new_fn_env(void* func, void* env) {
-    return (t_callback){ .func = func, .env = env };
-}
+#define tphp_fn_phpc_fn(cb)       ((cb).func)
+#define tphp_fn_phpc_env(cb)      ((cb).env)
+#define tphp_fn_phpc_new_fn(f)    ((t_callback){ .func = (f), .env = NULL })
+#define tphp_fn_phpc_new_fn_env(f, e) ((t_callback){ .func = (f), .env = (e) })
 
 // ── 6b. 回调类型转换：TinyPHP 闭包 → C 回调指针 ──────────
 //   闭包编译为 t_int fn(t_int, void*)，C 库期望 int32_t fn(int32_t, void*)
@@ -191,9 +192,10 @@ typedef int32_t (*phpc_fn_i32_t)(int32_t, void*);
 typedef int64_t (*phpc_fn_i64_t)(int64_t, void*);
 typedef double  (*phpc_fn_f64_t)(double,  void*);
 
-static inline phpc_fn_i32_t tphp_fn_phpc_fn_i32(t_callback cb) { return (phpc_fn_i32_t)cb.func; }
-static inline phpc_fn_i64_t tphp_fn_phpc_fn_i64(t_callback cb) { return (phpc_fn_i64_t)cb.func; }
-static inline phpc_fn_f64_t tphp_fn_phpc_fn_f64(t_callback cb) { return (phpc_fn_f64_t)cb.func; }
+//   纯 cast,宏实现零开销
+#define tphp_fn_phpc_fn_i32(cb) ((phpc_fn_i32_t)(cb).func)
+#define tphp_fn_phpc_fn_i64(cb) ((phpc_fn_i64_t)(cb).func)
+#define tphp_fn_phpc_fn_f64(cb) ((phpc_fn_f64_t)(cb).func)
 
 // ── 6c. 无 env 回调 thunk ───────────────────────────────
 //   用法：phpc_thunk('cb_name', $fn)  按 #callback 签名生成 thunk
@@ -206,12 +208,17 @@ static inline phpc_fn_f64_t tphp_fn_phpc_fn_f64(t_callback cb) { return (phpc_fn
 //   支持任意类型任意数量参数（由 #callback 声明决定）
 
 // ── 7. 内存释放 ───────────────────────────────────────────
-//   phpc_arr_* 返回的 malloc 指针必须通过以下函数释放
+//   phpc_arr_int/dbl 已自动注册,程序结束/异常时由 tphp_rt_free_all 自动释放
+//   如需提前释放(如循环内避免内存堆积),调用 phpc_free() 手动释放
 //   CodeGenerator 会在调用后自动置零变量，防止 use-after-free
 
-// phpc_free: 释放 C 内存（CodeGenerator 会在调用后自动置零变量）
+// phpc_free: 释放 C 内存并注销注册（防 double-free）
+//   CodeGenerator 会在调用后自动置零变量
 static inline void tphp_fn_phpc_free(void* ptr) {
-    if (ptr) free(ptr);
+    if (ptr) {
+        tphp_rt_unregister(ptr);  // 先注销注册,防止 tphp_rt_free_all double-free
+        free(ptr);
+    }
 }
 
 // 释放 phpc_arr_str 返回的字符串数组（先释放每个字符串，再释放指针数组）
@@ -219,6 +226,32 @@ static inline void tphp_fn_phpc_free_str_arr(char** strs, int len) {
     if (!strs) return;
     for (int i = 0; i < len; i++) free(strs[i]);
     free(strs);
+}
+
+// ── 7b. 通用 C 指针自动注册 ─────────────────────────────
+//   phpc_auto: 将任意 C 指针注册到运行时,程序结束/异常时自动 free
+//   用于 C->func() 返回的 malloc 指针,免去手动 free 的负担
+//   用法: $buf = phpc_auto(C->malloc(100));
+//   返回 ptr 本身(透传,方便链式调用)
+static inline void* tphp_fn_phpc_auto(void* ptr) {
+    if (ptr) tphp_rt_register(ptr, 3);
+    return ptr;
+}
+
+// ── 7c. 指针 ↔ 整数桥接 ─────────────────────────────────
+//   让 C 指针以 t_int (int64_t) 在 PHP 层流转,函数签名可用 int 类型
+//   内部用 intptr_t 保证可移植性(32/64 位平台均安全)
+//   用法:
+//     $fp = phpc_ptr_to_int(C->fopen(...));      // void* → t_int
+//     function helper(int $fp): int {
+//         $f = phpc_int_to_ptr($fp);              // t_int → void*
+//         C->fseek($f, ...);
+//     }
+static inline t_int tphp_fn_phpc_ptr_to_int(void* ptr) {
+    return (t_int)(intptr_t)ptr;
+}
+static inline void* tphp_fn_phpc_int_to_ptr(t_int v) {
+    return (void*)(intptr_t)v;
 }
 
 // ── 8. 安全辅助 API ──────────────────────────────────────

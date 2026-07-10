@@ -28,7 +28,7 @@
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
-| C 互操作 (PHPC) | `phpc.h` | 31 |
+| C 互操作 (PHPC) | `phpc.h` | 40 |
 | **合计** | | **277+** |
 
 ---
@@ -989,29 +989,80 @@ $tid = Thread::id();
 ## C 互操作 (PHPC)
 
 > 文件: `phpc.h`
+> 设计参考 vlang:纯透传函数用 `#define` 宏(零开销 + 常量折叠),有副作用/复杂逻辑的用 `static inline`(确保单次求值)
+
+### 类型桥接
 
 | 函数 | 方向 | 说明 |
 |------|------|------|
-| `c_int($x) / c_float($x) / c_str($s)` | PHP → C | → `int32_t` / `double` / `const char*` |
-| `php_int($x) / php_float($x) / php_str($s)` | C → PHP | → `t_int` / `t_float` / `t_string` (深拷贝) |
-| `php_str_clone($s)` | C → PHP | → `t_string` (深拷贝，明确克隆语义) |
+| `c_int($x)` / `c_float($x)` | PHP → C | → `int32_t` / `double` (宏,零开销) |
+| `c_str($s)` | PHP → C | → `const char*` (static inline,STR_PTR 单次求值) |
+| `c_void_ptr($p)` | PHP → C | → `void*` 透传 (宏,显式类型标记) |
+| `php_int($x)` / `php_float($x)` | C → PHP | → `t_int` / `t_float` (宏,零开销) |
+| `php_str($s)` | C → PHP | → `t_string` (深拷贝,参数 const char*;static inline,有 strlen+dup 逻辑) |
+| `php_str_ptr($ptr)` | C → PHP | → `t_string` (接受 void*,内部 cast 为 const char*;宏展开为 php_str 单次调用) |
+| `php_str_clone($s)` | C → PHP | → `t_string` (深拷贝,明确克隆语义;宏展开为 php_str) |
+
+### C 调用与类型注解
+
+| 函数/语法 | 方向 | 说明 |
+|------|------|------|
 | `C->func(args)` | 直接 C 调用 | 无 name mangling |
 | `C->CONST` | 直接 C 常量/枚举/宏访问 | 无括号形式，按 `t_int` 推断 |
-| `C.Type` | C 类型注解 | 函数参数/返回值用 C 类型（如 `C.Point` → `Point*`） |
-| `#include "file.h"` | 预处理器 | 生成 `#include` |
-| `#flag [CC] [OS] flags` | 预处理器 | 平台+编译器过滤 |
-| `#callback type name(params)` | 预处理器 | 声明 C 回调签名 |
-| `phpc_arr_int/dbl/str` | PHP→C | 严格类型检查，**类型不匹配抛 tp_throw 异常**，malloc |
+| `C.Type` | C 类型注解 | 函数参数/返回值用 C 类型（`C.int`→`int`，`C.Point*`→`Point*`，指针用 `*` 后缀） |
+| `(C.XXX) expr` | C 类型 cast | `(C.int)`/`(C.int32)`/`(C.int64)`/`(C.uint32)`/`(C.uint64)`/`(C.float)`/`(C.double)`/`(C.char)`/`(C.bool)`/`(C.void)`/`(C.void*)`/`(C.char*)`/`(C.int*)`/`(C.double*)`/`(C.XXX*)` |
+
+### 预处理器指令
+
+| 指令 | 说明 |
+|------|------|
+| `#include "file.h"` | 生成 `#include` |
+| `#flag [CC] [OS] flags` | 平台+编译器过滤 |
+| `#callback type name(params)` | 声明 C 回调签名 |
+| `#import name` | 按需引入 ext/name/src/*.php + *.c |
+| `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,支持 `$p->field` 原生访问(编译期展开为 `((Struct*)$p)->field`) |
+
+### 数组互操作
+
+| 函数 | 方向 | 说明 |
+|------|------|------|
+| `phpc_arr_int/dbl` | PHP→C | 严格类型检查,**类型不匹配抛 tp_throw 异常**,malloc,**自动注册到运行时**(程序结束/异常自动释放) |
+| `phpc_arr_str` | PHP→C | 严格类型检查,malloc,**不自动注册**(需用 phpc_free_str_arr 释放) |
 | `phpc_new_arr_int/dbl/str` | C→PHP | 深拷贝 |
-| `phpc_obj` / `phpc_fn` / `phpc_env` | 双向 | 对象/函数/环境指针（借用语义） |
+| `phpc_new_arr()` | C→PHP | 深拷贝 |
+
+### 对象/回调互操作
+
+| 函数 | 方向 | 说明 |
+|------|------|------|
+| `phpc_obj` | 双向 | 对象指针(借用语义,宏透传) |
 | `phpc_new_obj` | C→PHP | 包裹 C 指针为 PHP 对象（接管语义） |
 | `phpc_unregister_obj` | 双向 | 解除对象注册（C 库自行 free 时调用，防 double-free） |
 | `phpc_obj_steal` | 双向 | 标记对象"已分离"（refcount=-1），C 库可安全 free（防 double-free） |
+| `phpc_fn` / `phpc_env` | 双向 | 函数/环境指针（宏透传,字段访问） |
+| `phpc_fn_i32/i64/f64` | 双向 | 类型化函数指针 cast(宏,零开销) |
+| `phpc_new_fn` / `phpc_new_fn_env` | C→PHP | 构造回调(宏,复合字面量) |
+| `phpc_thunk('name', $fn)` | no-env 回调 | 按 #callback 生成 thunk |
 | `phpc_assert_ptr` | 安全 | 断言指针非 NULL，NULL 时抛 tp_throw 异常（可 try-catch） |
 | `phpc_env_pin` / `phpc_env_unpin` | 安全 | 固定/解除固定闭包 env（异步回调安全） |
-| `phpc_free` | 释放 | free + **自动置零变量**防 UAF |
-| `phpc_free_str_arr` | 释放 | 释放字符串数组 + **自动置零** |
-| `phpc_thunk('name', $fn)` | no-env 回调 | 按 #callback 生成 thunk |
+
+### 内存管理
+
+| 函数 | 说明 |
+|------|------|
+| `phpc_auto($ptr)` | 通用 C 指针自动注册,程序结束/异常时自动 free(透传 ptr,方便链式调用) |
+| `phpc_free($ptr)` | free + **先注销注册防 double-free** + 自动置零变量防 UAF |
+| `phpc_free_str_arr($arr, $len)` | 释放字符串数组 + 自动置零 |
+
+### 指针 ↔ 整数桥接
+
+| 函数 | 方向 | 说明 |
+|------|------|------|
+| `phpc_ptr_to_int($ptr)` | void* → t_int | 让 C 指针以 t_int 在 PHP 层流转(用 intptr_t 保证可移植性) |
+| `phpc_int_to_ptr($v)` | t_int → void* | 函数内部转回 void* 调用 C 库 |
+
+> **设计模式**: 函数参数/返回值用 tphp 类型(int/string/array),内部用 phpc_int_to_ptr 转回 void*。
+> 参见 `ext/exif/src/exif.php` — 所有函数签名纯 PHP 风格,C 类型转换封装在函数内部。
 
 ---
 

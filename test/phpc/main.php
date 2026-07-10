@@ -148,13 +148,13 @@ class Main
         // ═══════════════════════════════════════
         echo "\n-- Part 5: C Types --\n";
 
-        // 5a: C.Point 返回类型
+        // 5a: C.Point* 返回类型
         $origin = create_origin();
         echo "17. origin_x="; var_dump(get_point_x($origin)); echo "\n";
         phpc_unregister_obj($origin);
         C->point_free($origin);
 
-        // 5b: C.char_ptr 字符串
+        // 5b: C.char* 字符串
         $greeting = greet_name("TinyPHP");
         echo "18. greet="; var_dump($greeting); echo "\n";
 

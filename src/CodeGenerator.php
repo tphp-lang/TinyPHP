@@ -123,9 +123,12 @@ class CodeGenerator implements ASTVisitor
         'phpc_fn' => 'null', 'phpc_env' => 'null', 'phpc_fn_i32' => 'null', 'phpc_fn_i64' => 'null', 'phpc_fn_f64' => 'null',
         'phpc_thunk' => 'null',
         'phpc_assert_ptr' => 'null', 'phpc_env_pin' => 'null',
+        'phpc_auto' => 'null',
+        'phpc_ptr_to_int' => 't_int', 'phpc_int_to_ptr' => 'null',
         // ── phpc 互操作 ──
         'c_int' => 't_int', 'php_int' => 't_int', 'c_float' => 't_float', 'php_float' => 't_float',
-        'c_str' => 't_string', 'php_str' => 't_string',
+        'c_str' => 't_string', 'php_str' => 't_string', 'php_str_ptr' => 't_string',
+        'c_void_ptr' => 'null',
     ];
 
     /** 内置函数返回数组的元素类型注册表（替代 visitAssign 中的 switch-case） */
@@ -252,6 +255,8 @@ class CodeGenerator implements ASTVisitor
     private int $thunkCounter = 0;
     /** #callback 声明的回调签名: name → ['ret'=>'int32_t','params_str'=>'int32_t a, double b'] */
     private array $phpcCallbackSigs = [];
+    /** #cstruct 声明的结构体字段: StructName → [['type'=>'C.double','name'=>'x'], ...] */
+    private array $cstructFields = [];
 
     /** P3-3: resolveMethodClass 缓存 (cn\0method → resolvedClass) */
     private array $methodClassCache = [];
@@ -302,6 +307,13 @@ class CodeGenerator implements ASTVisitor
         // 收集 #callback 声明
         foreach ($node->callbacks as $cb) {
             $this->phpcCallbackSigs[$cb['name']] = $cb;
+        }
+
+        // 收集 #cstruct 声明：结构体名 → 字段列表 [['type'=>'C.double','name'=>'x'], ...]
+        //   用于 $obj->field 原生访问（编译期展开为 ((StructType*)$obj)->field）
+        $this->cstructFields = [];
+        foreach ($node->cstructs as $cs) {
+            $this->cstructFields[$cs['name']] = $cs['fields'];
         }
 
         // 预扫描源码：是否用到了 Phase1/2 函数（需要 builtin_extra.h）
@@ -1762,12 +1774,30 @@ class CodeGenerator implements ASTVisitor
             if ($node->type !== null) {
                 $cType = self::mapType($node->type);
                 if ($inferredType !== 'null' && $inferredType !== $cType) {
-                    throw new \RuntimeException(
-                        "Variable \${$var} type mismatch: declared '{$node->type}' ({$cType}) "
-                        . "but inferred {$inferredType}"
-                    );
+                    // Raw C call 默认返回 t_int,但用户可能声明了 C 指针类型
+                    //   (Raw C call 返回类型编译期不可靠,信任用户的显式声明)
+                    $isRawCPtrAssign = ($inferredType === 't_int'
+                        && $node->expr instanceof CallExpr
+                        && $node->expr->isRawC
+                        && !self::isAutoInferableType($cType));
+                    if (!$isRawCPtrAssign) {
+                        throw new \RuntimeException(
+                            "Variable \${$var} type mismatch: declared '{$node->type}' ({$cType}) "
+                            . "but inferred {$inferredType}"
+                        );
+                    }
                 }
             } else {
+                // tphp 标准类型可自动推导；phpc C 指针类型必须显式声明
+                //   原因：C->func() 返回 void* 时 inferType 统一推导为 'null'，类型信息丢失，
+                //   后续 cstruct 字段访问（$p->x）等操作无法正确展开。
+                if (!self::isAutoInferableType($inferredType)) {
+                    throw new \RuntimeException(
+                        "Variable \${$var} requires explicit type declaration: "
+                        . "inferred C pointer type '{$inferredType}'. "
+                        . "Use 'C.Type \${$var} = ...' (e.g. C.void*, C.Point*, C.int*) to declare."
+                    );
+                }
                 $cType = $inferredType;
             }
             $this->varTypes[$var] = $cType;
@@ -1882,6 +1912,24 @@ class CodeGenerator implements ASTVisitor
         return $code;
     }
 
+    /**
+     * 检查类型是否可自动推导（tphp 标准类型）。
+     *
+     * phpc C 指针类型（void*、结构体指针等）必须显式声明，
+     * 因为 inferType 对 C->func() 返回的 void* 统一推导为 'null'，类型信息丢失，
+     * 后续 cstruct 字段访问（$p->x）等操作无法正确展开。
+     */
+    private static function isAutoInferableType(string $type): bool
+    {
+        // tphp 标准标量/复合类型
+        static $tphpTypes = ['t_int', 't_float', 't_string', 't_bool', 't_array*', 't_var', 't_callback'];
+        if (in_array($type, $tphpTypes, true)) return true;
+        // TinyPHP 类对象 / 枚举对象（含指针）
+        if (str_starts_with($type, 'tphp_class_') || str_starts_with($type, 'tphp_enum_')) return true;
+        // null (void*) / void* / char* / int* / Point* 等 C 指针 → 必须显式声明
+        return false;
+    }
+
     /** 从 AST 表达式推导 C 类型 */
     private function inferType(ExprNode $expr): string
     {
@@ -1938,6 +1986,19 @@ class CodeGenerator implements ASTVisitor
             // C->CONST — C constant/enum/macro, default to t_int
             if ($expr->object instanceof VariableExpr && $expr->object->name === 'C') {
                 return 't_int';
+            }
+            // #cstruct 字段类型推导
+            if ($expr->object instanceof VariableExpr && str_starts_with($expr->object->name, '$')) {
+                $vn = self::varName($expr->object->name);
+                $objType = $this->varTypes[$vn] ?? '';
+                $structName = rtrim($objType, '*');
+                if (isset($this->cstructFields[$structName])) {
+                    foreach ($this->cstructFields[$structName] as $f) {
+                        if ($f['name'] === $expr->property) {
+                            return $this->cstructFieldType($f['type']);
+                        }
+                    }
+                }
             }
             $objKey = ($expr->object instanceof VariableExpr) ? self::varName($expr->object->name) : '';
             $objType = $this->varTypes[$objKey] ?? '';
@@ -2006,6 +2067,17 @@ class CodeGenerator implements ASTVisitor
             return self::classRefName($expr->className) . '*';
         }
         if ($expr instanceof CastExpr) {
+            // C.XXX cast → 值类型映射为 PHP 类型，指针类型保留 C 类型
+            if (str_starts_with($expr->castType, 'C.')) {
+                $ct = substr($expr->castType, 2);
+                // C 值类型 → 对应 PHP 类型（用于 varTypes 追踪和 castToStr 分发）
+                if ($ct === 'int' || $ct === 'int32' || $ct === 'int64' || $ct === 'uint32' || $ct === 'uint64') return 't_int';
+                if ($ct === 'float' || $ct === 'double') return 't_float';
+                if ($ct === 'bool') return 't_bool';
+                if ($ct === 'char') return 't_int';
+                // 指针类型保留 C 类型 (void*, char*, int*, 结构体指针)
+                return self::mapType($expr->castType);
+            }
             return self::$typeMap[$expr->castType] ?? 't_int';
         }
         if ($expr instanceof CallExpr) {
@@ -2248,12 +2320,49 @@ class CodeGenerator implements ASTVisitor
         return $this->inferType($expr->index) === 't_string';
     }
 
+    /** #cstruct 字段的 C 类型 → PHP 类型映射（用于 inferType / getPropType）
+     *   C.double/C.float → t_float, C.int/C.char → t_int, C.bool → t_bool
+     *   C.char* → t_string, 其他指针类型 → 保留 C 类型 */
+    private function cstructFieldType(string $cType): string
+    {
+        if (str_starts_with($cType, 'C.')) {
+            $ct = substr($cType, 2);
+            // 解析指针后缀
+            $stars = '';
+            while (str_ends_with($ct, '*')) {
+                $stars .= '*';
+                $ct = substr($ct, 0, -1);
+            }
+            // char* → t_string (C 字符串)
+            if ($ct === 'char' && $stars !== '') return 't_string';
+            if ($ct === 'int' || $ct === 'int32' || $ct === 'int64' || $ct === 'uint32' || $ct === 'uint64' || $ct === 'char') return 't_int';
+            if ($ct === 'float' || $ct === 'double') return 't_float';
+            if ($ct === 'bool') return 't_bool';
+            // void*/结构体指针等 → 保留 C 类型
+            return self::mapType($cType);
+        }
+        // 非 C. 前缀 = 嵌套结构体值类型 → 返回结构体指针类型
+        return $cType . '*';
+    }
+
     /** 获取属性类型（通过 SymbolTable 查找） */
     private function getPropType(PropertyAccessExpr $pa): string
-    {
-        // C->CONST — C constant/enum/macro, default to t_int
+    {        // C->CONST — C constant/enum/macro, default to t_int
         if ($pa->object instanceof VariableExpr && $pa->object->name === 'C') {
             return 't_int';
+        }
+        // #cstruct 字段类型查找：根据 #cstruct 声明的字段 C 类型映射为 PHP 类型
+        if ($pa->object instanceof VariableExpr && str_starts_with($pa->object->name, '$')) {
+            $vn = self::varName($pa->object->name);
+            $objType = $this->varTypes[$vn] ?? '';
+            $structName = rtrim($objType, '*');
+            if (isset($this->cstructFields[$structName])) {
+                foreach ($this->cstructFields[$structName] as $f) {
+                    if ($f['name'] === $pa->property) {
+                        return $this->cstructFieldType($f['type']);
+                    }
+                }
+            }
         }
         $objKey = ($pa->object instanceof VariableExpr) ? self::varName($pa->object->name) : '';
         $objType = ($objKey === '$this' || $objKey === 'self')
@@ -3169,13 +3278,14 @@ class CodeGenerator implements ASTVisitor
     public function visitCall(CallExpr $node): string
     {
         // PHPC 互操作函数名集合（B 段、C 段共享，避免重复定义）
-        static $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
+        static $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone','php_str_ptr','c_void_ptr',
             'phpc_arr_int','phpc_arr_dbl','phpc_arr_str','phpc_new_arr_int',
             'phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
             'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_free','phpc_free_str_arr',
             'phpc_fn','phpc_env','phpc_fn_i32','phpc_fn_i64','phpc_fn_f64',
             'phpc_new_fn','phpc_new_fn_env','phpc_thunk',
-            'phpc_assert_ptr','phpc_obj_steal','phpc_env_pin','phpc_env_unpin'];
+            'phpc_assert_ptr','phpc_obj_steal','phpc_env_pin','phpc_env_unpin','phpc_auto',
+            'phpc_ptr_to_int','phpc_int_to_ptr'];
 
         // 简单转发函数：查 $simpleFnMap 命中则交给通用处理器
         if ($node->callee === null && isset(self::$simpleFnMap[$node->name])) {
@@ -4138,6 +4248,25 @@ class CodeGenerator implements ASTVisitor
         }
         $obj = $node->object->accept($this);
         $prop = ltrim($node->property, '$');
+        // #cstruct 原生字段访问：$p->x → ((Point*)$p)->x
+        //   当对象类型为已声明的 C 结构体指针时，直接 cast 访问字段
+        if ($node->object instanceof VariableExpr && str_starts_with($node->object->name, '$')) {
+            $vn = self::varName($node->object->name);
+            $objType = $this->varTypes[$vn] ?? '';
+            // objType 形如 "Point*" — 去掉尾部 * 得到结构体名
+            $structName = rtrim($objType, '*');
+            if (isset($this->cstructFields[$structName])) {
+                // 验证字段存在
+                foreach ($this->cstructFields[$structName] as $f) {
+                    if ($f['name'] === $prop) {
+                        return "(({$structName}*){$obj})->{$prop}";
+                    }
+                }
+                throw new \RuntimeException(
+                    sprintf("[%d:%d] C struct %s has no field '%s'", $node->line, $node->column, $structName, $prop)
+                );
+            }
+        }
         // COS inheritance: resolve property through _parent chain
         $objCN = '';
         if ($obj === 'self') {
@@ -4938,6 +5067,11 @@ class CodeGenerator implements ASTVisitor
     {
         $t = $node->target->accept($this);
         $v = $node->value->accept($this);
+        // .= 是 PHP 字符串拼接赋值，C 无对应操作符，转译为 tphp_rt_str_concat
+        if ($node->operator === '.=') {
+            $vs = $this->castToStr($node->value);
+            return "{$t} = tphp_rt_str_concat({$t}, {$vs})";
+        }
         return "{$t} {$node->operator} {$v}";
     }
 
@@ -5539,23 +5673,28 @@ class CodeGenerator implements ASTVisitor
         // 联合类型 → t_var
         if (str_contains($t, '|')) return 't_var';
         // C 类型: C.IDENTIFIER — 借鉴 vlang 的 C 命名空间设计
-        //   C.int → int, C.float → double, C.double → double, C.char → char, C.void → void
-        //   C.void_ptr → void*, C.char_ptr → char*, C.int_ptr → int*, C.float_ptr → double*
-        //   C.XXX → XXX*（默认：结构体指针，如 C.FILE → FILE*）
+        //   C.X 直接直译为 C 类型 X: C.int→int, C.float→double, C.char→char, C.void→void
+        //   指针用 * 后缀: C.void*→void*, C.char*→char*, C.int*→int*, C.Point*→Point*
+        //   不再使用 _ptr 别名（C. 前缀就是 C 的类型）
         if (str_starts_with($t, 'C.')) {
             $ct = substr($t, 2);
-            return match ($ct) {
-                'int', 'int32', 'int64', 'uint32', 'uint64' => $ct === 'int' ? 'int' : $ct . '_t',
+            // 解析指针后缀: C.void* => void*, C.char** => char**
+            $stars = '';
+            while (str_ends_with($ct, '*')) {
+                $stars .= '*';
+                $ct = substr($ct, 0, -1);
+            }
+            $base = match ($ct) {
+                'int' => 'int',
+                'int32' => 'int32_t', 'int64' => 'int64_t',
+                'uint32' => 'uint32_t', 'uint64' => 'uint64_t',
                 'float', 'double' => 'double',
                 'char' => 'char',
                 'void' => 'void',
-                'void_ptr' => 'void*',
-                'char_ptr' => 'char*',
-                'int_ptr' => 'int*',
-                'float_ptr' => 'double*',
                 'bool' => 'bool',
-                default => $ct . '*',  // 结构体指针: C.FILE → FILE*
+                default => $ct,  // 结构体名: C.Point => Point
             };
+            return $base . $stars;
         }
         // 枚举类型 → 返回 C struct 指针类型
         $enumCType = $this->symbols->getEnumCType($t);
@@ -5575,23 +5714,27 @@ class CodeGenerator implements ASTVisitor
     private static function resolveType(string $type): string {
         if (str_contains($type, '|')) return 't_var';
         if ($type === 'callable') return 't_callback';
-        // C 类型: C.IDENTIFIER — 直接映射为对应 C 类型
+        // C 类型: C.IDENTIFIER — 直接映射为对应 C 类型（C. 前缀就是 C 的类型）
+        //   C.int→int, C.void*→void*, C.Point→Point, C.Point*→Point*
         if (str_starts_with($type, 'C.')) {
             $ct = substr($type, 2);
-            return match ($ct) {
+            // 解析指针后缀
+            $stars = '';
+            while (str_ends_with($ct, '*')) {
+                $stars .= '*';
+                $ct = substr($ct, 0, -1);
+            }
+            $base = match ($ct) {
                 'int' => 'int',
                 'int32' => 'int32_t', 'int64' => 'int64_t',
                 'uint32' => 'uint32_t', 'uint64' => 'uint64_t',
                 'float', 'double' => 'double',
                 'char' => 'char',
                 'void' => 'void',
-                'void_ptr' => 'void*',
-                'char_ptr' => 'char*',
-                'int_ptr' => 'int*',
-                'float_ptr' => 'double*',
                 'bool' => 'bool',
-                default => $ct . '*',  // 结构体指针
+                default => $ct,  // 结构体名: C.Point => Point
             };
+            return $base . $stars;
         }
         return self::$typeMap[$type] ?? ('tphp_class_' . $type . '*');
     }

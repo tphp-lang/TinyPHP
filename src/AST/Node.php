@@ -37,6 +37,8 @@ class ProgramNode extends ASTNode
         public readonly array $callbacks = [],
         /** @var string[] #debug 指令收集的预期输出 */
         public readonly array $debugs = [],
+        /** @var array[]  [['name'=>'Point','fields'=>[['type'=>'C.double','name'=>'x'],...]], ...] */
+        public readonly array $cstructs = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string

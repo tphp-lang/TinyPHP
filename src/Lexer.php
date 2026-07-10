@@ -250,6 +250,30 @@ class Lexer
                 $this->advance(strlen($m[0]));
                 return;
             }
+            // #cstruct Name { C.type field; C.type field; ... } — 声明 C 结构体字段布局
+            //   多行匹配，支持嵌套结构体字段（值类型，非指针）
+            //   字段格式: C.type name 或 StructName name（嵌套值类型）
+            if (preg_match('/^#cstruct\s+(\w+)\s*\{([^}]*)\}/s', $rest, $m)) {
+                $structName = $m[1];
+                $body = trim($m[2]);
+                // 解析字段: "C.double x; C.double y" 或 "Point origin; C.int w"
+                $fields = [];
+                $fieldParts = preg_split('/[;\n]+/', $body);
+                foreach ($fieldParts as $fp) {
+                    $fp = trim($fp);
+                    if ($fp === '') continue;
+                    // 格式: Type name (Type 可能是 C.xxx 或 Identifier)
+                    if (preg_match('/^(\S+)\s+(\w+)$/', $fp, $fm)) {
+                        $fields[] = ['type' => $fm[1], 'name' => $fm[2]];
+                    }
+                }
+                $this->addToken(TokenType::HASH_CSTRUCT, $structName, [
+                    'name' => $structName,
+                    'fields' => $fields,
+                ]);
+                $this->advance(strlen($m[0]));
+                return;
+            }
             // 普通 # 注释 — 跳过整行
             $this->skipLineComment();
             return;

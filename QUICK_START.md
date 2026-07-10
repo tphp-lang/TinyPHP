@@ -65,16 +65,22 @@ function add(int $a, int $b): C.int {     // 返回 C int
 }
 
 // C 结构体指针作为参数和返回值
-function make_point(): C.Point { return C->point_create(); }
-function get_x(C.Point $p): C.double { return C->point_get_x($p); }
+function make_point(): C.Point* { return C->point_create(); }
+function get_x(C.Point* $p): C.double { return C->point_get_x($p); }
 ```
 
 | C 类型注解 | 映射 |
 |-----------|------|
-| `C.int` / `C.int32` / `C.int64` | `int` / `int32_t` / `int64_t` |
+| `C.int` | `int` |
+| `C.int32` / `C.int64` | `int32_t` / `int64_t` |
+| `C.uint32` / `C.uint64` | `uint32_t` / `uint64_t` |
 | `C.float` / `C.double` | `double` |
-| `C.char_ptr` / `C.void_ptr` | `char*` / `void*` |
-| `C.XXX`（结构体） | `XXX*` |
+| `C.char` | `char` |
+| `C.bool` | `bool` |
+| `C.void` | `void` |
+| `C.void*` / `C.char*` / `C.int*` / `C.double*` | `void*` / `char*` / `int*` / `double*` |
+| `C.XXX` | `XXX`（结构体值类型） |
+| `C.XXX*` | `XXX*`（结构体指针，如 `C.Point*` → `Point*`） |
 
 ### 安全 API（防 UAF / double-free）
 

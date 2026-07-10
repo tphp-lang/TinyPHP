@@ -84,6 +84,37 @@ void point_free(Point* p) {
     free(p);
 }
 
+// ── 多字段结构体测试:Rect ─────────────────────────────
+//   用于测试 #cstruct 多结构体声明 + int/double 混合字段
+
+typedef struct {
+    int id;          // int 字段
+    double x;        // double 字段
+    double y;
+    double w;
+    double h;
+} Rect;
+
+Rect* rect_create(int id, double x, double y, double w, double h) {
+    Rect* r = (Rect*)malloc(sizeof(Rect));
+    if (r) { r->id = id; r->x = x; r->y = y; r->w = w; r->h = h; }
+    return r;
+}
+
+double rect_area(const Rect* r) {
+    return r ? (r->w * r->h) : 0.0;
+}
+
+int rect_is_inside(const Rect* r, double px, double py) {
+    if (!r) return 0;
+    return (px >= r->x && px <= r->x + r->w &&
+            py >= r->y && py <= r->y + r->h) ? 1 : 0;
+}
+
+void rect_free(Rect* r) {
+    free(r);
+}
+
 // ── C 类型参数/返回值测试函数 ──────────────────────────
 // 这些函数用于测试 TinyPHP 的 C.TYPE 类型注解功能
 
@@ -99,7 +130,7 @@ double point_get_x(Point* p) {
     return p ? p->x : 0.0;
 }
 
-// 字符串处理：接受 const char*，返回 const char*（测试 C.char_ptr）
+// 字符串处理：接受 const char*，返回 const char*（测试 C.char*）
 const char* greet(const char* name) {
     static char buf[256];
     if (!name) return "Hello, stranger!";

@@ -133,18 +133,18 @@ function fold_double(array $arr, callable $fn): float
 // 借鉴 vlang 的 C.Type 设计：函数参数和返回值可直接使用 C 类型
 
 // C.Point 返回类型：直接返回 C 结构体指针
-function create_origin(): C.Point
+function create_origin(): C.Point*
 {
     return C->point_origin();
 }
 
 // C.Point 参数 + C.double 返回
-function get_point_x(C.Point $p): C.double
+function get_point_x(C.Point* $p): C.double
 {
     return C->point_get_x($p);
 }
 
-// C.char_ptr 参数 + C.char_ptr 返回
+// C.char* 参数 + C.char* 返回
 function greet_name(string $name): string
 {
     $result = C->greet(c_str($name));
@@ -158,7 +158,7 @@ function square_int(int $x): int
 }
 
 // 错误路径：返回 NULL 的函数
-function create_null_point(): C.Point
+function create_null_point(): C.Point*
 {
     return C->point_create_null();
 }

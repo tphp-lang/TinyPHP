@@ -366,17 +366,17 @@ c_str($s)   → const char*  php_str(s)      → t_string (深拷贝，复用 C 
 ```php
 #include "include/demo.h"
 
-// C.Point 返回类型 → Point*
-function create_origin(): C.Point {
+// C.Point* 返回类型 → Point*
+function create_origin(): C.Point* {
     return C->point_origin();
 }
 
-// C.Point 参数 + C.double 返回 → Point* / double
-function get_point_x(C.Point $p): C.double {
+// C.Point* 参数 + C.double 返回 → Point* / double
+function get_point_x(C.Point* $p): C.double {
     return C->point_get_x($p);
 }
 
-// C.char_ptr 参数 + C.int 返回 → char* / int
+// C.char* 参数 + C.int 返回 → char* / int
 function square_name(string $name): int {
     return php_int(C->int_square(c_int(42)));
 }
@@ -391,10 +391,11 @@ function square_name(string $name): int {
 | `C.char` | `char` | 单字符 |
 | `C.bool` | `bool` | 布尔值 |
 | `C.void` | `void` | 无返回值 |
-| `C.void_ptr` | `void*` | 通用指针 |
-| `C.char_ptr` | `char*` | C 字符串指针 |
-| `C.int_ptr` / `C.float_ptr` | `int*` / `double*` | 整数/浮点指针 |
-| `C.XXX` | `XXX*` | 结构体指针（默认，如 `C.FILE` → `FILE*`） |
+| `C.void*` | `void*` | 通用指针 |
+| `C.char*` | `char*` | C 字符串指针 |
+| `C.int*` / `C.double*` | `int*` / `double*` | 整数/浮点指针 |
+| `C.XXX` | `XXX` | 结构体值类型 |
+| `C.XXX*` | `XXX*` | 结构体指针（如 `C.Point*` → `Point*`） |
 
 > `C.Type` 注解让 C 边界在函数签名中一目了然，编译器自动处理类型映射，无需手动 `c_int` / `php_int` 转换。
 

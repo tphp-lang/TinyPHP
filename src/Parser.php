@@ -109,12 +109,13 @@ class Parser
             $this->consume(TokenType::SEMICOLON, 'Expected ;');
         }
 
-        // 预处理指令（任意顺序：include/flag/callback/debug 可混合出现）
+        // 预处理指令（任意顺序：include/flag/callback/cstruct/debug 可混合出现）
         $includes = [];
         $ccFlags = [];
         $callbacks = [];
+        $cstructs = [];
         $debugs  = [];
-        while ($this->check(TokenType::HASH_INCLUDE) || $this->check(TokenType::HASH_IMPORT) || $this->check(TokenType::CC_FLAG) || $this->check(TokenType::HASH_CALLBACK) || $this->check(TokenType::HASH_DEBUG)) {
+        while ($this->check(TokenType::HASH_INCLUDE) || $this->check(TokenType::HASH_IMPORT) || $this->check(TokenType::CC_FLAG) || $this->check(TokenType::HASH_CALLBACK) || $this->check(TokenType::HASH_CSTRUCT) || $this->check(TokenType::HASH_DEBUG)) {
             if ($this->match(TokenType::HASH_INCLUDE)) {
                 $includes[] = $this->previous()->literal;
             } elseif ($this->match(TokenType::HASH_IMPORT)) {
@@ -123,6 +124,8 @@ class Parser
                 $ccFlags[] = $this->previous()->literal;
             } elseif ($this->match(TokenType::HASH_CALLBACK)) {
                 $callbacks[] = $this->previous()->literal;
+            } elseif ($this->match(TokenType::HASH_CSTRUCT)) {
+                $cstructs[] = $this->previous()->literal;
             } elseif ($this->match(TokenType::HASH_DEBUG)) {
                 if ($this->debugMode) {
                     $debugs[] = $this->previous()->lexeme;
@@ -186,6 +189,8 @@ class Parser
                 $this->error('#flag must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_CALLBACK)) {
                 $this->error('#callback must be placed at the top of the file (before namespace/use/class/function declarations)');
+            } elseif ($this->check(TokenType::HASH_CSTRUCT)) {
+                $this->error('#cstruct must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_IMPORT)) {
                 $this->error('#import must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_DEBUG)) {
@@ -195,7 +200,7 @@ class Parser
             }
         }
 
-        return new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums, $includes, $ccFlags, $callbacks, $debugs);
+        return new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums, $includes, $ccFlags, $callbacks, $debugs, $cstructs);
     }
 
     // ============================================================
@@ -1304,7 +1309,7 @@ class Parser
         // IDENTIFIER 开头: ClassName $x = ... 或 C.Type $x = ...
         if ($t1->type === TokenType::IDENTIFIER && !str_starts_with($t1->lexeme, '$')) {
             $t2 = $this->peek(1);
-            // C.Type $x = ...
+            // C.Type $x = ... （支持 C.int* $x, C.void* $x 等指针后缀）
             // 注意: C.int/C.float 等的 int/float 是 TYPE_* 关键字，不是 IDENTIFIER
             if ($t2->type === TokenType::DOT) {
                 $t3 = $this->peek(2);
@@ -1315,9 +1320,13 @@ class Parser
                     TokenType::TYPE_VOID,
                 ];
                 if (!in_array($t3->type, $validCTypeTokens, true)) return false;
-                $t4 = $this->peek(3);
-                return $t4->type === TokenType::IDENTIFIER
-                    && str_starts_with($t4->lexeme, '$');
+                // 跳过指针后缀 *: C.int* $x, C.char** $x
+                $i = 3;
+                while ($this->peek($i)->type === TokenType::STAR) {
+                    $i++;
+                }
+                return $this->peek($i)->type === TokenType::IDENTIFIER
+                    && str_starts_with($this->peek($i)->lexeme, '$');
             }
             // ClassName $x = ...
             if ($t2->type === TokenType::IDENTIFIER && str_starts_with($t2->lexeme, '$')) {
@@ -1641,6 +1650,11 @@ class Parser
                 TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
             ];
             if (in_array($nextType->type, $typeTokens, true)) {
+                return $this->setPos($this->parseCastExpr(), $line, $col);
+            }
+            // (C.XXX) cast — C 类型转换: (C.void*)$x, (C.char*)$buf, (C.int)$n
+            if ($nextType->type === TokenType::IDENTIFIER && $nextType->lexeme === 'C'
+                && $this->peek(2)->type === TokenType::DOT) {
                 return $this->setPos($this->parseCastExpr(), $line, $col);
             }
             // 括号分组: ( expr )
@@ -1970,6 +1984,18 @@ class Parser
         $this->consume(TokenType::LPAREN, 'Expected (');
         $typeToken = $this->advance();
         $castType = $typeToken->lexeme; // int, float, string, bool, array
+        // C.XXX cast: C.void*, C.char*, C.int, C.FILE 等（支持 * 指针后缀）
+        if ($typeToken->type === TokenType::IDENTIFIER && $typeToken->lexeme === 'C'
+            && $this->check(TokenType::DOT)) {
+            $this->advance(); // 消费 .
+            $subType = $this->advance()->lexeme;
+            $castType = 'C.' . $subType;
+            // 支持指针后缀: (C.void*), (C.char**)
+            while ($this->check(TokenType::STAR)) {
+                $this->advance();
+                $castType .= '*';
+            }
+        }
         $this->consume(TokenType::RPAREN, 'Expected )');
         $expr = $this->parseUnary(); // parseUnary 支持 (int)-2 这种负数字面量
         return $this->setPos(new CastExpr($castType, $expr), $line, $col);
@@ -2038,10 +2064,11 @@ class Parser
         }
         $result = $typeToken->lexeme;
 
-        // C 类型: C.IDENTIFIER（如 C.FILE, C.int, C.char_ptr, C.void_ptr）
+        // C 类型: C.IDENTIFIER（如 C.FILE, C.int, C.int*, C.void*）
         // 借鉴 vlang 的 C.TypeName 命名空间前缀设计
         // 注意: C.int/C.float/C.string/C.bool 中的 int/float/string/bool 是 TYPE_* 关键字，
         // 不是 IDENTIFIER，需要单独接受
+        // 支持 C.int* => int*, C.char* => char* 等指针类型（* 可多个）
         if ($result === 'C' && $this->check(TokenType::DOT)) {
             $this->advance(); // 消费 '.'
             $memberToken = $this->advance();
@@ -2054,7 +2081,13 @@ class Parser
             if (!in_array($memberToken->type, $validCTypeTokens, true)) {
                 $this->error("Expected C type name after 'C.', got '{$memberToken->lexeme}'");
             }
-            return 'C.' . $memberToken->lexeme;
+            $result = 'C.' . $memberToken->lexeme;
+            // 支持 C.int* => int*, C.char** => char** 等指针后缀
+            while ($this->check(TokenType::STAR)) {
+                $this->advance();
+                $result .= '*';
+            }
+            return $result;
         }
 
         // union type: int|string|bool
