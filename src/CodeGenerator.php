@@ -616,12 +616,12 @@ class CodeGenerator implements ASTVisitor
         $order = [
             self::SEC_HEADER,
             self::SEC_INCLUDES,
-            self::SEC_CAPTYPES,
+            self::SEC_CLSFWDS,    // 类 struct + 前置声明（须在 CAPTYPES 之前，捕获结构体引用用户类类型）
+            self::SEC_CAPTYPES,   // 闭包捕获 struct（可能引用用户类）
             self::SEC_FWDDECLS,
             self::SEC_THUNKVARS,
             self::SEC_CONSTS,
             self::SEC_ENUMS,
-            self::SEC_CLSFWDS,
             self::SEC_FUNCFWDS,
             self::SEC_CLSIMPL,
             self::SEC_FUNCIMPL,
