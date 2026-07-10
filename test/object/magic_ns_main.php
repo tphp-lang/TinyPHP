@@ -2,7 +2,7 @@
 #debug FUNC=greet
 #debug NS=Demo\Sub
 #debug FUNC=helper
-#debug METHOD=tphp_na_Demo_Sub_tphp_class_Util::helper
+#debug METHOD=Demo\Sub\Util::helper
 #debug NS=Demo\Sub
 
 use function Demo\Sub\greet;

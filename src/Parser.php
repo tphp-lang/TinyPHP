@@ -698,10 +698,10 @@ class Parser
         if ($t3->type !== TokenType::IDENTIFIER) return false;
         if (!str_starts_with($t3->lexeme, '$')) return false;
         $t4 = $this->peek($off + 2);
-        return in_array($t4->type, [TokenType::SEMICOLON, TokenType::EQUALS], true);
+        return in_array($t4->type, [TokenType::SEMICOLON, TokenType::EQUALS, TokenType::LBRACE], true);
     }
 
-    /** 属性声明: visibility type $name (= expr)? ; */
+    /** 属性声明: visibility type $name (= expr)? ;  或带 hook: visibility type $name { get => expr; set => expr; } */
     private function parsePropertyDecl(): PropertyDeclNode
     {
         $vis = $this->parseVisibility();
@@ -711,8 +711,45 @@ class Parser
         if ($this->match(TokenType::EQUALS)) {
             $default = $this->parseExpr();
         }
-        $this->consume(TokenType::SEMICOLON, 'Expected ;');
-        return new PropertyDeclNode($name, $type, $vis, $default);
+
+        // Property Hook: { get => expr; set => expr; }
+        $hooks = [];
+        if ($this->check(TokenType::LBRACE)) {
+            $hooks = $this->parsePropertyHooks();
+        } else {
+            $this->consume(TokenType::SEMICOLON, 'Expected ;');
+        }
+
+        return new PropertyDeclNode($name, $type, $vis, $default, $hooks);
+    }
+
+    /** 解析 Property Hook 体: { get => expr; | get { stmts } set => expr; | set { stmts } } */
+    private function parsePropertyHooks(): array
+    {
+        $this->consume(TokenType::LBRACE, 'Expected {');
+        $hooks = [];
+        while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+            $kindTok = $this->consume(TokenType::IDENTIFIER, 'Expected get or set in property hook');
+            $kind = strtolower($kindTok->lexeme);
+            if ($kind !== 'get' && $kind !== 'set') {
+                $this->error("Expected 'get' or 'set' in property hook, got '{$kindTok->lexeme}'");
+            }
+
+            if ($this->match(TokenType::DOUBLE_ARROW)) {
+                // 短形式: get => expr;
+                $expr = $this->parseExpr();
+                $this->consume(TokenType::SEMICOLON, 'Expected ; after hook expression');
+                $hooks[] = new PropertyHook($kind, $expr, []);
+            } else {
+                // 块形式: get { stmts }
+                $this->consume(TokenType::LBRACE, 'Expected { for hook body');
+                $body = $this->parseBlock();
+                $this->consume(TokenType::RBRACE, 'Expected } after hook body');
+                $hooks[] = new PropertyHook($kind, null, $body);
+            }
+        }
+        $this->consume(TokenType::RBRACE, 'Expected } after property hooks');
+        return $hooks;
     }
 
     // ============================================================
@@ -835,6 +872,10 @@ class Parser
         // 使用 parseExpr 而非 parsePrimary，允许 `= 1 + 2`、`= CONST`、`= $a ?? 'x'` 等
         $default = null;
         if ($this->match(TokenType::EQUALS)) {
+            // PHP 8.4+ 弃用隐式 nullable，TinyPHP 不支持 ?callable，故 callable 不允许默认值
+            if ($type === 'callable') {
+                $this->error("callable parameter '\${$varName}' cannot have a default value (PHP 8.4+ deprecated implicit nullable; TinyPHP does not support ?callable)");
+            }
             $default = $this->parseExpr();
         }
         return new ParamNode($type, $varName, $byRef, $default);
@@ -1243,6 +1284,13 @@ class Parser
         $line = $this->previous()->line;
         $col  = $this->previous()->column;
 
+        // yield from expr  — 委托子生成器/可迭代对象
+        if ($this->check(TokenType::IDENTIFIER) && $this->peek()->lexeme === 'from') {
+            $this->advance();
+            $inner = $this->parseExpr();
+            return $this->setPos(new YieldFromExpr($inner), $line, $col);
+        }
+
         // yield;  或  yield)  →  yield NULL
         if ($this->check(TokenType::SEMICOLON) || $this->check(TokenType::RPAREN)
             || $this->check(TokenType::COMMA)  || $this->check(TokenType::RBRACKET)) {
@@ -1385,7 +1433,18 @@ class Parser
 
     private function parseExpr(): ExprNode
     {
-        return $this->parseTernary();
+        return $this->parsePipe();
+    }
+
+    // pipe operator: left |> right （优先级低于 ?:，左结合）
+    private function parsePipe(): ExprNode
+    {
+        $left = $this->parseTernary();
+        while ($this->match(TokenType::PIPE_GT)) {
+            $right = $this->parseTernary();
+            $left = $this->setPos(new PipeExpr($left, $right), $left->line, $left->column);
+        }
+        return $left;
     }
 
     // ?: ternary （优先级最低，右结合）
@@ -1962,7 +2021,13 @@ class Parser
         $args = [];
         if (!$this->check(TokenType::RPAREN)) {
             do {
-                $args[] = $this->parseExpr();
+                // `...` 参数占位符（pipe operator 上下文使用）
+                if ($this->check(TokenType::DOT) && $this->peek(1)->type === TokenType::DOT && $this->peek(2)->type === TokenType::DOT) {
+                    $this->advance(); $this->advance(); $this->advance();
+                    $args[] = $this->setPos(new PlaceholderExpr(), $this->peek()->line, $this->peek()->column);
+                } else {
+                    $args[] = $this->parseExpr();
+                }
             } while ($this->match(TokenType::COMMA) && !$this->check(TokenType::RPAREN));
         }
         return $args;

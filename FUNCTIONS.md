@@ -846,6 +846,8 @@ $byte = exif_rd_byte($fp_int, $offset);  // 内部 phpc_int_to_ptr 转回 void*
 | `parent::method()` | `&self->_parent` + 父类函数名 | — |
 | `__CLASS__ / __METHOD__` | 编译期字符串常量 | — |
 | `__destruct` | 作用域结束自动 `tp_obj_release` | 池回收 |
+| Property Hook `public string $x { get => ...; set => ...; }` | 编译为 `static type cn_get_x(cn*)` / `static void cn_set_x(cn*, type)` | hook 体内 `$this->x` 直接访问 backing field；短形式 `set => expr;` 中 `$value` 为新值；支持继承 |
+| Pipe Operator `$x \|> f(...)` | 纯语法糖 → `f($x)` | `...` 占位符控制参数位置；无占位符时追加为末尾参数；支持链式和可调用变量 |
 
 ### Resource 类型
 
@@ -878,6 +880,7 @@ $byte = exif_rd_byte($fp_int, $offset);  // 内部 phpc_int_to_ptr 转回 void*
 |------|------|------|
 | `yield $v` | 产出值 | `yield 42;` |
 | `yield $k => $v` | 产出键值对 | `yield "a" => 10;` |
+| `yield from $gen` | 委托子生成器或 array，透传其所有值；返回子生成器的 return 值 | `$r = yield from inner();` |
 | `return $v;` | 生成器返回值（配合 `getReturn()`） | `return 99;` |
 | `$g->send($v)` | 向 yield 表达式发送值，返回下一个 yield 值 | `$g->send(100)` |
 
@@ -1169,6 +1172,17 @@ $tid = Thread::id();
 |------|----------|
 | 动态执行 | `eval()`, `create_function()`, `assert($str)` |
 | 动态调用 | `call_user_func`, `$fn()`, `$obj->$method()` |
-| 符号表 | `$$var`, `compact()`, `extract()`, `get_defined_vars()` |
-| 反射 | `Reflection*`, `debug_backtrace()`, `func_get_args()` |
+| 符号表 | `$$var`, `${expr}`, `compact()`, `extract()`, `get_defined_vars()` |
+| 反射 | `Reflection*`, `debug_backtrace()`, `debug_print_backtrace()` |
 | 回调注册 | `set_error_handler`, `register_shutdown_function`, `ob_start($cb)` |
+| 动态引入 | `include`, `require`, `include_once`, `require_once` |
+| 动态参数（定参） | `func_get_args()`, `func_num_args()`, `func_get_arg($i)`（仅在定参函数中不可行；可变参数函数 `...$args` 中可支持，参数编译为 `t_array*`） |
+
+## AOT 可行但未实现
+
+以下语法 AOT 物理可行（编译期信息完整），尚未实现，属于待办：
+
+| 语法 | PHP 版本 | 说明 |
+|------|---------|------|
+| 表达式位置 `match` | 8.4 | 已有 `match` 语句，仅需放开表达式上下文 |
+| `as` 类型转换表达式 | 8.4 | 编译期已知类型，类似已有强制转换 |

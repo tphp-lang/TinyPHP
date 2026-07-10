@@ -1,11 +1,11 @@
 <?php
 #debug FUNC=main
-#debug METHOD=tphp_class_Main::main
+#debug METHOD=Main::main
 #debug NS=[]
 #debug FUNC=doWork
 #debug NS=[]
 #debug FUNC=helper
-#debug METHOD=tphp_class_Util::helper
+#debug METHOD=Util::helper
 #debug NS=[]
 
 function doWork(): void {

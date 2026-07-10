@@ -313,6 +313,7 @@ class Lexer
             '??' => TokenType::QUEST_QUEST,
             '<<' => TokenType::LT_LT,
             '>>' => TokenType::GT_GT,
+            '|>' => TokenType::PIPE_GT,
         ];
         // 三字符运算符 (必须在两字符之前检查): === !== ?->
         $three = $ch . $this->peek(1) . $this->peek(2);

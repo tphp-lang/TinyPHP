@@ -135,6 +135,7 @@ enum TokenType: string
     case OR_OR        = '||';
     case AMP          = '&';
     case PIPE         = '|';
+    case PIPE_GT      = '|>';
     case CARET        = '^';
     case TILDE        = '~';
     case LT_LT        = '<<';

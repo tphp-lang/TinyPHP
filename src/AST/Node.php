@@ -96,20 +96,33 @@ class ClassNode extends ASTNode
     }
 }
 
-// 属性声明: public int $a = 10;
+// 属性声明: public int $a = 10;  或带 hook: public int $a { get => ...; set => ...; }
 class PropertyDeclNode extends ASTNode
 {
+    /** @param PropertyHook[] $hooks */
     public function __construct(
         public readonly string $name,         // $a
         public readonly string $type,          // int
         public readonly string $visibility,    // public | private
         public readonly ?ExprNode $default,   // 默认值（可为 null）
+        public readonly array $hooks = [],    // PropertyHook[]
     ) {}
 
     public function accept(ASTVisitor $visitor): string
     {
         return $visitor->visitPropertyDecl($this);
     }
+}
+
+// Property Hook: get => expr;  或  set { stmts }
+class PropertyHook
+{
+    /** @param StmtNode[] $body 块形式体（expr 为 null 时使用） */
+    public function __construct(
+        public readonly string $kind,         // 'get' | 'set'
+        public readonly ?ExprNode $expr,      // 短形式: get => expr
+        public readonly array $body = [],     // 块形式: get { stmts }
+    ) {}
 }
 
 // public function name(params): returnType { body }
@@ -723,6 +736,43 @@ class YieldExpr extends ExprNode
     }
 }
 
+// yield from expr  — 委托子生成器/可迭代对象
+class YieldFromExpr extends ExprNode
+{
+    public function __construct(
+        public readonly ExprNode $expr,  // 被委托的表达式（Generator 或 array）
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitYieldFromExpr($this);
+    }
+}
+
+// pipe operator: left |> right
+// right 通常是 CallExpr（含 PlaceholderExpr 占位符）或闭包
+class PipeExpr extends ExprNode
+{
+    public function __construct(
+        public readonly ExprNode $left,   // 管道左侧值
+        public readonly ExprNode $right,  // 管道右侧 callable（CallExpr / ClosureExpr / VariableExpr）
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitPipeExpr($this);
+    }
+}
+
+// 参数占位符 `...`（仅在 pipe 上下文使用，表示左侧值的插入位置）
+class PlaceholderExpr extends ExprNode
+{
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitPlaceholderExpr($this);
+    }
+}
+
 // 变量
 class VariableExpr extends ExprNode
 {
@@ -932,6 +982,7 @@ interface ASTVisitor
     public function visitArrayLiteral(ArrayLiteralExpr $node): string;
     public function visitClosure(ClosureExpr $node): string;
     public function visitYieldExpr(YieldExpr $node): string;
+    public function visitYieldFromExpr(YieldFromExpr $node): string;
     public function visitUnary(UnaryExpr $node): string;
     public function visitPostfix(PostfixExpr $node): string;
     public function visitCompoundAssign(CompoundAssignExpr $node): string;
@@ -954,4 +1005,6 @@ interface ASTVisitor
     public function visitThrowStmt(ThrowStmtNode $node): string;
     public function visitLabelStmt(LabelStmtNode $node): string;
     public function visitContinueStmt(ContinueStmtNode $node): string;
+    public function visitPipeExpr(PipeExpr $node): string;
+    public function visitPlaceholderExpr(PlaceholderExpr $node): string;
 }

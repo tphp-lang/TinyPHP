@@ -83,9 +83,10 @@ class C {
 |------|--------|------|
 | 动态代码 | `eval()` `assert()` `create_function()` | 无解释器 |
 | 动态调用 | `$fn()` `$obj->$m()` `call_user_func()` | 编译时不知名 |
-| 变量变量 | `$$var` `compact()` `extract()` | 无运行时符号表 |
-| 运行时内省 | `Reflection*` `debug_backtrace()` `get_defined_vars()` | 无 |
-| 动态引入 | `include` `require` | 无运行时文件加载 |
+| 变量变量 | `$$var` `${expr}` `compact()` `extract()` | 无运行时符号表 |
+| 运行时内省 | `Reflection*` `debug_backtrace()` `get_defined_vars()` | 无运行时符号表/栈帧 |
+| 动态参数（定参函数） | `func_get_args()` `func_num_args()` `func_get_arg($i)` | 定参已固化为 C 形参，无统一参数容器 |
+| 动态引入 | `include` `require` `include_once` `require_once` | 无运行时文件加载 |
 | 魔术方法 | `__call` `__get` `__set` `__callStatic` | 无动态分发 |
 | 可空 | `?int` | 不做（破坏类型固定优势） |
 | 联合类型 | `int\|string` | ✅ 已支持（映射到 `mixed`/`t_var`） |
@@ -152,7 +153,7 @@ class_decl:
 modifier:
     'abstract'      ✅
   | 'final'         ✅ (仅修饰符，无运行时检查)
-  | 'readonly'      ✅ (仅修饰符)
+  | 'readonly'      ⬜ (keyword 已定义但未消费，`readonly class`/`readonly` 属性均未实现)
 
 extends:
     'extends' name   ✅
@@ -172,10 +173,26 @@ member:
 
 ```
 property_decl:
-    visibility 'static'? 'readonly'? type IDENTIFIER ';'            ✅ (type required)
-  | visibility 'static'? 'readonly'? type IDENTIFIER '=' expr ';'  ✅ (type required)
+    visibility 'static'? type IDENTIFIER ';'            ✅ (type required)
+  | visibility 'static'? type IDENTIFIER '=' expr ';'  ✅ (type required)
+  | visibility type IDENTIFIER '{' hook+ '}'           ✅ (Property Hook, PHP 8.4)
+
+property_hook:
+    'get' '=>' expr ';'        ✅ (短形式 get)
+  | 'get' '{' stmt* '}'        ✅ (块形式 get)
+  | 'set' '=>' expr ';'        ✅ (短形式 set, $value 为新值)
+  | 'set' '{' stmt* '}'        ✅ (块形式 set, $value 为新值)
 
 > 属性和构造器属性提升**必须**写类型声明，`public $x` 会被拒绝。
+> **Property Hook**（PHP 8.4）：`public string $name { get => strtoupper($this->name); set => strtolower($value); }`
+> - hook 体内 `$this->prop` 直接访问 backing field（避免递归）
+> - 短形式 `set => expr;` 中 `$value` 代表赋入的新值，`expr` 计算结果存入 backing field
+> - 块形式 `set { stmts }` 中需自行执行 `$this->prop = $value;`
+> - 编译为 `static type cn_get_prop(cn* self)` / `static void cn_set_prop(cn* self, type value)` 方法
+> - 属性访问 `$obj->prop` 和赋值 `$obj->prop = val` 自动改写为 getter/setter 调用
+> - 支持继承：子类访问父类的 hooked 属性时，调用父类的 getter/setter
+> ⚠️ **`static` 属性**：语法上接受 `public static int $x = 0;`，但 `static` 标志当前会丢失（编译为实例属性）。仅内置类（Thread/Parallel/Enum）支持真正的静态调用。
+> ⚠️ **`readonly` 属性**：未实现，`readonly` keyword 会被解析器拒绝。
 
 visibility:
     'public'    ✅
@@ -191,10 +208,16 @@ type:
   | 'never'     ✅
   | 'mixed'     ✅ → t_var
   | 'callable'  ✅ → t_callback
+  | 'self'      ✅ (返回类型/参数类型，解析为当前类 CName)
   | name        ✅ (类/枚举类型)
+  | 'true'      ⬜ (字面量类型，PHP 8.2+，未实现)
+  | 'false'     ⬜ (字面量类型，PHP 8.2+，未实现)
+  | 'null'      ⬜ (字面量类型，PHP 8.2+，未实现)
+  | 'static'    ⬜ (返回类型，PHP 8.0+，未实现；self 已支持)
   | '?' type    ❌ 不做（AOT 哲学冲突，鼓励 t_var=丢性能）
   | type '|' type   ❌ 不做
   | '(' type (',' type)+ ')'   ⬜ (intersection types)
+  | type '&' type   ⬜ (DNF 类型交集，PHP 8.2+，未实现)
 ```
 
 ### 3.2 方法
@@ -280,7 +303,7 @@ param:
 > 默认值参数规则：有默认值的参数必须放在参数列表末尾，与 PHP 原生一致。
 > 编译器会为每个默认值参数生成重载函数，调用时自动选择正确版本。
 > 默认值支持任意常量表达式（算术、位运算、字符串拼接、括号等），如 `= 1 + 2`、`= "a" . "b"`、`= 0xFF | 0x10`。
-> 支持类型：`int`、`float`、`string`、`bool`。不支持 `callable` 类型作为默认值。
+> 支持类型：`int`、`float`、`string`、`bool`、`array`。不支持 `callable` 类型作为默认值（PHP 8.4+ 弃用隐式 nullable，TinyPHP 不支持 `?callable`）。
 
 ---
 
@@ -309,6 +332,8 @@ statement:
   | list_destructure           ✅ (含键名 "key"=>$var)
   | unset_stmt                 ✅
   | block                      ✅
+  | 'static' type '$' IDENTIFIER '=' expr ';'  ⬜ (静态局部变量，未实现)
+  | 'const' type? IDENTIFIER '=' expr ';'      ⬜ (函数内常量，PHP 8.3+，未实现)
 ```
 
 ### 7.1 具体语法
@@ -375,6 +400,7 @@ throw_stmt:
 ```
 expr:
     yield_expr       ✅
+  | pipe_expr        ✅
   | ternary_expr     ✅
   | logical_or       ✅
   | logical_and      ✅
@@ -398,11 +424,21 @@ ternary_expr:
   | expr '?:' expr           ✅
   | coalesce_expr            ✅
 
+pipe_expr:
+    ternary_expr                  ✅
+  | pipe_expr '|>' ternary_expr   ✅ (左结合，优先级低于 ?:)
+
+> Pipe Operator `|>`：纯语法糖，`$x |> f(...)` 等价于 `f($x)`。
+> - 右操作数为函数调用时，`...` 占位符决定参数插入位置：`$x |> f(..., $arg)` → `f($x, $arg)`
+> - 右操作数为函数调用且无 `...` 时，左操作数追加为末尾参数：`$x |> f($arg)` → `f($arg, $x)`
+> - 右操作数为可调用变量时，等价于闭包调用：`$x |> $callback` → `$callback($x)`
+> - 支持链式：`$x |> f(...) |> g(...)` → `g(f($x))`
+
 yield_expr:
     'yield' expr                       ✅ (yield value)
   | 'yield' expr '=>' expr             ✅ (yield key => value)
   | 'yield'                            ✅ (yield null)
-  | 'yield' 'from' expr                ⬜ (yield from 委托，待实现)
+  | 'yield' 'from' expr                ✅ (yield from 委托 Generator 或 array)
 
 > Generator 函数返回 `Generator` 类型，基于 minicoro 库（stackless 协程）。
 > 支持 `current()` / `send()` / `next()` / `getReturn()` 等方法。
@@ -474,8 +510,11 @@ postfix:
 ```
 primary:
     INT_LIT          ✅ → t_int(int64_t)
+       └─ 支持十进制 / 0x十六进制 / 0b二进制 / 0o八进制 / 下划线分隔 1_000_000
   | FLOAT_LIT        ✅ → t_float(double)
+       └─ 支持小数 / 科学计数法 1e10 1.5E-3 / 下划线分隔 3_14.15_92
   | STRING_LIT       ✅ → t_string
+       └─ 支持单引号 / 双引号(插值) / heredoc <<<EOT ... EOT; / nowdoc <<<'EOT' ... EOT;
   | TRUE_KW          ✅ → true
   | FALSE_KW         ✅ → false
   | NULL_KW          ✅ → null
@@ -491,14 +530,20 @@ primary:
   | '(' expr ')'     ✅
   | '(' cast_type ')' expr          ✅ ((int)/(float)/(string)/(bool)/(C.XXX))
   | 'array' '(' args ')'            ✅
-  | '[' args ']'                    ✅
+  | '[' args ']'                    ✅ (支持尾逗号)
   | 'new' name '(' args ')'         ✅
   | 'function' '(' params ')' body  ✅ (闭包)
-  | 'fn' '(' typed_params ')' ':' type '=>' expr   ✅ (箭头函数，强制参数+返回类型)
+  | 'fn' '(' typed_params ')' ':' type '=>' expr        ✅ (箭头函数单表达式，强制参数+返回类型)
+  | 'fn' '(' typed_params ')' ':' type '=>' '{' stmts '}' ✅ 🔧 TinyPHP 扩展（块体箭头函数，须含 return；void 类型除外）
   | 'match' '(' expr ')' '{' arm* '}' ✅
   | 'list' '(' list_vars ')' '=' expr   ✅
   | '[' list_vars ']' '=' expr           ✅
+  | 'throw' expr                         ⬜ (throw 表达式，PHP 8.0+，未实现)
+  | '...' expr                           ⬜ (数组展开 spread，未实现)
+  | name '(' '...' ')'                   ⬜ (first-class callable strlen(...)，PHP 8.1+，未实现)
 ```
+
+> 🔧 **TinyPHP 箭头函数扩展**：与 PHP 原生 `fn() => expr` 仅支持单表达式不同，TinyPHP 额外支持 `fn(): type => { stmts }` 块体形式，须以 `return` 结尾（`void` 类型除外）。这便于在箭头函数中编写多条语句。
 
 ---
 
@@ -644,31 +689,40 @@ phpc_ptr_bridge:
 |------|------|
 | `if/elseif/else` `while` `do-while` `for` `foreach` `switch` `match` | 全部控制流 |
 | `break/continue/goto` 标签 | — |
-| `class` `extends` `interface` `implements` `trait+use` `abstract` `final` `readonly` | COS struct 嵌套继承 |
+| `class` `extends` `interface` `implements` `trait+use` `abstract` `final` | COS struct 嵌套继承（`readonly` 未实现） |
 | `enum` `enum case` | int/string backing |
 | `try/catch(Exception $e)/finally` `throw` | COS setjmp/longjmp |
-| `function` `closure` `fn =>` `use($x)` | 全部闭包形态 |
-| 完整 15 级运算符优先级 | 含 `<=>` `??` `?:` `?->` `**` `&|^~` `<<>>` |
+| `function` `closure` `fn =>` `fn => {...}` `use($x)` | 全部闭包形态（块体箭头函数为 TinyPHP 扩展） |
+| `yield` `yield from` `Generator` | minicoro stackless 协程，支持 send/getReturn |
+| 完整 15 级运算符优先级 | 含 `<=>` `??` `?:` `?->` `**` `&|^~` `<<>>` `\|>` |
 | `(int)` `(float)` `(string)` `(bool)` 类型转换 | — |
 | `namespace A\B` `use A\{B,C}` `use function A\{f1,f2}` `use A\{B, function f}` | 分组导入 |
 | `list()/$a[] =` 解构 | 含键名 `"key"=>$v` |
 | `int &$x` 引用传参 | 全类型支持（int/float/bool/string/array/对象） |
 | `self::CONST` `Class::CONST` `self::method()` | — |
 | `__construct(public $x)` 属性提升 | — |
+| Property Hook `public string $x { get => ...; set => ...; }` | PHP 8.4，编译为 getter/setter 方法 |
+| Pipe Operator `$x \|> f(...)` | PHP 8.4 RFC，纯语法糖 |
 | `__destruct` | 作用域结束自动调用 |
 | `__LINE__` `__FILE__` `__DIR__` `__CLASS__` `__METHOD__` `__FUNCTION__` `__NAMESPACE__` `DIRECTORY_SEPARATOR` | 编译期替换 |
 | `instanceof` | 遍历类链 |
+| 数字字面量 `0x1F` `0b1010` `0o777` `1_000_000` | 十六/二/八进制 + 下划线分隔 |
+| 浮点字面量 `1e10` `1.5E-3` `3_14.15_92` | 科学计数法 + 下划线分隔 |
+| `<<<EOT ... EOT;` heredoc / `<<<'EOT' ... EOT;` nowdoc | 含 `$var` / `{$var->prop}` 插值 |
+| 函数调用尾逗号 `f(a, b,)` | 参数列表/match arm/use 分组均支持 |
 
 ### 🔧 TinyPHP 独有
 
 | 语法 | 说明 |
 |------|------|
+| `fn(): type => { stmts }` | 块体箭头函数（PHP 原生仅支持单表达式 `fn() => expr`），须以 `return` 结尾（void 除外） |
 | `#include "file.h"` | 嵌入 C 头文件 |
 | `#include <sys.h>` | 系统头文件 |
 | `#flag [CC] [OS] flags` | 编译器/平台过滤链接标志 |
 | `#callback type name(params)` | 声明 C 回调签名 |
 | `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,`$p->field` 原生访问 |
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
+| `#import name` | 按需引入扩展（自动加载 ext/name/src/） |
 | `C->func(args)` | 直接 C 函数调用 |
 | `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
 | `C.Type` | C 类型注解（函数参数/返回值。值类型 `C.int`→`int`/`C.double`→`double`/`C.char`→`char`；定宽 `C.int32`→`int32_t`/`C.uint64`→`uint64_t`；指针 `C.void*`→`void*`/`C.Point*`→`Point*`，用 `*` 后缀） |
@@ -678,21 +732,57 @@ phpc_ptr_bridge:
 | `phpc_arr_*` `phpc_obj` `phpc_new_obj` `phpc_unregister_obj` `phpc_obj_steal` `phpc_fn_*` `phpc_thunk` `phpc_env_pin` `phpc_env_unpin` | 数组/对象/回调互操作 |
 | `phpc_auto` `phpc_free` `phpc_free_str_arr` `phpc_assert_ptr` | C 内存自动管理/释放/安全断言 |
 | `phpc_ptr_to_int` `phpc_int_to_ptr` | 指针↔整数桥接(让 C 指针以 t_int 在 PHP 层流转) |
-| `#import pcntl` | 按需引入扩展（自动加载 ext/pcntl/src/） |
 | `int &$x` | 引用传参（int/float/bool/string/array/对象全类型支持） |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | 多线程 OOP API（tinycthread 封装，Thread-Local 运行时无锁竞争） |
+| `Parallel::for`/`Parallel::map` | 数据并行（连续分片，线程失败降级为内联执行） |
 
 ### ❌ 不支持（AOT 物理不可行）
 
 | 语法 | 原因 |
 |------|------|
 | `eval()` `assert($str)` `create_function()` | 无运行时解释器 |
-| `$$var` `${expr}` | 编译时不知变量名 |
+| `$$var` `${expr}` | 编译时不知变量名（无运行时符号表） |
+| `compact()` `extract()` `get_defined_vars()` | 依赖运行时符号表 |
 | `$fn()` `$obj->$m()` `call_user_func()` | 编译时不知函数名 |
-| `include` `require` | 无运行时文件加载 |
+| `include` `require` `include_once` `require_once` | 无运行时文件加载 |
 | `__call` `__get` `__set` `__callStatic` | 无动态分发 |
+| `__toString` `__invoke` `__clone` `__debugInfo` `__sleep` `__wakeup` `__serialize` `__unserialize` `__isset` `__unset` `__set_state` | 均需运行时动态分发或序列化运行时支持 |
+| 动态属性 `$obj->dynamicProp = 1` | 类布局编译期固定，无动态属性表（PHP 8.2 已弃用） |
 | `Reflection*` 全系列 | 运行时内省 |
-| `debug_backtrace()` `get_defined_vars()` | 运行时符号表 |
+| `debug_backtrace()` `debug_print_backtrace()` | 运行时栈帧 |
+| `func_get_args()` `func_num_args()` `func_get_arg($i)`（定参函数） | 参数已固化为 C 形参，无统一容器（可变参数函数 `...$args` 中可支持，见下方说明） |
+| `ArrayAccess` 接口语义 | `offsetGet/offsetSet` 需运行时动态分发（`implements ArrayAccess` 仅记录，不生效） |
+| `Iterator` / `IteratorAggregate` 接口语义 | `rewind/valid/next/current/key` 需运行时动态分发（foreach 仅支持 array 和 Generator） |
+| `Stringable` 接口语义 | `__toString` 需运行时动态分发 |
+| `Closure::bind` `->bindTo` `Closure::call` `Closure::fromCallable` | 闭包作用域编译期通过 `use` 固定，无法运行时重绑定 |
+| `__COMPILER_HALT_OFFSET__` | 无运行时文件加载 |
+| `$GLOBALS` 超全局 | 无运行时全局符号表 |
+
+### ⬜ AOT 可行但未实现
+
+以下语法 AOT 物理可行（编译期信息完整，不影响性能），但当前尚未实现，属于待办：
+
+| 语法 | PHP 版本 | 可行原因 | 实现思路 |
+|------|---------|---------|---------|
+| `public string $name { get => ...; set => ...; }` Property Hook | 8.4 | hook 代码编译期已知，纯语法糖 | ✅ 已实现 — 属性访问改写为 getter/setter 方法调用 |
+| `$x \|> f(...)` Pipe Operator | 8.4 RFC | 纯语法糖，等价于 `f($x)` | ✅ 已实现 — 解析为嵌套函数调用，`...` 占位符控制参数位置 |
+| `as` 表达式（模式匹配中的类型转换） | 8.4 | 编译期已知类型 | 类似已有强制转换 |
+| 纯表达式位置 `match` | 8.4 | 已有 `match` 语句，仅需允许表达式上下文 | 复用 `visitMatch` |
+| `static` 属性 / `static` 方法（用户类） | 5.0+ | 编译期已知类名，等价于 C 静态变量/函数 | `PropertyDeclNode`/`MethodNode` 加 `isStatic` 字段，生成 `static` C 变量/函数，调用走 `Class::method()` |
+| `static` 局部变量 `function f() { static $n = 0; }` | 5.0+ | 等价于 C 函数内 `static` 变量，编译期初始化 | `parseStmt` 加 `STATIC_KW` 分支，生成 `static t_int x = init;` |
+| 函数内 `const`（PHP 8.3+） | 8.3 | 编译期常量，等价于文件作用域 `static const` | `parseStmt` 加 `CONST_KW` 分支，提升为函数级 `static const` |
+| `readonly` class / `readonly` 属性 | 8.1/8.2 | 纯编译期检查（赋值后禁止改），无运行时开销 | `parseVisibility` 接受 `readonly`，`AssignStmt` 检查是否已赋值 |
+| `#[Attribute]` 注解 | 8.0 | 编译期解析存储，无运行时反射需求 | Lexer 识别 `#[`，Parser 解析为 `AttributeNode`（可附加到类/方法/属性） |
+| first-class callable `strlen(...)` | 8.1 | 编译期已知函数名，等价于闭包包装 | Lexer 加 `ELLIPSIS` token，`parsePostfix` 识别 `name(...)` 生成闭包 |
+| `true`/`false`/`null` 字面量类型 | 8.2 | 编译期已知字面值，映射到 `bool`/`null` | `parseType` 接受 `TRUE_KW`/`FALSE_KW`/`NULL_KW` |
+| `static` 返回类型 | 8.0 | 编译期已知当前类名（同 self，但支持后期绑定语义可简化为 self） | `parseType` 接受 `STATIC_KW`，按 self 处理 |
+| DNF/intersection 类型 `A&B` `(A&B)\|C` | 8.2 | 编译期已知类型，可映射到接口 vtable 或 `t_var` | `parseType` 加 `AMP` 交集处理 |
+| `throw` 作为表达式 `$x = throw new E();` | 8.0 | 编译期已知抛出点，等价于语句展开 | `parseExpr` 加 `THROW_KW`，生成 `ThrowExpr` 节点 |
+| 数组展开 `[...$arr1, ...$arr2]` | 7.4 | 编译期展开为 `array_merge` 或逐元素 push | `parseArrayLiteral` 识别 `...` 前缀 |
+
+> ⚠️ 定参 vs 可变参数的 `func_get_args()`：
+> - **定参函数**（`function f(int $a, string $b)`）：参数编译为独立 C 形参 `t_int a, t_string b`，没有统一容器 → `func_get_args()` **不可行**
+> - **可变参数函数**（`function f(...$args)`）：可编译为 `t_array* args` 形参 → `func_get_args()` 直接返回 `args` 即可 → **可行**
 
 ### ❌ 不做（权衡）
 
