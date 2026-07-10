@@ -1993,6 +1993,7 @@ class Parser
             TokenType::NULL_KW, TokenType::TRUE_KW, TokenType::FALSE_KW,
             TokenType::YIELD_KW, // Thread::yield()
             TokenType::SLEEP,    // Thread::sleep()
+            TokenType::FOR_KW,   // Parallel::for()
         ];
         if (!in_array($tok->type, $valid, true)) {
             $this->error("Expected method name, got '{$tok->lexeme}'");

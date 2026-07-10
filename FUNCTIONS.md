@@ -167,7 +167,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
 |------|--------|------|------|
-| `getenv(string $name, bool $local_only = false): string\|false` | `getenv(string $name): string` | libc `getenv()` + 复制到 static 缓冲 | 未找到返回 NULL 串（非 false）；key 截断 255；返回 static 缓冲非线程安全 |
+| `getenv(string $name, bool $local_only = false): string\|false` | `getenv(string $name): string` | libc `getenv()` + 复制到线程局部 `str_pool` | 未找到返回 NULL 串（非 false）；key 截断 255；线程安全（P3-7） |
 | `putenv(string $assignment): bool` | `putenv(string $assignment): void` | 复制到 static 缓冲 + libc `putenv()` | 返回 void（PHP 返回 bool）；key 截断 1023 |
 
 ---
@@ -194,7 +194,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `str_starts_with(string $haystack, string $needle): bool` | `str_starts_with(string $haystack, string $needle): bool` | 单次 `memcmp` 前缀，O(len(needle)) | — |
 | `str_ends_with(string $haystack, string $needle): bool` | `str_ends_with(string $haystack, string $needle): bool` | 单次 `memcmp` 后缀，O(len(needle)) | — |
 | `ord(string $string): int` | `ord(string $string): int` | 返回首字节 `(unsigned char)`，O(1) | 空串返回 `0` |
-| `chr(int $codepoint): string` | `chr(int $codepoint): string` | static `_chr[2]={n&0xFF,0}`，O(1) | 返回 static 缓冲非线程安全 |
+| `chr(int $codepoint): string` | `chr(int $codepoint): string` | `str_pool_alloc(2)` 写入字节，O(1) | 线程安全（P3-7） |
 
 ### 转换 / 格式化
 
@@ -397,9 +397,9 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `bindec(string $binary_string): int` | `bindec(string $binary_string): int` | `strtoll(s, NULL, 2)`，O(1) | 空串/NULL 返回 `0` |
 | `hexdec(string $hex_string): int` | `hexdec(string $hex_string): int` | `strtoll(s, NULL, 16)`，O(1) | 用 `strtoll`（PHP 用 `strtoull` 防溢出） |
 | `octdec(string $octal_string): int` | `octdec(string $octal_string): int` | `strtoll(s, NULL, 8)`，O(1) | — |
-| `decbin(int $num): string` | `decbin(int $num): string` | static buf 逐位写后反转，O(1) | 返回 static 缓冲非线程安全 |
-| `decoct(int $num): string` | `decoct(int $num): string` | `snprintf("%llo")`，O(1) | static 缓冲；按无符号处理 |
-| `dechex(int $num): string` | `dechex(int $num): string` | `snprintf("%llx")`，O(1) | static 缓冲；按无符号处理；小写 |
+| `decbin(int $num): string` | `decbin(int $num): string` | `str_pool_alloc(72)` 逐位写后反转，O(1) | 线程安全（P3-7） |
+| `decoct(int $num): string` | `decoct(int $num): string` | `str_pool_alloc(32)` + `snprintf("%llo")`，O(1) | 线程安全（P3-7）；按无符号处理 |
+| `dechex(int $num): string` | `dechex(int $num): string` | `str_pool_alloc(32)` + `snprintf("%llx")`，O(1) | 线程安全（P3-7）；按无符号处理；小写 |
 | `base_convert(string $num, int $from_base, int $to_base): string` | `base_convert(string $num, int $from_base, int $to_base): string` | 大整数堆计算，O(log n) | 精度受 64 字节缓冲限制（约 20 位十进制）；非法字符返回空串 |
 
 ---
@@ -519,7 +519,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `microtime(bool $as_float = false): string\|float` | `microtime(): float` | Win QPC / POSIX `clock_gettime(MONOTONIC)` | 永远返回浮点秒（无 `$as_float` 参数） |
 | `mktime(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): int\|false` | `mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | 日历天数累加法从 1970-01-01 起算 | 6 参数全必填（无默认值）；不归一化越界值 |
 | `strtotime(string $datetime, ?int $baseTimestamp = null): int\|false` | `strtotime(string $datetime): int` | 纯数字直接返回 `time()`；支持 `Y-m-d`/`Y/m/d` 配 `H:i:s` | 仅支持几种绝对格式；不支持相对/自然语言格式；无 `$baseTimestamp` 参数 |
-| `uniqid(string $prefix = "", bool $more_entropy = false): string` | `uniqid(string $prefix): string` | `sprintf "%08lx%05lx", time, rand` | 无 `$more_entropy` 参数；prefix 必填；返回 static buf 非线程安全 |
+| `uniqid(string $prefix = "", bool $more_entropy = false): string` | `uniqid(string $prefix): string` | `str_pool_alloc(48)` + `sprintf "%08lx%05lx", time, rand` | 无 `$more_entropy` 参数；prefix 必填；线程安全（P3-7） |
 
 ---
 
@@ -604,7 +604,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `posix_geteuid(): int` | `posix_geteuid(): int` | `geteuid()` | — |
 | `posix_getgid(): int` | `posix_getgid(): int` | `getgid()` | — |
 | `posix_getegid(): int` | `posix_getegid(): int` | `getegid()` | — |
-| `posix_getcwd(): string\|false` | `posix_getcwd(): string` | `static buf[4096]` + `getcwd()` | 失败返回空 t_string（非 `false`） |
+| `posix_getcwd(): string\|false` | `posix_getcwd(): string` | 栈缓冲 `char buf[4096]` + `getcwd()` + `_mk_str` 深拷贝 | 失败返回空 t_string（非 `false`）；线程安全（P3-7） |
 | `posix_isatty(int $file_descriptor): bool` | `posix_isatty(int $file_descriptor): int` | `isatty()` | 返回 `t_int` 1/0（PHP 返回 bool） |
 | `posix_kill(int $process_id, int $signal): bool` | `posix_kill(int $process_id, int $signal): int` | `kill()` | — |
 | `posix_strerror(int $error_code): string` | `posix_strerror(int $error_code): string` | `strerror()` | — |

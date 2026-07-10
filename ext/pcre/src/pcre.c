@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ext_str.h"
+#include "compat/tinycthread.h"   // mtx_t — tp_cache 线程安全锁
 
 #define tp_mk_str(s) ext_mk_str(s)
 #define tp_mk_substr(src, start, end) ext_mk_substr(src, start, end)
@@ -1257,33 +1258,47 @@ typedef struct {
 static tp_cache_entry tp_cache[TP_CACHE_SIZE];
 static int tp_cache_clock = 0;
 
+// 线程安全：mtx 保护 lookup + compile + insert，防止数据结构损坏和重复编译
+static mtx_t tp_cache_lock;
+static int tp_cache_lock_inited = 0;
+
 static tp_regex *tp_get_or_compile(t_string pattern) {
+    // 懒初始化锁（首次调用通常在主线程单线程阶段，竞态可接受）
+    if (!tp_cache_lock_inited) {
+        mtx_init(&tp_cache_lock, mtx_plain);
+        tp_cache_lock_inited = 1;
+    }
+
     const char *key = STR_PTR(pattern);
     int key_len = pattern.length;
+
+    mtx_lock(&tp_cache_lock);
 
     // Search cache
     for (int i = 0; i < TP_CACHE_SIZE; i++) {
         if (tp_cache[i].used && tp_cache[i].key != NULL
             && tp_cache[i].key_len == key_len
             && memcmp(tp_cache[i].key, key, key_len) == 0) {
-            return tp_cache[i].regex;
+            tp_regex *r = tp_cache[i].regex;
+            mtx_unlock(&tp_cache_lock);
+            return r;
         }
     }
 
     // Parse delimiters
     tp_parsed_pattern pp = tp_parse_delimiters(pattern);
-    if (!pp.valid) return NULL;
+    if (!pp.valid) { mtx_unlock(&tp_cache_lock); return NULL; }
 
     // Copy pattern to ensure it's valid during compilation
     char *pat_copy = (char *)malloc(pp.pat_len + 1);
-    if (!pat_copy) return NULL;
+    if (!pat_copy) { mtx_unlock(&tp_cache_lock); return NULL; }
     memcpy(pat_copy, pp.pattern, pp.pat_len);
     pat_copy[pp.pat_len] = '\0';
 
     tp_regex *r = tp_regex_compile(pat_copy, pp.pat_len,
                                     pp.ignore_case, pp.multiline, pp.dot_all);
     free(pat_copy);
-    if (!r) return NULL;
+    if (!r) { mtx_unlock(&tp_cache_lock); return NULL; }
 
     // Cache it
     int slot = tp_cache_clock;
@@ -1311,6 +1326,7 @@ static tp_regex *tp_get_or_compile(t_string pattern) {
     }
     tp_cache[slot].regex = r;
 
+    mtx_unlock(&tp_cache_lock);
     return r;
 }
 

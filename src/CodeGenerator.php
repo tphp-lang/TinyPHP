@@ -576,6 +576,14 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_WaitGroup')->methods['add']         = new MethodInfo('void', ['t_int']);
         $this->symbols->getClass('tphp_class_WaitGroup')->methods['done']        = new MethodInfo('void');
         $this->symbols->getClass('tphp_class_WaitGroup')->methods['wait']        = new MethodInfo('void');
+
+        // 内置 Parallel 类（数据并行 API — 纯函数并行）
+        $this->symbols->addClass('tphp_class_Parallel');
+        $this->symbols->addClassName('Parallel', 'tphp_class_Parallel');
+        // for(int $n, callable $fn, int $threads = 0): void — 3 params, 1 default
+        $this->symbols->getClass('tphp_class_Parallel')->methods['for']  = new MethodInfo('void', ['t_int', 't_callback', 't_int'], true, 'public', 1, 3);
+        // map(array $data, callable $fn, int $threads = 0): array — 3 params, 1 default
+        $this->symbols->getClass('tphp_class_Parallel')->methods['map']  = new MethodInfo('t_array*', ['t_array*', 't_callback', 't_int'], true, 'public', 1, 3);
     }
 
     // ── 多段输出方法 ─────────────────────────────────────────

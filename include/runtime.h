@@ -28,7 +28,7 @@ static inline void tphp_rt_init(void) {
     SetConsoleOutputCP(65001); // CP_UTF8
     SetConsoleCP(65001);
 #endif
-#if TPHP_USE_WIN_TLS
+#if TPHP_USE_WIN_TLS || TPHP_USE_PTHREAD_TLS
     tphp_tls_init();  // 初始化主线程 TLS slot
 #endif
     // 预热数组复用池：预分配 16 个空数组，后续 [] 从池 O(1) 获取
@@ -169,9 +169,9 @@ static inline t_bool tphp_rt_str_ne(t_string a, t_string b)  { return tphp_rt_st
 // ── 字符串池 + Arena (bump allocator, 128KB主池 + 链接溢出块) ──
 
 // STR_POOL_SIZE 已在 types.h 中定义（供 tls.h 使用）
-#include "compat/tls.h"  // TCC+Windows 时定义 str_pool_buf 等访问宏
+#include "compat/tls.h"  // TCC+Windows/TCC+macOS 时定义 str_pool_buf 等访问宏
 
-#if !TPHP_USE_WIN_TLS
+#if !TPHP_USE_WIN_TLS && !TPHP_USE_PTHREAD_TLS
 static _Thread_local char  str_pool_buf[STR_POOL_SIZE];
 static _Thread_local char *str_pool_cur = NULL;  /* lazy init in str_pool_alloc */
 #endif
@@ -183,7 +183,7 @@ typedef struct _str_arena_block {
     int    size;
     struct _str_arena_block *next;
 } str_arena_block;
-#if !TPHP_USE_WIN_TLS
+#if !TPHP_USE_WIN_TLS && !TPHP_USE_PTHREAD_TLS
 static _Thread_local str_arena_block *str_arena_head = NULL;
 #endif
 
@@ -361,7 +361,7 @@ typedef struct tphp_rt_alloc {
     struct tphp_rt_alloc *next;
 } tphp_rt_alloc;
 
-#if !TPHP_USE_WIN_TLS
+#if !TPHP_USE_WIN_TLS && !TPHP_USE_PTHREAD_TLS
 static _Thread_local tphp_rt_alloc *tphp_alloc_head = NULL;
 #endif
 
@@ -440,8 +440,8 @@ static inline void tphp_thread_cleanup(void) {
     _obj_freelist_count = 0;
     // 4. 释放 GC 追踪列表（异常安全网）
     tphp_rt_free_all();
-#if TPHP_USE_WIN_TLS
-    // 5. TCC+Windows: 释放 TLS 结构体本身
+#if TPHP_USE_WIN_TLS || TPHP_USE_PTHREAD_TLS
+    // 5. TCC+Windows/TCC+macOS: 释放 TLS 结构体本身
     tphp_tls_destroy();
 #endif
 }

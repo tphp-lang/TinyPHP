@@ -36,8 +36,9 @@
 
 /* TCC on macOS aarch64: _Thread_local 生成错误的 TLS 访问代码，
  * 程序启动时即 segfault（即使不使用多线程）。
- * 退化为普通 static — 变量不真正线程隔离，但避免崩溃。
- * TCC+Windows 通过 tls.h 用 Windows TLS API 兼容（真正隔离）。
+ * 退化为普通 static — 变量不真正线程隔离。
+ * TCC+Windows 和 TCC+macOS 均通过 tls.h 用平台原生 TLS API 实现真正隔离
+ * （Windows: TlsAlloc, macOS: pthread_key_create）。
  * GCC/Clang 保持原生 _Thread_local。 */
 #if defined(__TINYC__) && defined(__APPLE__)
   #define _Thread_local

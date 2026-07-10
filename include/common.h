@@ -12,15 +12,12 @@
 #include "array.h"             // arr_freelist/tphp_fn_arr_* — runtime.h 需要
 #include "runtime.h"           // tphp_fn_error + tphp_thread_cleanup 定义在此
 /* 线程库 — 在 runtime.h 之后引入，使 thread wrapper 能调用 tphp_thread_cleanup()。
- * TCC+macOS: _Thread_local 退化为普通 static（不隔离），子线程 cleanup 会破坏
- *   主线程内存，跳过。TCC+Windows 通过 tls.h 真正隔离，正常 cleanup。 */
-#if defined(__TINYC__) && defined(__APPLE__)
-  #define TPHP_THREAD_CLEANUP() ((void)0)
-#else
-  #define TPHP_THREAD_CLEANUP() tphp_thread_cleanup()
-#endif
+ * 所有平台均启用 cleanup：TCC+Windows 和 TCC+macOS 通过 tls.h 真正隔离，
+ * GCC/Clang 通过原生 _Thread_local 真正隔离。 */
+#define TPHP_THREAD_CLEANUP() tphp_thread_cleanup()
 #include "compat/tinycthread.h"
 #include "object/thread.h"      // Thread/Mutex/CondVar/WaitGroup COS 类
+#include "object/parallel.h"    // Parallel::map/for 数据并行 API
 #include "object/exception.h"   // tphp_class_Exception — tp_throw 需要 (前置以供后续内函数使用)
 #include "object/try.h"         // tp_throw 宏 — 前置以供 rand.h / builtin.h 内函数使用
 #include "rand.h"               // CSPRNG (builtin.h 需要，内部用 tp_throw)

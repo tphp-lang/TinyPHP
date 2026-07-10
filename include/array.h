@@ -313,7 +313,7 @@ static inline void arr_intidx_delete(t_array *a, t_int key) {
  * 前置声明以供 arr_item_str/arr_get_str_str 使用 */
 static inline char* str_pool_alloc(int len);
 
-#if !TPHP_USE_WIN_TLS
+#if !TPHP_USE_WIN_TLS && !TPHP_USE_PTHREAD_TLS
 static _Thread_local t_array*  arr_freelist[ARR_POOL_MAX];
 static _Thread_local int       arr_freelist_count = 0;
 #endif
