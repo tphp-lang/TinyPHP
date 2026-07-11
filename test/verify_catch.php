@@ -1,5 +1,12 @@
 <?php
-// 多 catch 子句 + 按类型捕获验证（临时）
+// 多 catch 子句 + 按类型捕获验证
+#debug 1. caught My: [my error] len=8
+#debug 2. caught Other: other error
+#debug 3. caught base: base error
+#debug 4. caught via base: my error
+#debug 5. caught: my error
+#debug finally
+#debug === multi-catch verify done ===
 
 // 自定义异常子类
 class MyException extends Exception

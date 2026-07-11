@@ -192,7 +192,7 @@ use MyApp\Models\User;
 
 ### 🔢 内置函数
 
-已实现 **277+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+已实现 **281+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ## 独有特性
 

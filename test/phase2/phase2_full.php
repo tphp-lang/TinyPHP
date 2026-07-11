@@ -1,4 +1,14 @@
 <?php
+#debug ===== 1. sha256 =====
+#debug ===== 2. sha512 =====
+#debug ===== 3. base_convert =====
+#debug ===== 4. array_chunk =====
+#debug ===== 5. array_combine =====
+#debug ===== 6. array_count_values =====
+#debug ===== 7. mb_strlen =====
+#debug ===== 8. mb_substr =====
+#debug
+#debug === ALL phase2 tests passed ===
 class Main
 {
     public function main(): void
