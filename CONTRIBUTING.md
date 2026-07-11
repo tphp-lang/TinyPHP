@@ -191,7 +191,7 @@ ExprNode（抽象，含 line/column）
 | **字符串池 + Arena** | 128KB bump allocator + 溢出块链表 | O(1) 分配，批量释放 |
 | **数组复用池** | 128 槽 LIFO | 热路径零 malloc |
 | **对象复用池** | 128 槽 LIFO | new+unset 提速 36-52% |
-| **资源追踪链表** | `tphp_rt_register` / `unregister` | `error()` / `tp_throw` 时遍历释放 |
+| **资源追踪链表** | `tphp_rt_register` / `unregister` | `tp_throw` / `tphp_rt_free_all()` 时遍历释放 |
 | **引用计数** | `tp_obj_retain` / `tp_obj_release` | 归零 → `__destruct` → 回池 |
 
 ### 3.3 ROPE 多片段拼接

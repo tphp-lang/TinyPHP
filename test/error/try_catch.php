@@ -15,7 +15,7 @@
 
 class Main
 {
-    public function validate(int $age): void
+    public function validate(int $age): void|Exception
     {
         if ($age < 0) {
             throw new Exception('age cannot be negative');
@@ -25,7 +25,7 @@ class Main
         }
     }
 
-    public function safeDivide(int $a, int $b): int
+    public function safeDivide(int $a, int $b): int|Exception
     {
         if ($b === 0) {
             throw new Exception('division by zero');

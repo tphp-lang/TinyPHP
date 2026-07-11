@@ -512,6 +512,20 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
     return a;
 }
 
+/** spread 展开: 将 src 的所有元素追加到 dst
+ *  int 键重新索引（append），string 键保留并覆盖 — PHP spread 语义
+ *  提取为函数避免 TCC 对 ({...}) 内嵌 for+realloc 生成错误代码 */
+static inline t_array* tphp_fn_arr_spread(t_array *dst, const t_array *src) {
+    if (unlikely(dst == NULL || src == NULL)) return dst;
+    for (int i = 0; i < src->length; i++) {
+        if (src->entries[i].key.type == TYPE_STRING)
+            dst = tphp_fn_arr_set_str(dst, src->entries[i].key.value._string, src->entries[i].val);
+        else
+            dst = tphp_fn_arr_push(dst, src->entries[i].val);
+    }
+    return dst;
+}
+
 // === Get by int key (returns t_var*) ===
 
 static inline t_var* tphp_fn_arr_get_int(t_array *a, t_int key) {
@@ -667,6 +681,61 @@ static inline t_array* tphp_fn_arr_get_str_arr(t_array *a, t_string key) {
     if (v == NULL) return NULL;
     if (v->type == TYPE_ARRAY) return v->value._array;
     return NULL;
+}
+
+// === Int-key typed getters ===
+//   与 tphp_fn_arr_item_* (positional) 不同，这些函数按键查找，
+//   支持稀疏整数键 (如 $arr[100])。tphp_fn_arr_get_int 内部有连续键快路径。
+
+static inline t_int tphp_fn_arr_get_int_int(t_array *a, t_int key) {
+    t_var *v = tphp_fn_arr_get_int(a, key);
+    if (v == NULL) return 0;
+    if (v->type == TYPE_INT) return v->value._int;
+    if (v->type == TYPE_FLOAT) return (t_int)v->value._float;
+    return 0;
+}
+
+static inline t_float tphp_fn_arr_get_int_float(t_array *a, t_int key) {
+    t_var *v = tphp_fn_arr_get_int(a, key);
+    if (v == NULL) return 0.0;
+    return (v->type == TYPE_FLOAT) ? v->value._float : 0.0;
+}
+
+static inline t_string tphp_fn_arr_get_int_str(t_array *a, t_int key) {
+    t_var *v = tphp_fn_arr_get_int(a, key);
+    if (v == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (v->type == TYPE_STRING) return v->value._string;
+    if (v->type == TYPE_INT) {
+        char *_b = str_pool_alloc(32);
+        if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
+        int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
+        return (t_string){.data = _b, .length = n};
+    }
+    return (t_string){.data = NULL, .length = 0, .is_local = false};
+}
+
+static inline t_bool tphp_fn_arr_get_int_bool(t_array *a, t_int key) {
+    t_var *v = tphp_fn_arr_get_int(a, key);
+    if (v == NULL) return false;
+    return (v->type == TYPE_BOOL) ? v->value._bool : (v->type == TYPE_INT && v->value._int != 0);
+}
+
+static inline t_array* tphp_fn_arr_get_int_arr(t_array *a, t_int key) {
+    t_var *v = tphp_fn_arr_get_int(a, key);
+    if (v == NULL) return NULL;
+    return (v->type == TYPE_ARRAY) ? v->value._array : NULL;
+}
+
+static inline void* tphp_fn_arr_get_int_object(t_array *a, t_int key) {
+    t_var *v = tphp_fn_arr_get_int(a, key);
+    if (v == NULL) return NULL;
+    return (v->type == TYPE_OBJECT) ? v->value._ptr : NULL;
+}
+
+static inline t_callback tphp_fn_arr_get_int_callback(t_array *a, t_int key) {
+    t_var *v = tphp_fn_arr_get_int(a, key);
+    if (v == NULL) return (t_callback){NULL, NULL};
+    return (v->type == TYPE_CALLBACK) ? v->value._callback : (t_callback){NULL, NULL};
 }
 
 // === Free (释放 entries + 回收到复用池) ===
@@ -1019,7 +1088,7 @@ static inline t_int tphp_fn_rand_int(t_int min, t_int max);
 
 static inline t_int tphp_fn_array_rand(t_array* a) {
     if (a == NULL || a->length == 0) {
-        tphp_fn_error((t_string){"array_rand(): Argument #1 ($array) cannot be empty", 50}, "<php>", 0);
+        tp_throw("array_rand(): Argument #1 ($array) cannot be empty");
         return -1;
     }
     int idx = (int)tphp_fn_rand_int(0, a->length - 1);
@@ -1083,7 +1152,7 @@ static inline t_array* tphp_fn_array_chunk(t_array* a, t_int size) {
     if (out == NULL) return NULL;
     tphp_rt_register((void*)out, 1);
     if (size < 1) {
-        tphp_fn_error((t_string){"array_chunk(): Argument #2 ($length) must be greater than 0", 58}, "<php>", 0);
+        tp_throw("array_chunk(): Argument #2 ($length) must be greater than 0");
         return out;
     }
     if (a == NULL || a->length == 0) return out;
@@ -1106,7 +1175,7 @@ static inline t_array* tphp_fn_array_chunk(t_array* a, t_int size) {
 static inline t_array* tphp_fn_array_combine(t_array* keys, t_array* values) {
     if (keys == NULL || values == NULL) return NULL;
     if (keys->length != values->length) {
-        tphp_fn_error((t_string){"array_combine(): keys and values must be the same length", 53}, "<php>", 0);
+        tp_throw("array_combine(): keys and values must be the same length");
         return NULL;
     }
     t_array* out = tphp_fn_arr_create(keys->length);

@@ -9,8 +9,8 @@ class Main {
         // === / !==
         echo "1. 10===10: " . (10 === 10) . " 5!==5: " . (5 !== 5) . "\n";
 
-        // static method (MUST use simple call - Main:: still WIP)
-        $this->inc();
+        // static method call via Main::inc()
+        Main::inc();
 
         // never return type
         $this->ok();
@@ -19,6 +19,7 @@ class Main {
     }
 
     public static function inc(): void {
+        self::$counter = self::$counter + 1;
         echo "OK-static-called ";
     }
 

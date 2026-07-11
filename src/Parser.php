@@ -157,11 +157,12 @@ class Parser
 
         while (!$this->check(TokenType::EOF)) {
             if ($this->match(TokenType::ABSTRACT_KW)) {
-                // abstract class
+                // abstract class（可选 readonly 前缀，PHP 中 abstract+readonly 合法）
+                $isReadOnly = $this->match(TokenType::READONLY_KW);
                 $this->consume(TokenType::CLASS_KW, 'Expected class keyword');
-                $cls = $this->parseClassDeclBody(true);
+                $cls = $this->parseClassDeclBody(true, $isReadOnly);
                 $extraClasses[] = $cls;
-            } elseif ($this->check(TokenType::CLASS_KW)) {
+            } elseif ($this->check(TokenType::READONLY_KW) || $this->check(TokenType::FINAL_KW) || $this->check(TokenType::CLASS_KW)) {
                 $cls = $this->parseClassDecl();
                 if ($mainClass === null) {
                     $mainClass = $cls;
@@ -528,16 +529,22 @@ class Parser
     }
 
     // ============================================================
-    // class_decl → (final)? CLASS_KW IDENTIFIER (extends NAME)? (implements NAME,...)?
+    // class_decl → (final)? (readonly)? CLASS_KW IDENTIFIER (extends NAME)? (implements NAME,...)?
+    //   readonly 与 final 可互换顺序: final readonly class / readonly final class
     // ============================================================
     private function parseClassDecl(): ClassNode
     {
         $this->match(TokenType::FINAL_KW);
+        $isReadOnly = $this->match(TokenType::READONLY_KW);
+        // final 可出现在 readonly 之后: readonly final class
+        if (!$isReadOnly) {
+            $this->match(TokenType::FINAL_KW);
+        }
         $this->consume(TokenType::CLASS_KW, 'Expected class keyword');
-        return $this->parseClassDeclBody(false);
+        return $this->parseClassDeclBody(false, $isReadOnly);
     }
 
-    private function parseClassDeclBody(bool $isAbstract): ClassNode
+    private function parseClassDeclBody(bool $isAbstract, bool $isReadonly = false): ClassNode
     {
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected class name')->lexeme;
         $parentName = null;
@@ -574,7 +581,7 @@ class Parser
                 $classConsts[] = $this->parseClassConstDecl($name);
             } elseif ($this->check(TokenType::CONST_KW)) {
                 $this->error("Class constants must have an explicit type declaration (e.g., 'public const string MAX = 100')");
-            } elseif (($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW) || $this->check(TokenType::STATIC_KW))
+            } elseif (($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW) || $this->check(TokenType::STATIC_KW) || $this->check(TokenType::READONLY_KW))
                        && $this->peek(1)->type === TokenType::IDENTIFIER && str_starts_with($this->peek(1)->lexeme, '$')) {
                 $this->error("Properties must have an explicit type declaration (e.g., 'public int \$count')");
             } else {
@@ -590,7 +597,7 @@ class Parser
         }
 
         $this->consume(TokenType::RBRACE, 'Expected }');
-        return new ClassNode($name, $methods, $this->currentNamespace, $properties, $classConsts, $parentName, $isAbstract, $implements, $traits);
+        return new ClassNode($name, $methods, $this->currentNamespace, $properties, $classConsts, $parentName, $isAbstract, $implements, $traits, $isReadonly);
     }
 
     // interface → INTERFACE_KW IDENTIFIER LBRACE method* RBRACE
@@ -656,7 +663,7 @@ class Parser
         // visibility
         $vis = 'public';
         if ($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW)) {
-            $vis = $this->parseVisibility();
+            [$vis] = $this->parseVisibility(); // const 不支持 readonly，忽略第二个返回值
         }
         $this->consume(TokenType::CONST_KW, 'Expected const');
 
@@ -681,34 +688,70 @@ class Parser
         );
     }
 
-    /** 判断当前 token 序列是否为属性声明开头 */
+    /** 判断当前 token 序列是否为属性声明开头
+     *  支持顺序: [visibility] [readonly] [static] type $name  |  static [visibility] [readonly] type $name
+     *  |  readonly [visibility] [static] type $name */
     private function isPropertyStart(): bool
     {
-        // static type $name → property
-        if ($this->check(TokenType::STATIC_KW)) return true;
-        // visibility static? type $name → property
-        if (!$this->check(TokenType::PUBLIC_KW) && !$this->check(TokenType::PRIVATE_KW)) return false;
-        $hasStatic = $this->peek(1)->type === TokenType::STATIC_KW;
-        $off = $hasStatic ? 2 : 1; // skip static keyword if present
-        $t2 = $this->peek($off);
         $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
                        TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED, TokenType::TYPE_NEVER, TokenType::IDENTIFIER];
-        if (!in_array($t2->type, $typeTokens, true)) return false;
-        $t3 = $this->peek($off + 1);
-        if ($t3->type !== TokenType::IDENTIFIER) return false;
-        if (!str_starts_with($t3->lexeme, '$')) return false;
-        $t4 = $this->peek($off + 2);
-        return in_array($t4->type, [TokenType::SEMICOLON, TokenType::EQUALS, TokenType::LBRACE], true);
+        // 检查从 $off 开始是否为: type $name (;|=|{)
+        $checkPropPattern = function(int $off) use ($typeTokens): bool {
+            $t = $this->peek($off);
+            if (!in_array($t->type, $typeTokens, true)) return false;
+            $tn = $this->peek($off + 1);
+            if ($tn->type !== TokenType::IDENTIFIER || !str_starts_with($tn->lexeme, '$')) return false;
+            $tt = $this->peek($off + 2);
+            return in_array($tt->type, [TokenType::SEMICOLON, TokenType::EQUALS, TokenType::LBRACE], true);
+        };
+        // static [visibility] [readonly] type $name
+        if ($this->check(TokenType::STATIC_KW)) {
+            // static function ... → 方法，不是属性
+            $n1 = $this->peek(1)->type;
+            if ($n1 === TokenType::FUNCTION) return false;
+            // static public/private [readonly] type $name
+            if ($n1 === TokenType::PUBLIC_KW || $n1 === TokenType::PRIVATE_KW) {
+                $off = 2;
+                if ($this->peek($off)->type === TokenType::READONLY_KW) $off++;
+                return $checkPropPattern($off);
+            }
+            // static readonly type $name
+            if ($n1 === TokenType::READONLY_KW) {
+                $off = 2;
+                if ($this->peek($off)->type === TokenType::PUBLIC_KW || $this->peek($off)->type === TokenType::PRIVATE_KW) $off++;
+                return $checkPropPattern($off);
+            }
+            // static type $name
+            return $checkPropPattern(1);
+        }
+        // readonly [visibility] [static] type $name
+        if ($this->check(TokenType::READONLY_KW)) {
+            $off = 1;
+            if ($this->peek($off)->type === TokenType::PUBLIC_KW || $this->peek($off)->type === TokenType::PRIVATE_KW) $off++;
+            if ($this->peek($off)->type === TokenType::STATIC_KW) $off++;
+            return $checkPropPattern($off);
+        }
+        // [visibility] [readonly] [static] type $name
+        if (!$this->check(TokenType::PUBLIC_KW) && !$this->check(TokenType::PRIVATE_KW)) return false;
+        $off = 1;
+        if ($this->peek($off)->type === TokenType::READONLY_KW) $off++;
+        $hasStatic = $this->peek($off)->type === TokenType::STATIC_KW;
+        if ($hasStatic) $off++;
+        return $checkPropPattern($off);
     }
 
-    /** 属性声明: visibility type $name (= expr)? ;  或带 hook: visibility type $name { get => expr; set => expr; } */
+    /** 属性声明: [visibility] [readonly] [static] type $name (= expr)? ;  或带 hook: ... { get => expr; set => expr; }
+     *  readonly 属性必须有类型声明（parseType 已强制要求），不支持默认值（PHP 语义） */
     private function parsePropertyDecl(): PropertyDeclNode
     {
-        $vis = $this->parseVisibility();
+        $mods = $this->parseModifiers();
         $type = $this->parseType();
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected property name')->lexeme;
         $default = null;
         if ($this->match(TokenType::EQUALS)) {
+            if ($mods['isReadonly']) {
+                $this->error("Readonly property '\${$name}' cannot have a default value (PHP 8.2+ semantics)");
+            }
             $default = $this->parseExpr();
         }
 
@@ -720,7 +763,7 @@ class Parser
             $this->consume(TokenType::SEMICOLON, 'Expected ;');
         }
 
-        return new PropertyDeclNode($name, $type, $vis, $default, $hooks);
+        return new PropertyDeclNode($name, $type, $mods['vis'], $default, $hooks, $mods['isStatic'], $mods['isReadonly']);
     }
 
     /** 解析 Property Hook 体: { get => expr; | get { stmts } set => expr; | set { stmts } } */
@@ -757,7 +800,10 @@ class Parser
     // ============================================================
     private function parseMethod(): MethodNode
     {
-        $visibility = $this->parseVisibility();
+        $mods = $this->parseModifiers();
+        if ($mods['isReadonly']) {
+            $this->error("Methods cannot be marked readonly (readonly only applies to properties and classes)");
+        }
 
         $this->consume(TokenType::FUNCTION, 'Expected function keyword');
 
@@ -811,7 +857,7 @@ class Parser
             $this->consume(TokenType::RBRACE, 'Expected }');
         }
 
-        return new MethodNode($name, $visibility, $params, $returnType, $body, $promoted, $isGen);
+        return new MethodNode($name, $mods['vis'], $params, $returnType, $body, $promoted, $isGen, $mods['isStatic']);
     }
 
     // ============================================================
@@ -844,13 +890,16 @@ class Parser
         $promoted = [];
         do {
             if ($this->check(TokenType::RPAREN)) break; // trailing comma
-            // Constructor property promotion: public int $x
-            if ($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW)) {
-                $vis = $this->parseVisibility();
+            // Constructor property promotion: [readonly] (public|private) [readonly] type $x
+            //   readonly 可在 visibility 前或后
+            if ($this->check(TokenType::READONLY_KW)
+                || $this->check(TokenType::PUBLIC_KW)
+                || $this->check(TokenType::PRIVATE_KW)) {
+                [$vis, $isReadonly] = $this->parseVisibility();
                 $type = $this->parseType();
                 $pName = $this->consume(TokenType::IDENTIFIER, 'Expected property name')->lexeme;
-                $promoted[] = new PropertyDeclNode($pName, $type, $vis, null);
-                $params[] = new ParamNode($type, $pName);
+                $promoted[] = new PropertyDeclNode($pName, $type, $vis, null, [], false, $isReadonly);
+                $params[] = new ParamNode($type, $pName, false, null, $isReadonly);
             } else {
                 $params[] = $this->parseParam();
             }
@@ -891,6 +940,17 @@ class Parser
         if ($this->match(TokenType::FOREACH_KW))    return $this->parseForeachStmt();
         if ($this->match(TokenType::DO_KW))         return $this->parseDoWhileStmt();
         if ($this->match(TokenType::LIST_KW))       return $this->parseListStmt();
+        // 函数内 static 变量: static [type] $var = expr;
+        //   注意: 类成员的 static 已在 parsePropertyDecl/parseMethod 中处理，
+        //   到达 parseStmt 的 STATIC_KW 必为函数内 static 局部变量
+        if ($this->check(TokenType::STATIC_KW) && $this->isStaticLocalStart()) {
+            return $this->parseStaticStmt();
+        }
+        // 函数内 const: const [type] NAME = value;
+        //   PHP 8.3+ 函数内常量，等价于 C 函数内 static const 变量
+        if ($this->check(TokenType::CONST_KW)) {
+            return $this->parseConstStmt();
+        }
         // 短语法: [$a, $b] = expr
         if ($this->check(TokenType::LBRACKET) && $this->isShortList()) {
             $this->advance(); // consume LBRACKET
@@ -935,65 +995,56 @@ class Parser
         return $this->parseExprStmt();
     }
 
-    // if (cond) { body } (elseif (cond) { body })* (else { body })?
+    // if (cond) body (elseif (cond) body)* (else body)?
+    //   body 可以是 { block } 或单语句（无大括号）
     private function parseIfStmt(): IfStmtNode
     {
         $this->consume(TokenType::LPAREN, 'Expected (' );
         $cond = $this->parseExpr();
         $this->consume(TokenType::RPAREN, 'Expected )');
-        $this->consume(TokenType::LBRACE, 'Expected {');
-        $thenBody = $this->parseBlock();
-        $this->consume(TokenType::RBRACE, 'Expected }');
+        $thenBody = $this->parseIfBody();
 
         $elseifs = [];
-        while ($this->match(TokenType::ELSEIF_KW)) {
-            $this->consume(TokenType::LPAREN, 'Expected (' );
-            $eCond = $this->parseExpr();
-            $this->consume(TokenType::RPAREN, 'Expected )');
-            $this->consume(TokenType::LBRACE, 'Expected {');
-            $eBody = $this->parseBlock();
-            $this->consume(TokenType::RBRACE, 'Expected }');
-            $elseifs[] = new ElseIfBranch($eCond, $eBody);
-        }
-
         $elseBody = [];
-        if ($this->match(TokenType::ELSE_KW)) {
-            // else if (...) → 转为 elseif
-            if ($this->match(TokenType::IF_KW)) {
-                $this->consume(TokenType::LPAREN, 'Expected (' );
-                $eCond = $this->parseExpr();
-                $this->consume(TokenType::RPAREN, 'Expected )');
-                $this->consume(TokenType::LBRACE, 'Expected {');
-                $eBody = $this->parseBlock();
-                $this->consume(TokenType::RBRACE, 'Expected }');
-                $elseifs[] = new ElseIfBranch($eCond, $eBody);
-            } else {
-                $this->consume(TokenType::LBRACE, 'Expected {');
-                $elseBody = $this->parseBlock();
-                $this->consume(TokenType::RBRACE, 'Expected }');
-            }
-        }
 
-        // 继续检测 else if 链
-        while ($this->match(TokenType::ELSE_KW)) {
-            if ($this->match(TokenType::IF_KW)) {
+        while (true) {
+            if ($this->match(TokenType::ELSEIF_KW)) {
                 $this->consume(TokenType::LPAREN, 'Expected (' );
                 $eCond = $this->parseExpr();
                 $this->consume(TokenType::RPAREN, 'Expected )');
-                $this->consume(TokenType::LBRACE, 'Expected {');
-                $eBody = $this->parseBlock();
-                $this->consume(TokenType::RBRACE, 'Expected }');
-                $elseifs[] = new ElseIfBranch($eCond, $eBody);
-            } elseif (!empty($elseBody)) {
-                $this->error('Multiple else blocks');
+                $elseifs[] = new ElseIfBranch($eCond, $this->parseIfBody());
+            } elseif ($this->check(TokenType::ELSE_KW) && $this->peek(1)->type === TokenType::IF_KW) {
+                // else if (...) → 转为 elseif
+                $this->advance(); // else
+                $this->advance(); // if
+                $this->consume(TokenType::LPAREN, 'Expected (' );
+                $eCond = $this->parseExpr();
+                $this->consume(TokenType::RPAREN, 'Expected )');
+                $elseifs[] = new ElseIfBranch($eCond, $this->parseIfBody());
+            } elseif ($this->match(TokenType::ELSE_KW)) {
+                if (!empty($elseBody)) {
+                    $this->error('Multiple else blocks');
+                }
+                $elseBody = $this->parseIfBody();
             } else {
-                $this->consume(TokenType::LBRACE, 'Expected {');
-                $elseBody = $this->parseBlock();
-                $this->consume(TokenType::RBRACE, 'Expected }');
+                break;
             }
         }
 
         return new IfStmtNode($cond, $thenBody, $elseifs, $elseBody);
+    }
+
+    /** 解析 if/elseif/else 体: { block } 或单语句（无大括号） */
+    private function parseIfBody(): array
+    {
+        if ($this->check(TokenType::LBRACE)) {
+            $this->advance();
+            $body = $this->parseBlock();
+            $this->consume(TokenType::RBRACE, 'Expected }');
+            return $body;
+        }
+        // 单语句体: if (cond) $stmt;
+        return [$this->parseStmt()];
     }
 
     // while (cond) { body }
@@ -1161,9 +1212,14 @@ class Parser
         return new ForStmtNode($init, $cond, $step, $body);
     }
 
-    // for init: $var = expr 或 expr_stmt
+    // for init: [type] $var = expr 或 expr_stmt
+    //   支持 PHP 8.0+ 的 for (int $i = 0; ...) 带类型标记的循环变量
     private function parseForInitExpr(): ExprNode
     {
+        // 可选类型标记: int $i = 0 / string $s = "" 等（for-init 忽略类型，变量已在作用域中）
+        if ($this->isTypedAssignStart()) {
+            $this->parseType();
+        }
         if ($this->check(TokenType::IDENTIFIER) && $this->checkNext(TokenType::EQUALS)) {
             $varName = $this->advance()->lexeme;
             $this->advance(); // skip =
@@ -1326,6 +1382,98 @@ class Parser
         $expr = $this->parseExpr();
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
         return new AssignStmtNode($varName, $expr, $type);
+    }
+
+    /**
+     * 检测 STATIC_KW 是否为函数内 static 局部变量（而非其他用途）。
+     *   static $var = ...;        → true
+     *   static type $var = ...;   → true (TinyPHP 扩展: 允许带类型标记)
+     *   static function ...       → false (静态方法，由 parseMethod 处理)
+     *   static public int $x ...  → false (类成员，由 parsePropertyDecl 处理)
+     */
+    private function isStaticLocalStart(): bool
+    {
+        // static 后必须跟 $var 或 类型 $var
+        $n1 = $this->peek(1)->type;
+        // static $var
+        if ($n1 === TokenType::IDENTIFIER && str_starts_with($this->peek(1)->lexeme, '$')) {
+            return true;
+        }
+        // static type $var — 类型标记后跟 $var
+        $nativeTypeTokens = [
+            TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+            TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
+        ];
+        if (in_array($n1, $nativeTypeTokens, true)) {
+            $n2 = $this->peek(2);
+            return $n2->type === TokenType::IDENTIFIER && str_starts_with($n2->lexeme, '$');
+        }
+        return false;
+    }
+
+    /** 解析函数内 static 变量: static [type] $var = expr; */
+    private function parseStaticStmt(): StmtNode
+    {
+        $this->consume(TokenType::STATIC_KW, 'Expected static');
+        // 可选类型标记
+        $type = null;
+        $nativeTypeTokens = [
+            TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+            TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
+        ];
+        if (in_array($this->peek()->type, $nativeTypeTokens, true)
+            && $this->peek(1)->type === TokenType::IDENTIFIER
+            && str_starts_with($this->peek(1)->lexeme, '$')) {
+            $type = $this->parseType();
+        }
+        $varName = $this->consume(TokenType::IDENTIFIER, 'Expected variable name')->lexeme;
+        // PHP 语义: static $var 必须有初始化值（否则默认 null）
+        $init = null;
+        if ($this->match(TokenType::EQUALS)) {
+            $init = $this->parseExpr();
+        }
+        $this->consume(TokenType::SEMICOLON, 'Expected ;');
+        return new StaticStmtNode($varName, $type, $init);
+    }
+
+    /**
+     * 解析函数内 const: const [type] NAME = value;
+     *   类型标记可选（与顶层 const 一致）
+     *   值必须是字面量（与顶层 const 一致）
+     */
+    private function parseConstStmt(): StmtNode
+    {
+        $this->consume(TokenType::CONST_KW, 'Expected const');
+        // 可选类型标记探测（与 parseConstDecl 相同逻辑）
+        $type = null;
+        $t1 = $this->peek(0);
+        $typeStartTokens = [
+            TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+            TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
+            TokenType::IDENTIFIER, // 类名/C 类型
+        ];
+        if (in_array($t1->type, $typeStartTokens, true)) {
+            $hasType = false;
+            if ($t1->type === TokenType::IDENTIFIER) {
+                $t2 = $this->peek(1);
+                if ($t2->type === TokenType::DOT) {
+                    $hasType = true;
+                } elseif ($t2->type === TokenType::IDENTIFIER) {
+                    $hasType = true;
+                }
+            } else {
+                $hasType = $this->peek(1)->type === TokenType::IDENTIFIER;
+            }
+            if ($hasType) {
+                $type = $this->parseType();
+            }
+        }
+
+        $name = $this->consume(TokenType::IDENTIFIER, 'Expected constant name')->lexeme;
+        $this->consume(TokenType::EQUALS, 'Expected =');
+        $value = $this->parsePrimary(); // 只接受字面量
+        $this->consume(TokenType::SEMICOLON, 'Expected ;');
+        return new ConstStmtNode($name, $value, $type);
     }
 
     /** 检测当前是否为带类型标记的赋值开头：TYPE $var = ... */
@@ -1692,6 +1840,8 @@ class Parser
                 => $this->setPos(new MagicConstExpr($this->advance()->lexeme, $this->previous()->line), $line, $col),
             // 委托（advance 后调用专用解析器，parseYieldExpr 内部自处理 setPos）
             TokenType::YIELD_KW  => $this->advance() ? $this->parseYieldExpr() : null,
+            // throw 表达式（PHP 8.0+）：throw 出现在表达式位置
+            TokenType::THROW_KW  => $this->advance() ? $this->setPos(new ThrowExprNode($this->parseExpr()), $line, $col) : null,
             TokenType::FN_KW     => $this->advance() ? $this->setPos($this->parseArrowFunction(), $line, $col) : null,
             TokenType::FUNCTION  => $this->advance() ? $this->setPos($this->parseClosure(), $line, $col) : null,
             TokenType::LBRACKET  => $this->advance() ? $this->setPos($this->parseArrayLiteral(), $line, $col) : null,
@@ -1831,19 +1981,34 @@ class Parser
     }
 
     /** 数组字面量: [ entry (, entry)* ]
-     *  entry → expr (=> expr)?  */
+     *  entry → expr (=> expr)?
+     *  entry → '...' expr  (spread 展开，不允许 key) */
     private function parseArrayLiteral(): ArrayLiteralExpr
     {
         $entries = [];
         if (!$this->check(TokenType::RBRACKET)) {
             do {
+                // ...$arr 展开元素（三个 DOT token）
+                $isSpread = false;
+                if ($this->check(TokenType::DOT) && $this->peek(1)->type === TokenType::DOT && $this->peek(2)->type === TokenType::DOT) {
+                    $this->advance(); $this->advance(); $this->advance();
+                    $isSpread = true;
+                }
                 $first = $this->parseExpr();
-                // 检查是否 key => value
-                if ($this->match(TokenType::DOUBLE_ARROW)) {
-                    $val = $this->parseExpr();
-                    $entries[] = new ArrayEntryNode($first, $val);
+                if ($isSpread) {
+                    // spread 不允许 key => value
+                    if ($this->match(TokenType::DOUBLE_ARROW)) {
+                        throw $this->error('Cannot specify key in spread element');
+                    }
+                    $entries[] = new ArrayEntryNode(null, $first, true);
                 } else {
-                    $entries[] = new ArrayEntryNode(null, $first);
+                    // 检查是否 key => value
+                    if ($this->match(TokenType::DOUBLE_ARROW)) {
+                        $val = $this->parseExpr();
+                        $entries[] = new ArrayEntryNode($first, $val);
+                    } else {
+                        $entries[] = new ArrayEntryNode(null, $first);
+                    }
                 }
             } while ($this->match(TokenType::COMMA) && !$this->check(TokenType::RBRACKET));
         }
@@ -2092,19 +2257,89 @@ class Parser
         return $tok;
     }
 
-    private function parseVisibility(): string
+    /** 解析可见性修饰符（public/private），不处理 static — 用于 const 和属性提升
+     *  属性提升时可带 readonly: readonly public / public readonly / readonly private / private readonly
+     *  @return array{0:string, 1:bool} [visibility, isReadonly] */
+    private function parseVisibility(): array
     {
         $this->match(TokenType::ABSTRACT_KW); // skip abstract
-        if ($this->match(TokenType::STATIC_KW)) return 'public';
+        $isReadonly = false;
+        // readonly 可在前: readonly public
+        if ($this->match(TokenType::READONLY_KW)) {
+            $isReadonly = true;
+            if ($this->match(TokenType::PUBLIC_KW))  return ['public', $isReadonly];
+            if ($this->match(TokenType::PRIVATE_KW)) return ['private', $isReadonly];
+            $this->error('Expected public or private after readonly');
+        }
         if ($this->match(TokenType::PUBLIC_KW)) {
-            $this->match(TokenType::STATIC_KW);
-            return 'public';
+            // public readonly
+            if ($this->match(TokenType::READONLY_KW)) $isReadonly = true;
+            return ['public', $isReadonly];
         }
         if ($this->match(TokenType::PRIVATE_KW)) {
-            $this->match(TokenType::STATIC_KW);
-            return 'private';
+            // private readonly
+            if ($this->match(TokenType::READONLY_KW)) $isReadonly = true;
+            return ['private', $isReadonly];
         }
-        $this->error('Expected public, private, or static');
+        $this->error('Expected public or private');
+    }
+
+    /** 解析成员修饰符组合 (visibility? readonly? static?) — 用于属性和方法
+     *  PHP 修饰符顺序灵活: readonly public / public readonly / static public / public static
+     *  但 readonly + static 不兼容（PHP 8.2 禁止静态 readonly 属性）
+     *  返回 ['vis' => string, 'isStatic' => bool, 'isReadonly' => bool] */
+    private function parseModifiers(): array
+    {
+        $this->match(TokenType::ABSTRACT_KW); // skip abstract
+        $vis = 'public';
+        $isStatic = false;
+        $isReadonly = false;
+
+        // 第一轮: 可能的 leading static / readonly
+        if ($this->match(TokenType::STATIC_KW)) {
+            $isStatic = true;
+            // static public/private [readonly]  或  static readonly public/private
+            if ($this->match(TokenType::READONLY_KW)) {
+                $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+            }
+            if ($this->match(TokenType::PUBLIC_KW))       $vis = 'public';
+            elseif ($this->match(TokenType::PRIVATE_KW))  $vis = 'private';
+            // static readonly — 不允许
+            if ($this->match(TokenType::READONLY_KW)) {
+                $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+            }
+        } elseif ($this->match(TokenType::READONLY_KW)) {
+            $isReadonly = true;
+            // readonly [public/private] [static] — static 不允许
+            if ($this->match(TokenType::PUBLIC_KW))       $vis = 'public';
+            elseif ($this->match(TokenType::PRIVATE_KW))  $vis = 'private';
+            if ($this->match(TokenType::STATIC_KW)) {
+                $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+            }
+        } elseif ($this->match(TokenType::PUBLIC_KW)) {
+            $vis = 'public';
+            if ($this->match(TokenType::READONLY_KW)) {
+                $isReadonly = true;
+                if ($this->match(TokenType::STATIC_KW)) {
+                    $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+                }
+            } elseif ($this->match(TokenType::STATIC_KW)) {
+                $isStatic = true;
+            }
+        } elseif ($this->match(TokenType::PRIVATE_KW)) {
+            $vis = 'private';
+            if ($this->match(TokenType::READONLY_KW)) {
+                $isReadonly = true;
+                if ($this->match(TokenType::STATIC_KW)) {
+                    $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+                }
+            } elseif ($this->match(TokenType::STATIC_KW)) {
+                $isStatic = true;
+            }
+        } else {
+            $this->error('Expected public, private, readonly, or static');
+        }
+        return ['vis' => $vis, 'isStatic' => $isStatic, 'isReadonly' => $isReadonly];
     }
 
     private function parseType(): string

@@ -16,7 +16,7 @@
 #debug
 #debug ===== Arrow fn block with nested return =====
 #debug int(5)
-#debug int(-3)
+#debug int(3)
 #debug int(3)
 #debug
 #debug === done ===

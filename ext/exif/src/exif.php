@@ -266,7 +266,7 @@ function exif_parse_tiff(int $fp, int $tiff_start, array $result): array
  * 文件无法打开 → throw Exception（I/O 错误，可 try-catch）
  * 未知图像格式 → 返回 0（合理零值）
  */
-function exif_imagetype(string $filename): int
+function exif_imagetype(string $filename): int|Exception
 {
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("rb")));
     if ($fp == 0) { throw new Exception("exif_imagetype: unable to open file: " . $filename); }
@@ -304,7 +304,7 @@ function exif_tagname(int $index): string
  * 无 EXIF 数据 → 返回空数组（合理空结果）
  */
 function exif_read_data(string $filename, string $sections = "",
-                        bool $arrays = false, bool $thumbnail = false): array
+                        bool $arrays = false, bool $thumbnail = false): array|Exception
 {
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("rb")));
     if ($fp == 0) { throw new Exception("exif_read_data: unable to open file: " . $filename); }

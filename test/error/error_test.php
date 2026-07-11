@@ -62,7 +62,7 @@ class Main
         echo "这条也不应该看到\n";
     }
 
-    private function testObjectCleanup(): void
+    private function testObjectCleanup(): void|Exception
     {
         $d1 = new Demo("obj1");
         $d2 = new Demo("obj2");
@@ -71,7 +71,7 @@ class Main
         error("对象 + 数组合并清理");
     }
 
-    private function testArrayCleanup(): void
+    private function testArrayCleanup(): void|Exception
     {
         $nested = ["outer" => ["inner" => [1, 2, 3]]];
         $obj = new Demo("array_test");
@@ -80,7 +80,7 @@ class Main
         error("嵌套数组合并清理");
     }
 
-    private function testConditional(): void
+    private function testConditional(): void|Exception
     {
         $val = 10;
         if ($val > 5) {
@@ -89,7 +89,7 @@ class Main
         }
     }
 
-    private function testNested(): void
+    private function testNested(): void|Exception
     {
         $x = 42;
         if ($x > 0) {

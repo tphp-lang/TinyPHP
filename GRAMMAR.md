@@ -89,7 +89,7 @@ class C {
 | 动态引入 | `include` `require` `include_once` `require_once` | 无运行时文件加载 |
 | 魔术方法 | `__call` `__get` `__set` `__callStatic` | 无动态分发 |
 | 可空 | `?int` | 不做（破坏类型固定优势） |
-| 联合类型 | `int\|string` | ✅ 已支持（映射到 `mixed`/`t_var`） |
+| 联合类型 | `int\|string` | ✅ 已支持（映射到 `mixed`/`t_var`）；`Type\|Exception` 返回类型为 TinyPHP 扩展（C 仅生成 `\|` 前类型，`\|Exception` 为文档提示） |
 
 ---
 
@@ -153,7 +153,7 @@ class_decl:
 modifier:
     'abstract'      ✅
   | 'final'         ✅ (仅修饰符，无运行时检查)
-  | 'readonly'      ⬜ (keyword 已定义但未消费，`readonly class`/`readonly` 属性均未实现)
+  | 'readonly'      ✅ (readonly class + readonly 属性，编译期检查，无运行时开销)
 
 extends:
     'extends' name   ✅
@@ -173,8 +173,8 @@ member:
 
 ```
 property_decl:
-    visibility 'static'? type IDENTIFIER ';'            ✅ (type required)
-  | visibility 'static'? type IDENTIFIER '=' expr ';'  ✅ (type required)
+    visibility 'readonly'? 'static'? type IDENTIFIER ';'            ✅ (type required)
+  | visibility 'readonly'? 'static'? type IDENTIFIER '=' expr ';'  ✅ (type required; readonly 禁止默认值)
   | visibility type IDENTIFIER '{' hook+ '}'           ✅ (Property Hook, PHP 8.4)
 
 property_hook:
@@ -192,7 +192,7 @@ property_hook:
 > - 属性访问 `$obj->prop` 和赋值 `$obj->prop = val` 自动改写为 getter/setter 调用
 > - 支持继承：子类访问父类的 hooked 属性时，调用父类的 getter/setter
 > ⚠️ **`static` 属性**：语法上接受 `public static int $x = 0;`，但 `static` 标志当前会丢失（编译为实例属性）。仅内置类（Thread/Parallel/Enum）支持真正的静态调用。
-> ⚠️ **`readonly` 属性**：未实现，`readonly` keyword 会被解析器拒绝。
+> ✅ **`readonly` 属性**：已实现。`readonly` 可修饰单个属性或整个类（`readonly class` 时所有属性自动 readonly）。readonly 属性只能在声明它的类的 `__construct` 内赋值一次，编译期静态检查，无运行时开销。不支持 `static readonly`（PHP 8.2 禁止）。readonly 属性不能有默认值。构造器属性提升支持 `public readonly int $x` 语法。
 
 visibility:
     'public'    ✅
@@ -215,10 +215,15 @@ type:
   | 'null'      ⬜ (字面量类型，PHP 8.2+，未实现)
   | 'static'    ⬜ (返回类型，PHP 8.0+，未实现；self 已支持)
   | '?' type    ❌ 不做（AOT 哲学冲突，鼓励 t_var=丢性能）
-  | type '|' type   ❌ 不做
+  | type '|' ExceptionSubclass   ✅ (Type\|Exception 语法，见下方说明)
+  | type '|' type   ❌ 不做（普通联合类型映射 t_var，仅返回类型支持 Type\|Exception）
   | '(' type (',' type)+ ')'   ⬜ (intersection types)
   | type '&' type   ⬜ (DNF 类型交集，PHP 8.2+，未实现)
 ```
+
+> 🔧 **`Type|Exception` 返回类型语法**：TinyPHP 扩展语法。当函数/方法体包含 `throw` 或 `error()` 时，**必须**在返回类型中声明 `|Exception`（或任意 Exception 子类，如 `|RuntimeException`）。此为纯文档提示——C 代码仅生成 `|` 前的类型（如 `int|Exception` → C `int64_t`），`|Exception` 部分在编译期丢弃，零运行时开销。编译器通过 `isExceptionSubclass()` 沿父链检查，确保 `|` 后的类型确实是 Exception 子类。普通联合类型（如 `int|string`）仍映射到 `t_var`。
+>
+> **语法检查规则**：函数体中直接出现 `throw` 语句/表达式或 `error()` 调用时，返回类型必须包含 `|Exception`（或子类），否则编译报错。此规则不追溯间接调用（调用其他可能 throw 的函数不需声明）。
 
 ### 3.2 方法
 
@@ -332,8 +337,8 @@ statement:
   | list_destructure           ✅ (含键名 "key"=>$var)
   | unset_stmt                 ✅
   | block                      ✅
-  | 'static' type '$' IDENTIFIER '=' expr ';'  ⬜ (静态局部变量，未实现)
-  | 'const' type? IDENTIFIER '=' expr ';'      ⬜ (函数内常量，PHP 8.3+，未实现)
+  | 'static' type? '$' IDENTIFIER '=' expr? ';'  ✅ (静态局部变量，类型/初始值可选)
+  | 'const' type? IDENTIFIER '=' expr ';'        ✅ (函数内常量，PHP 8.3+，类型可选)
 ```
 
 ### 7.1 具体语法
@@ -390,6 +395,8 @@ try_stmt:
 throw_stmt:
     'throw' expr ';'   ✅
 ```
+
+> **`error()` 函数**：等价于 `throw new Exception($msg)` 的简写。调用 `error($msg)` 时，编译器生成 `tp_throw(STR_PTR_V($msg))`，抛出可被 try-catch 捕获的异常；未被 catch 时回退到 `exit(1)` + 输出 Fatal error 信息。函数体包含 `error()` 调用时，返回类型必须声明 `|Exception`（同 `throw` 规则）。
 
 ---
 
@@ -530,7 +537,7 @@ primary:
   | '(' expr ')'     ✅
   | '(' cast_type ')' expr          ✅ ((int)/(float)/(string)/(bool)/(C.XXX))
   | 'array' '(' args ')'            ✅
-  | '[' args ']'                    ✅ (支持尾逗号)
+  | '[' args ']'                    ✅ (支持尾逗号；支持 spread `...$arr`)
   | 'new' name '(' args ')'         ✅
   | 'function' '(' params ')' body  ✅ (闭包)
   | 'fn' '(' typed_params ')' ':' type '=>' expr        ✅ (箭头函数单表达式，强制参数+返回类型)
@@ -538,12 +545,14 @@ primary:
   | 'match' '(' expr ')' '{' arm* '}' ✅
   | 'list' '(' list_vars ')' '=' expr   ✅
   | '[' list_vars ']' '=' expr           ✅
-  | 'throw' expr                         ⬜ (throw 表达式，PHP 8.0+，未实现)
-  | '...' expr                           ⬜ (数组展开 spread，未实现)
+  | 'throw' expr                         ✅ (throw 表达式，PHP 8.0+，语句表达式展开)
+  | '...' expr                           ✅ (数组展开 spread，PHP 7.4+，见下方说明)
   | name '(' '...' ')'                   ⬜ (first-class callable strlen(...)，PHP 8.1+，未实现)
 ```
 
 > 🔧 **TinyPHP 箭头函数扩展**：与 PHP 原生 `fn() => expr` 仅支持单表达式不同，TinyPHP 额外支持 `fn(): type => { stmts }` 块体形式，须以 `return` 结尾（`void` 类型除外）。这便于在箭头函数中编写多条语句。
+
+> 🔧 **数组展开 spread `[...$arr1, ...$arr2]`**（PHP 7.4+）：数组字面量中 `...$arr` 前缀将源数组元素逐个展开。语义遵循 PHP：int 键重新索引（append 到末尾），string 键保留并覆盖（后写胜出）。编译期调用运行时辅助函数 `tphp_fn_arr_spread(dst, src)` 逐元素复制。支持与字面量混合 `[1, ...$arr, 2]`、嵌套 `[[...$a], [...$b]]`、作为函数实参 `var_dump([...$arr])`。`...` 由词法分析器输出为三个 `DOT` token，解析器通过 `peek(1)`/`peek(2)` 识别。
 
 ---
 
@@ -689,9 +698,9 @@ phpc_ptr_bridge:
 |------|------|
 | `if/elseif/else` `while` `do-while` `for` `foreach` `switch` `match` | 全部控制流 |
 | `break/continue/goto` 标签 | — |
-| `class` `extends` `interface` `implements` `trait+use` `abstract` `final` | COS struct 嵌套继承（`readonly` 未实现） |
+| `class` `extends` `interface` `implements` `trait+use` `abstract` `final` `readonly` | COS struct 嵌套继承 |
 | `enum` `enum case` | int/string backing |
-| `try/catch(Exception $e)/finally` `throw` | COS setjmp/longjmp |
+| `try/catch(Exception $e)/finally` `throw` `error()` | COS setjmp/longjmp；`error()` 等价于 `throw new Exception($msg)`，可被 catch |
 | `function` `closure` `fn =>` `fn => {...}` `use($x)` | 全部闭包形态（块体箭头函数为 TinyPHP 扩展） |
 | `yield` `yield from` `Generator` | minicoro stackless 协程，支持 send/getReturn |
 | 完整 15 级运算符优先级 | 含 `<=>` `??` `?:` `?->` `**` `&|^~` `<<>>` `\|>` |
@@ -715,6 +724,8 @@ phpc_ptr_bridge:
 
 | 语法 | 说明 |
 |------|------|
+| `Type\|Exception` 返回类型 | 函数含 throw/error() 时必须声明（如 `: int\|Exception`），纯文档提示，C 仅生成 `\|` 前类型，编译期检查 `|` 后为 Exception 子类 |
+| `error($msg)` 函数 | `throw new Exception($msg)` 简写，生成 `tp_throw()`，可被 try-catch 捕获，未捕获时回退 exit(1) |
 | `fn(): type => { stmts }` | 块体箭头函数（PHP 原生仅支持单表达式 `fn() => expr`），须以 `return` 结尾（void 除外） |
 | `#include "file.h"` | 嵌入 C 头文件 |
 | `#include <sys.h>` | 系统头文件 |
@@ -765,19 +776,17 @@ phpc_ptr_bridge:
 |------|---------|---------|---------|
 | `public string $name { get => ...; set => ...; }` Property Hook | 8.4 | hook 代码编译期已知，纯语法糖 | ✅ 已实现 — 属性访问改写为 getter/setter 方法调用 |
 | `$x \|> f(...)` Pipe Operator | 8.4 RFC | 纯语法糖，等价于 `f($x)` | ✅ 已实现 — 解析为嵌套函数调用，`...` 占位符控制参数位置 |
-| `as` 表达式（模式匹配中的类型转换） | 8.4 | 编译期已知类型 | 类似已有强制转换 |
-| 纯表达式位置 `match` | 8.4 | 已有 `match` 语句，仅需允许表达式上下文 | 复用 `visitMatch` |
-| `static` 属性 / `static` 方法（用户类） | 5.0+ | 编译期已知类名，等价于 C 静态变量/函数 | `PropertyDeclNode`/`MethodNode` 加 `isStatic` 字段，生成 `static` C 变量/函数，调用走 `Class::method()` |
-| `static` 局部变量 `function f() { static $n = 0; }` | 5.0+ | 等价于 C 函数内 `static` 变量，编译期初始化 | `parseStmt` 加 `STATIC_KW` 分支，生成 `static t_int x = init;` |
-| 函数内 `const`（PHP 8.3+） | 8.3 | 编译期常量，等价于文件作用域 `static const` | `parseStmt` 加 `CONST_KW` 分支，提升为函数级 `static const` |
-| `readonly` class / `readonly` 属性 | 8.1/8.2 | 纯编译期检查（赋值后禁止改），无运行时开销 | `parseVisibility` 接受 `readonly`，`AssignStmt` 检查是否已赋值 |
+| `static` 属性 / `static` 方法（用户类） | 5.0+ | 编译期已知类名，等价于 C 静态变量/函数 | ✅ 已实现 — 静态属性生成文件作用域 `static` 变量（零运行时查找），静态方法省略 `self` 参数，`Class::method()` / `self::method()` 直接调用，`Class::$prop` / `self::$prop` 直接地址访问 |
+| `static` 局部变量 `function f() { static $n = 0; }` | 5.0+ | 等价于 C 函数内 `static` 变量，编译期初始化 | ✅ 已实现 — `StaticStmtNode` 直接映射为 C `static <type> <var> = <init>;`，跨调用保持值（C static 语义完全匹配），不参与作用域自动释放 |
+| 函数内 `const`（PHP 8.3+） | 8.3 | 编译期常量，等价于文件作用域 `static const` | ✅ 已实现 — `ConstStmtNode` 映射为 C `static const <type> <name> = <value>;`，`localConsts` 集合跟踪局部常量名，`visitVariable` 优先查局部 const 再回退全局 `TPHP_CONST_`，类型标记可选（省略时按字面量推导） |
+| `readonly` class / `readonly` 属性 | 8.1/8.2 | 纯编译期检查（赋值后禁止改），无运行时开销 | ✅ 已实现 — `ClassNode`/`PropertyDeclNode`/`ParamNode` 加 `isReadonly` 字段；`parseModifiers`/`parseVisibility` 识别 `readonly` 关键字（修饰符顺序灵活）；`SymbolTable` 加 `readonlyProps` + `isReadonlyClass` 字段及 `isPropReadonly()`/`getReadonlyPropDeclaringClass()` 沿父链查询；`visitAssignPropStmt` 编译期检查：必须在声明类的 `__construct` 内赋值且仅一次，`assignedReadonlyProps` 集合跟踪重复赋值；不支持 `static readonly`；readonly 属性不能有默认值 |
 | `#[Attribute]` 注解 | 8.0 | 编译期解析存储，无运行时反射需求 | Lexer 识别 `#[`，Parser 解析为 `AttributeNode`（可附加到类/方法/属性） |
 | first-class callable `strlen(...)` | 8.1 | 编译期已知函数名，等价于闭包包装 | Lexer 加 `ELLIPSIS` token，`parsePostfix` 识别 `name(...)` 生成闭包 |
 | `true`/`false`/`null` 字面量类型 | 8.2 | 编译期已知字面值，映射到 `bool`/`null` | `parseType` 接受 `TRUE_KW`/`FALSE_KW`/`NULL_KW` |
 | `static` 返回类型 | 8.0 | 编译期已知当前类名（同 self，但支持后期绑定语义可简化为 self） | `parseType` 接受 `STATIC_KW`，按 self 处理 |
 | DNF/intersection 类型 `A&B` `(A&B)\|C` | 8.2 | 编译期已知类型，可映射到接口 vtable 或 `t_var` | `parseType` 加 `AMP` 交集处理 |
-| `throw` 作为表达式 `$x = throw new E();` | 8.0 | 编译期已知抛出点，等价于语句展开 | `parseExpr` 加 `THROW_KW`，生成 `ThrowExpr` 节点 |
-| 数组展开 `[...$arr1, ...$arr2]` | 7.4 | 编译期展开为 `array_merge` 或逐元素 push | `parseArrayLiteral` 识别 `...` 前缀 |
+| `throw` 作为表达式 `$x = throw new E();` | 8.0 | 编译期已知抛出点，等价于语句展开 | ✅ 已实现 — `ThrowExprNode` AST 节点；`parsePrimary` 识别 `THROW_KW`；`visitThrowExpr` 用 TCC 语句表达式 `({ throw_code; 0; })` 包装（throw 永不返回，0 为死代码占位）；语句上下文（`$x = throw`/`return throw`）直接展开为 throw 语句避免类型不匹配 |
+| 数组展开 `[...$arr1, ...$arr2]` | 7.4 | 编译期展开为 `array_merge` 或逐元素 push | ✅ 已实现 — `parseArrayLiteral` 识别 `...` 前缀（三个 DOT token）；`ArrayEntryNode.isSpread` 标记；`genArrayLiteralInline` 调用 `tphp_fn_arr_spread(dst, src)` 运行时展开（int 键重新索引 append，string 键保留覆盖）；`inferArrayElementType`/`inferArrayDeepElementType` 从源数组变量推导元素类型；支持嵌套 spread、混合字面量、内联函数参数 |
 
 > ⚠️ 定参 vs 可变参数的 `func_get_args()`：
 > - **定参函数**（`function f(int $a, string $b)`）：参数编译为独立 C 形参 `t_int a, t_string b`，没有统一容器 → `func_get_args()` **不可行**

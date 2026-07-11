@@ -263,6 +263,8 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 数组为 `t_array*` 指针（128 槽 LIFO 复用池 + 1.5× 增长因子 + str/int 键双哈希索引，≥8 键触发 O(1) 查找）。
 
+数组字面量支持 spread 展开 `[...$arr1, ...$arr2]`（PHP 7.4+）：编译期调用 `tphp_fn_arr_spread(dst, src)` 逐元素复制，int 键重新索引（append），string 键保留并覆盖；支持与字面量混合 `[1, ...$arr, 2]`、嵌套 `[[...$a], [...$b]]`、内联函数参数 `var_dump([...$arr])`。
+
 ### 增删 / 统计
 
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
@@ -828,6 +830,9 @@ $byte = exif_rd_byte($fp_int, $offset);  // 内部 phpc_int_to_ptr 转回 void*
 | `finally { ... }` | `TP_FINALLY` 宏 | ✅ 始终执行 |
 | `throw new Exception("msg")` | 复制到 256B 栈缓冲 → `longjmp` | ✅ |
 | `throw "string"` | `tp_throw` → `longjmp` | ✅ |
+| `throw` 表达式 `$x = throw new E()` | TCC 语句表达式 `({ throw_code; 0; })` 包装 | ✅ 语句上下文直接展开为 throw 语句 |
+| `error($msg)` | 生成 `tp_throw(STR_PTR_V($msg))` | ✅ 可被 try-catch 捕获，未捕获时回退 `exit(1)` |
+| `Type|Exception` 返回类型 | 纯语法提示，C 代码只生成 `\|` 前的类型 | 编译期检查：含 `throw`/`error()` 的函数必须声明 `\|Exception`（`Main::main` 除外） |
 
 ---
 
@@ -1130,7 +1135,7 @@ $tid = Thread::id();
 
 | 机制 | 说明 |
 |------|------|
-| 资源追踪链表 | `tphp_rt_register(ptr, type)` → `error()` 时遍历释放 |
+| 资源追踪链表 | `tphp_rt_register(ptr, type)` → `tp_throw`/`tphp_rt_free_all()` 时遍历释放 |
 | 64KB 字符串池 | bump allocator，≤512B 零 `malloc` |
 | 128 槽数组池 | LIFO 复用，1.5× 增长因子 |
 | 128 槽对象池 | LIFO 复用，`tp_obj_release` 回收到池 |

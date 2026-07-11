@@ -35,6 +35,12 @@ class ClassInfo
         public bool  $isAbstract = false,
         /** @var string[] */
         public array $implements = [],
+        /** @var array<string,string> static propName => C type */
+        public array $staticProps = [],
+        /** @var array<string,bool> readonly propName => true (本类声明的 readonly 属性) */
+        public array $readonlyProps = [],
+        /** readonly class: 所有属性自动 readonly */
+        public bool  $isReadonlyClass = false,
     ) {}
 }
 
@@ -96,9 +102,9 @@ class SymbolTable
     // Class
     // ──────────────────────────────────────────────────────────
 
-    public function addClass(string $cName, string $parent = '', bool $isAbstract = false, array $implements = []): void
+    public function addClass(string $cName, string $parent = '', bool $isAbstract = false, array $implements = [], bool $isReadonly = false): void
     {
-        $this->classes[$cName] = new ClassInfo($cName, $parent, [], [], [], $isAbstract, $implements);
+        $this->classes[$cName] = new ClassInfo($cName, $parent, [], [], [], $isAbstract, $implements, [], [], $isReadonly);
     }
 
     public function addClassName(string $original, string $cName): void
@@ -116,17 +122,77 @@ class SymbolTable
         return $this->classes[$cName] ?? null;
     }
 
-    public function addClassProp(string $cName, string $prop, string $type, bool $own = true): void
+    public function addClassProp(string $cName, string $prop, string $type, bool $own = true, bool $isStatic = false): void
     {
         $c = $this->classes[$cName] ?? null;
         if ($c === null) return;
-        $c->props[$prop] = $type;
-        if ($own) $c->ownProps[$prop] = true;
+        if ($isStatic) {
+            $c->staticProps[$prop] = $type;
+        } else {
+            $c->props[$prop] = $type;
+            if ($own) $c->ownProps[$prop] = true;
+        }
+    }
+
+    /** 注册 readonly 属性（本类声明的） */
+    public function addClassReadonlyProp(string $cName, string $prop): void
+    {
+        $c = $this->classes[$cName] ?? null;
+        if ($c === null) return;
+        $c->readonlyProps[$prop] = true;
+    }
+
+    /** 查询属性是否 readonly（沿父链查找）
+     *  @return bool 属性是否为 readonly */
+    public function isPropReadonly(string $cName, string $prop): bool
+    {
+        $cur = $cName;
+        while ($cur !== '') {
+            $c = $this->classes[$cur] ?? null;
+            if ($c === null) return false;
+            // readonly class: 所有属性自动 readonly
+            if ($c->isReadonlyClass && isset($c->props[$prop])) {
+                return true;
+            }
+            if (isset($c->readonlyProps[$prop])) {
+                return true;
+            }
+            $cur = $c->parent;
+        }
+        return false;
+    }
+
+    /** 查询 readonly 属性的声明类 C 名（沿父链查找）
+     *  @return string|null 声明该 readonly 属性的类的 C 名，null 表示非 readonly */
+    public function getReadonlyPropDeclaringClass(string $cName, string $prop): ?string
+    {
+        $cur = $cName;
+        while ($cur !== '') {
+            $c = $this->classes[$cur] ?? null;
+            if ($c === null) return null;
+            if (isset($c->readonlyProps[$prop]) || ($c->isReadonlyClass && isset($c->props[$prop]))) {
+                return $cur;
+            }
+            $cur = $c->parent;
+        }
+        return null;
     }
 
     public function getClassPropType(string $cName, string $prop): ?string
     {
-        return $this->classes[$cName]->props[$prop] ?? null;
+        $c = $this->classes[$cName] ?? null;
+        if ($c === null) return null;
+        return $c->props[$prop] ?? $c->staticProps[$prop] ?? null;
+    }
+
+    public function isStaticProp(string $cName, string $prop): bool
+    {
+        return isset($this->classes[$cName]->staticProps[$prop]);
+    }
+
+    public function getStaticPropType(string $cName, string $prop): ?string
+    {
+        return $this->classes[$cName]->staticProps[$prop] ?? null;
     }
 
     public function hasClassOwnProp(string $cName, string $prop): bool
@@ -154,6 +220,23 @@ class SymbolTable
     public function hasClass(string $cName): bool
     {
         return isset($this->classes[$cName]);
+    }
+
+    /** 检查 PHP 类型名是否为 Exception 子类（含 Exception 本身）
+     *  用于 Type|Exception 语法：|Exception 部分为文档提示，C 代码仅生成 Type */
+    public function isExceptionSubclass(string $phpName): bool
+    {
+        $cName = $this->resolveClass($phpName);
+        if ($cName === null) return false;
+        if ($cName === 'tphp_class_Exception') return true;
+        $cur = $cName;
+        $visited = [];
+        while ($cur !== '' && !isset($visited[$cur])) {
+            $visited[$cur] = true;
+            if ($cur === 'tphp_class_Exception') return true;
+            $cur = $this->getClassParent($cur);
+        }
+        return false;
     }
 
     // ──────────────────────────────────────────────────────────

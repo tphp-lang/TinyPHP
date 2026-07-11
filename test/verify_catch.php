@@ -27,17 +27,17 @@ class OtherException extends Exception
 
 class Main
 {
-    public function throwMy(): void
+    public function throwMy(): void|Exception
     {
         throw new MyException("my error");
     }
 
-    public function throwOther(): void
+    public function throwOther(): void|Exception
     {
         throw new OtherException("other error");
     }
 
-    public function throwBase(): void
+    public function throwBase(): void|Exception
     {
         throw new Exception("base error");
     }

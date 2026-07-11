@@ -637,7 +637,8 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     echo "       [YES] {$cFile}\n";
 
 } catch (\Throwable $e) {
-    die("[NO] Transpile failed: " . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
+    fwrite(STDERR, "[NO] Transpile failed: " . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
+    exit(1);
 }
 
 // --- Phase 2: C compile → binary ---

@@ -408,18 +408,6 @@ static inline void tphp_rt_free_all(void) {
 }
 
 // ============================================================
-// error() — 报错并安全退出
-// ============================================================
-
-static inline void tphp_fn_error(t_string msg, const char *php_file, int php_line) {
-    tphp_rt_free_all();
-    fflush(stdout);  // 管道模式 stdout 全缓冲, 确保 error 前的输出可见
-    fprintf(stderr, "\nFatal error: %.*s\n  in %s on line %d\n\n",
-            msg.length > 0 ? msg.length : 0, STR_PTR(msg) ? STR_PTR(msg) : "", php_file, php_line);
-    exit(1);
-}
-
-// ============================================================
 // 线程退出清理 — 释放子线程的 thread-local 内存池
 // （主线程不需要调用，进程退出时 OS 回收全部资源）
 // ============================================================

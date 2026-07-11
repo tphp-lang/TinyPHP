@@ -7,7 +7,7 @@
 #debug
 #debug 1. small-diff: cnt=2
 #debug 2. large-diff: cnt=5
-#debug 3. small-intersect: cnt=2
+#debug 3. small-intersect: cnt=3
 #debug 4. large-intersect: cnt=15
 #debug 5. type-separation: cnt=3
 #debug 6. string-large-diff: cnt=5

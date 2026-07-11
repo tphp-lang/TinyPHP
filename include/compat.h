@@ -11,10 +11,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include "types.h"  // 需要 t_string 类型用于 tphp_fn_error 前置声明
-
-// 前置声明：tphp_fn_error（定义在 runtime.h，math.h/array.h 先用到）
-static void tphp_fn_error(t_string msg, const char *php_file, int php_line);
+#include "types.h"
 
 /* ── 显式声明 math 函数（各编译器/平台的 <math.h> 可能不完整）── */
 double ceil(double);

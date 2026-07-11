@@ -88,6 +88,7 @@ class ClassNode extends ASTNode
         public readonly array $implements = [],
         /** @var array[] trait names to flatten */
         public readonly array $traits = [],
+        public readonly bool $isReadonly = false, // readonly class: 所有属性自动 readonly
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -106,6 +107,8 @@ class PropertyDeclNode extends ASTNode
         public readonly string $visibility,    // public | private
         public readonly ?ExprNode $default,   // 默认值（可为 null）
         public readonly array $hooks = [],    // PropertyHook[]
+        public readonly bool $isStatic = false, // 静态属性（生成文件作用域 static 变量）
+        public readonly bool $isReadonly = false, // readonly 属性：仅声明处或 __construct 内可赋值一次
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -141,6 +144,7 @@ class MethodNode extends ASTNode
         /** @var PropertyDeclNode[] */
         public readonly array $promoted = [],
         public readonly bool $isGenerator = false,
+        public readonly bool $isStatic = false, // 静态方法（签名省略 self 参数）
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -162,6 +166,7 @@ class ParamNode extends ASTNode
         public readonly string $name,
         public readonly bool $byRef = false,
         public readonly ?ExprNode $default = null,  // 默认值表达式
+        public readonly bool $isReadonly = false,   // 属性提升 readonly 参数
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -447,6 +452,15 @@ class ThrowStmtNode extends StmtNode
     public function accept(ASTVisitor $visitor): string { return $visitor->visitThrowStmt($this); }
 }
 
+// throw 表达式（PHP 8.0+）：throw 出现在表达式位置
+//   $x = throw new E();  $x ?? throw new E();  $cond ? $a : throw new E();
+//   类型为 never（永不返回），编译期展开为 throw 语句，零运行时开销
+class ThrowExprNode extends ExprNode
+{
+    public function __construct(public readonly ExprNode $expr) {}
+    public function accept(ASTVisitor $visitor): string { return $visitor->visitThrowExpr($this); }
+}
+
 // LABEL:
 class LabelStmtNode extends StmtNode
 {
@@ -477,6 +491,39 @@ class ExprStmtNode extends StmtNode
     public function accept(ASTVisitor $visitor): string
     {
         return $visitor->visitExprStmt($this);
+    }
+}
+
+// static $var = expr;  或  static type $var = expr;
+//   函数内静态变量，跨调用保持值（等价于 C 函数内 static 变量）
+class StaticStmtNode extends StmtNode
+{
+    public function __construct(
+        public readonly string $varName,
+        public readonly ?string $type,     // null = 从初始值推导
+        public readonly ?ExprNode $init,   // 初始值（可为 null，仅声明）
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitStaticStmt($this);
+    }
+}
+
+// 函数内 const NAME = value;  或  const type NAME = value;
+//   PHP 8.3+ 函数内常量，等价于 C 函数内 static const 变量
+class ConstStmtNode extends StmtNode
+{
+    public function __construct(
+        public readonly string $name,
+        public readonly ExprNode $value,
+        /** 类型标注：'string'|'int'|'float'|'bool'|'array'，null=从字面量推导 */
+        public readonly ?string $type = null,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitConstStmt($this);
     }
 }
 
@@ -582,6 +629,7 @@ class ArrayEntryNode
     public function __construct(
         public readonly ?ExprNode $key,    // null = 自增 int 键
         public readonly ExprNode $value,
+        public readonly bool $isSpread = false, // ...$arr 展开元素（不允许 key）
     ) {}
 }
 
@@ -964,6 +1012,8 @@ interface ASTVisitor
     public function visitAssignArrayStmt(AssignArrayStmtNode $node): string;
     public function visitAssignArrayPushStmt(AssignArrayPushStmtNode $node): string;
     public function visitExprStmt(ExprStmtNode $node): string;
+    public function visitStaticStmt(StaticStmtNode $node): string;
+    public function visitConstStmt(ConstStmtNode $node): string;
     public function visitBlockStmt(BlockStmtNode $node): string;
     public function visitStringLiteral(StringLiteralExpr $node): string;
     public function visitIntLiteral(IntLiteralExpr $node): string;
@@ -1003,6 +1053,7 @@ interface ASTVisitor
     public function visitGotoStmt(GotoStmtNode $node): string;
     public function visitTryStmt(TryStmtNode $node): string;
     public function visitThrowStmt(ThrowStmtNode $node): string;
+    public function visitThrowExpr(ThrowExprNode $node): string;
     public function visitLabelStmt(LabelStmtNode $node): string;
     public function visitContinueStmt(ContinueStmtNode $node): string;
     public function visitPipeExpr(PipeExpr $node): string;

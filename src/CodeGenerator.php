@@ -31,6 +31,10 @@ class CodeGenerator implements ASTVisitor
     private array $declaredVars = [];
     /** for 循环提升到函数作用域的变量声明：varName => cType */
     private array $funcScopeDecls = [];
+    /** 函数内 const 常量名集合：name => true（用于 visitVariable 区分局部 const 与全局 const） */
+    private array $localConsts = [];
+    /** 当前 __construct 内已赋值的 readonly 属性集合: "className::propName" => true */
+    private array $assignedReadonlyProps = [];
 
     // ── 统一符号表 ──────────────────────────────────────────
     // 替代了 13 个散落的类型追踪数组
@@ -93,7 +97,7 @@ class CodeGenerator implements ASTVisitor
         'shuffle' => 't_bool', 'json_validate' => 't_bool', 'password_verify' => 't_bool',
         'in_array' => 't_bool', 'array_key_exists' => 't_bool', 'str_contains' => 't_bool',
         'boolval' => 't_bool', 'str_starts_with' => 't_bool', 'str_ends_with' => 't_bool',
-        'array_is_list' => 't_bool', 'file_put_contents' => 't_bool',
+        'array_is_list' => 't_bool', 'file_put_contents' => 't_bool', 'unlink' => 't_bool',
         'iconv_set_encoding' => 't_bool',
         // ── t_float ──
         'sin' => 't_float', 'cos' => 't_float', 'tan' => 't_float', 'asin' => 't_float', 'acos' => 't_float',
@@ -220,6 +224,9 @@ class CodeGenerator implements ASTVisitor
         'mt_rand'            => ['cName' => 'tphp_fn_mt_rand', 'modes' => ['direct', 'direct']],
         'random_int'         => ['cName' => 'tphp_fn_random_int', 'modes' => ['direct', 'direct']],
         'array_column'       => ['cName' => 'tphp_fn_array_column_str', 'modes' => ['direct', 'direct']],
+        'array_diff'         => ['cName' => 'tphp_fn_arr_diff', 'modes' => ['direct', 'direct']],
+        'array_intersect'    => ['cName' => 'tphp_fn_arr_intersect', 'modes' => ['direct', 'direct']],
+        'array_flip'         => ['cName' => 'tphp_fn_arr_flip', 'modes' => ['direct']],
         // ── 双参带默认值 ──
         'array_reverse'      => ['cName' => 'tphp_fn_arr_reverse', 'modes' => ['direct', 'direct'], 'defaults' => [1 => 'false']],
         'str_split'          => ['cName' => 'tphp_fn_str_split', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '1']],
@@ -291,6 +298,8 @@ class CodeGenerator implements ASTVisitor
     // ── 类型/作用域 ──────────────────────────────────────
     /** 当前方法/函数的返回类型（用于 return 语句的 t_var 包裹） */
     private string $currentRetType = '';
+    /** 当前方法/函数的 PHP 返回类型（用于 throw/error 语法检查 |Exception） */
+    private string $currentPhpRetType = '';
 
     // ============================================================
     public function generate(ProgramNode $program, string $phpFile, string $outputDir): string
@@ -421,7 +430,7 @@ class CodeGenerator implements ASTVisitor
             } else {
                 $ret = self::mapType($fn->returnType);
             }
-            $paramTypes = array_map(fn($p) => self::paramCType($p), $fn->params);
+            $paramTypes = array_map(fn($p) => $this->paramCTypeResolved($p), $fn->params);
             // 计算默认值参数数量
             $defaultCount = 0;
             $totalParams = count($fn->params);
@@ -512,6 +521,8 @@ class CodeGenerator implements ASTVisitor
     {
         $this->varTypes = [];
         $this->declaredVars = [];
+        $this->localConsts = [];
+        $this->assignedReadonlyProps = [];
         $this->tmpVarCounter = 0;
         $this->closureCounter = 0;
         $this->capTypeCounter = 0;
@@ -703,9 +714,17 @@ class CodeGenerator implements ASTVisitor
         // 属性字段 + 记录类型
         $propTypes = [];
         $hookedPropsList = [];
+        $staticPropDecls = []; // 静态属性 → 文件作用域变量声明
         foreach ($class->properties as $prop) {
             $ptype = self::mapType($prop->type);
             $pname = ltrim($prop->name, '$');
+            if ($prop->isStatic) {
+                // 静态属性 → 文件作用域 static 变量（AOT: 编译期固定地址，零运行时开销）
+                $varName = "{$cn}_{$pname}";
+                $init = $this->staticPropInitializer($ptype, $prop);
+                $staticPropDecls[] = "static {$ptype} {$varName}{$init};";
+                continue; // 不进实例结构体
+            }
             $o[] = $this->ind("{$ptype} {$pname};");
             $propTypes[$pname] = $ptype;
             // 注册 Property Hook
@@ -727,10 +746,16 @@ class CodeGenerator implements ASTVisitor
             }
         }
         // ── 注册到统一符号表 ──
-        $this->symbols->addClass($cn, $parentCN, $class->isAbstract, $class->implements);
+        $this->symbols->addClass($cn, $parentCN, $class->isAbstract, $class->implements, $class->isReadonly);
         $this->symbols->addClassName($class->name, $cn);
-        foreach ($propTypes as $pn => $pt) {
-            $this->symbols->addClassProp($cn, $pn, $pt);
+        foreach ($class->properties as $prop) {
+            $pname = ltrim($prop->name, '$');
+            $ptype = self::mapType($prop->type);
+            $this->symbols->addClassProp($cn, $pname, $ptype, !$prop->isStatic, $prop->isStatic);
+            // readonly 属性注册（readonly class 中所有属性自动 readonly）
+            if (($prop->isReadonly || $class->isReadonly) && !$prop->isStatic) {
+                $this->symbols->addClassReadonlyProp($cn, $pname);
+            }
         }
         // 方法返回类型 + 参数类型 + 默认值信息（第一遍即注册完整信息，
         // 确保跨类方法调用在 emitClassImpl 阶段即可解析重载版本）
@@ -744,10 +769,15 @@ class CodeGenerator implements ASTVisitor
             for ($i = $tp - 1; $i >= 0; $i--) {
                 if ($m->params[$i]->default !== null) { $dc++; } else { break; }
             }
-            $this->symbols->getClass($cn)->methods[$m->name] = new MethodInfo($mr, $pts, false, 'public', $dc, $tp);
+            $this->symbols->getClass($cn)->methods[$m->name] = new MethodInfo($mr, $pts, $m->isStatic, $m->visibility, $dc, $tp);
         }
         $o[] = "} {$cn};";
         $o[] = '';
+        // 静态属性 → 文件作用域 static 变量（AOT: 编译期固定地址，零运行时查找开销）
+        foreach ($staticPropDecls as $decl) {
+            $o[] = $decl;
+        }
+        if (!empty($staticPropDecls)) $o[] = '';
         // 类常量 → #define（简单类型）或 static 变量（array）
         foreach ($class->classConsts as $cc) {
             $cname = 'TPHP_CONST_' . strtoupper($cn . '_' . $cc->name);
@@ -902,6 +932,8 @@ class CodeGenerator implements ASTVisitor
         // __construct — 注入参数类型到 varTypes
         $this->declaredVars = ['self' => true];
         $this->varTypes = [];
+        $this->localConsts = [];
+        $this->assignedReadonlyProps = [];
         $this->symbols->clearScopeObjects();
 
         if ($isMain) {
@@ -923,8 +955,9 @@ class CodeGenerator implements ASTVisitor
         $o[] = $ctorSig;
         $o[] = $this->ind('if (self == NULL) return;');
 
-        // 属性默认值初始化 — 字符串用深拷贝
+        // 属性默认值初始化 — 字符串用深拷贝（静态属性已在文件作用域初始化，跳过）
         foreach ($class->properties as $prop) {
+            if ($prop->isStatic) continue;
             if ($prop->default !== null) {
                 $pname = ltrim($prop->name, '$');
                 $def = $prop->default->accept($this);
@@ -965,7 +998,10 @@ class CodeGenerator implements ASTVisitor
         }
 
         if ($ctor && !empty($ctor->body)) {
+            $savedMethodName = $this->currentMethodName;
+            $this->currentMethodName = '__construct';
             foreach ($ctor->body as $s) $o[] = $this->ind($s->accept($this));
+            $this->currentMethodName = $savedMethodName;
         } else if ($isMain) {
             $o[] = $this->ind('(void)argc;');
             $o[] = $this->ind('(void)argv;');
@@ -979,8 +1015,9 @@ class CodeGenerator implements ASTVisitor
         if ($dtor && !empty($dtor->body)) {
             foreach ($dtor->body as $s) $o[] = $this->ind($s->accept($this));
         }
-        // 自动释放所有 t_string 属性的堆内存
+        // 自动释放所有 t_string 属性的堆内存（静态属性为文件作用域变量，不在此释放）
         foreach ($class->properties as $prop) {
+            if ($prop->isStatic) continue;
             if ($prop->type === 'string') {
                 $pname = ltrim($prop->name, '$');
                 $o[] = $this->ind("tphp_rt_str_free(&self->{$pname});");
@@ -1008,12 +1045,16 @@ class CodeGenerator implements ASTVisitor
                 $savedDeclaredVars = $this->declaredVars;
                 $savedVarTypes = $this->varTypes;
                 $savedRetType = $this->currentRetType;
+                $savedPhpRetType = $this->currentPhpRetType;
+                $savedLocalConsts = $this->localConsts;
 
                 $this->inHookBody = true;
                 $this->inMethod = true;
                 $this->declaredVars = ['self' => true];
                 $this->varTypes = ['self' => $cn];
+                $this->localConsts = [];
                 $this->funcScopeDecls = [];
+                $this->currentPhpRetType = ''; // hook 无显式返回类型声明，跳过 |Exception 检查
                 $this->symbols->clearScopeObjects();
                 $this->symbols->clearScopeVars();
 
@@ -1065,6 +1106,8 @@ class CodeGenerator implements ASTVisitor
                 $this->declaredVars = $savedDeclaredVars;
                 $this->varTypes = $savedVarTypes;
                 $this->currentRetType = $savedRetType;
+                $this->currentPhpRetType = $savedPhpRetType;
+                $this->localConsts = $savedLocalConsts;
             }
         }
 
@@ -1104,9 +1147,11 @@ class CodeGenerator implements ASTVisitor
         $this->currentNamespace = $node->namespace; // P2-6: __NAMESPACE__
         $this->declaredVars = [];
         $this->varTypes = [];
+        $this->localConsts = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
+        $this->currentPhpRetType = $node->returnType;
         $ret = self::mapType($node->returnType);
         $this->currentRetType = $ret;
         // 注册返回类型，供 inferCallReturnType 使用
@@ -1142,6 +1187,7 @@ class CodeGenerator implements ASTVisitor
         // 生成主函数（完整参数版本）
         $this->declaredVars = [];
         $this->varTypes = [];
+        $this->localConsts = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
@@ -1151,7 +1197,7 @@ class CodeGenerator implements ASTVisitor
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);
             $this->declaredVars[$vn] = true;
-            $this->varTypes[$vn] = self::paramCType($p);
+            $this->varTypes[$vn] = $this->paramCTypeResolved($p);
             $paramVars[$vn] = true;
         }
         $header = [];
@@ -1194,15 +1240,19 @@ class CodeGenerator implements ASTVisitor
         $savedDeclaredVars = $this->declaredVars;
         $savedVarTypes = $this->varTypes;
         $savedCurrentRetType = $this->currentRetType;
+        $savedCurrentPhpRetType = $this->currentPhpRetType;
         $savedInGenerator = $this->inGenerator;
+        $savedLocalConsts = $this->localConsts;
 
         // 重置作用域
         $this->declaredVars = [];
         $this->varTypes = [];
+        $this->localConsts = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
         $this->currentRetType = 't_var';
+        $this->currentPhpRetType = $node->returnType;
         $this->inGenerator = true;
 
         // 注册参数到局部变量表（与 visitFunction 一致）
@@ -1211,7 +1261,7 @@ class CodeGenerator implements ASTVisitor
         $paramLocalDecls = [];
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);
-            $ct = self::paramCType($p);
+            $ct = $this->paramCTypeResolved($p);
             $this->declaredVars[$vn] = true;
             $this->varTypes[$vn] = $ct;
             $paramVars[$vn] = true;
@@ -1254,8 +1304,9 @@ class CodeGenerator implements ASTVisitor
         $this->declaredVars = $savedDeclaredVars;
         $this->varTypes = $savedVarTypes;
         $this->currentRetType = $savedCurrentRetType;
+        $this->currentPhpRetType = $savedCurrentPhpRetType;
         $this->inGenerator = $savedInGenerator;
-
+        $this->localConsts = $savedLocalConsts;
         // 参数结构体 typedef → SEC_FWDDECLS
         $typedef = "typedef struct {\n" . implode("\n", $paramFields) . "\n} {$paramsStruct};";
         $this->sectionLine(self::SEC_FWDDECLS, $typedef);
@@ -1314,18 +1365,22 @@ class CodeGenerator implements ASTVisitor
         $savedDeclaredVars = $this->declaredVars;
         $savedVarTypes = $this->varTypes;
         $savedCurrentRetType = $this->currentRetType;
+        $savedCurrentPhpRetType = $this->currentPhpRetType;
         $savedInGenerator = $this->inGenerator;
         $savedCurrentMethodName = $this->currentMethodName;
         $savedCurrentFuncName = $this->currentFuncName;
         $savedInMethod = $this->inMethod;
+        $savedLocalConsts = $this->localConsts;
 
         // 重置作用域
         $this->declaredVars = ['self' => true];
         $this->varTypes = ['self' => $cn . '*'];
+        $this->localConsts = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
         $this->currentRetType = 't_var';
+        $this->currentPhpRetType = $node->returnType;
         $this->inGenerator = true;
         $this->currentMethodName = $node->name;
         $this->currentFuncName = $node->name;
@@ -1348,7 +1403,7 @@ class CodeGenerator implements ASTVisitor
         $paramLocalDecls = ["    {$cn}* self;"];
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);
-            $ct = self::paramCType($p);
+            $ct = $this->paramCTypeResolved($p);
             $this->declaredVars[$vn] = true;
             $this->varTypes[$vn] = $ct;
             $paramVars[$vn] = true;
@@ -1395,7 +1450,9 @@ class CodeGenerator implements ASTVisitor
         $this->declaredVars = $savedDeclaredVars;
         $this->varTypes = $savedVarTypes;
         $this->currentRetType = $savedCurrentRetType;
+        $this->currentPhpRetType = $savedCurrentPhpRetType;
         $this->inGenerator = $savedInGenerator;
+        $this->localConsts = $savedLocalConsts;
         $this->currentMethodName = $savedCurrentMethodName;
         $this->currentFuncName = $savedCurrentFuncName;
         $this->inMethod = $savedInMethod;
@@ -1512,14 +1569,18 @@ class CodeGenerator implements ASTVisitor
         if ($node->isGenerator) {
             return $this->emitGeneratorMethod($node);
         }
+        $isStatic = $node->isStatic;
         $this->currentMethodName = $node->name;
         $this->currentFuncName = $node->name; // P2-6: __FUNCTION__ 在方法内返回方法名
         $this->inMethod = true;
-        $this->declaredVars = ['self' => true];
+        // 静态方法无 self 变量
+        $this->declaredVars = $isStatic ? [] : ['self' => true];
         $this->varTypes = [];
+        $this->localConsts = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
+        $this->currentPhpRetType = $node->returnType;
         $this->currentRetType = $this->mapType($node->returnType);
 
         // 检查是否有默认值参数
@@ -1542,24 +1603,28 @@ class CodeGenerator implements ASTVisitor
         $this->currentMethodName = $node->name;
         $this->currentFuncName = $node->name; // P2-6
         $this->inMethod = true;
-        $this->declaredVars = ['self' => true];
+        $this->declaredVars = $isStatic ? [] : ['self' => true];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
+        $this->currentPhpRetType = $node->returnType;
         $this->currentRetType = $this->mapType($node->returnType);
 
-        $paramVars = ['self' => true];
+        $paramVars = $isStatic ? [] : ['self' => true];
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);
             $this->declaredVars[$vn] = true;
-            $this->varTypes[$vn] = self::paramCType($p);
+            $this->varTypes[$vn] = $this->paramCTypeResolved($p);
             $paramVars[$vn] = true;
         }
         // Phase 1: header
         $header = [];
         $header[] = $this->methodImpl($node) . ' {';
-        $header[] = $this->ind('if (self == NULL) ' . $this->zeroReturn($this->currentRetType));
+        // 静态方法无 self，跳过 NULL 检查
+        if (!$isStatic) {
+            $header[] = $this->ind('if (self == NULL) ' . $this->zeroReturn($this->currentRetType));
+        }
 
         // Phase 2: body (侧作用: 填充 funcScopeDecls)
         $bodyLines = [];
@@ -1602,6 +1667,7 @@ class CodeGenerator implements ASTVisitor
         $methodImpl = $this->methodImpl($node);
         // 获取类名（从 methodImpl 中提取）
         $cn = $this->className;
+        $isStatic = $node->isStatic;
 
         // 找到第一个有默认值的参数位置
         $firstDefaultIdx = count($node->params);
@@ -1617,15 +1683,18 @@ class CodeGenerator implements ASTVisitor
             $overloadName = $cn . '_' . $node->name . '_' . (count($node->params) - $cutIdx);
             $cutParams = array_slice($node->params, 0, $cutIdx);
 
-            // 重载函数参数列表（包含 self）
+            // 重载函数参数列表（静态方法无 self）
             // 注意：$cn 已是 classCName() 返回值（含 tphp_class_ 前缀），不再重复添加
-            $overloadParams = [$cn . '* self'];
+            $overloadParams = [];
+            if (!$isStatic) $overloadParams[] = $cn . '* self';
             foreach ($cutParams as $p) {
                 $overloadParams[] = self::paramDecl($p);
             }
+            if (empty($overloadParams)) $overloadParams[] = 'void';
 
             // 调用完整参数版本时传递的参数
-            $callArgs = ['self'];
+            $callArgs = [];
+            if (!$isStatic) $callArgs[] = 'self';
             for ($i = 0; $i < count($node->params); $i++) {
                 if ($i < $cutIdx) {
                     $callArgs[] = self::varName($node->params[$i]->name);
@@ -1742,6 +1811,10 @@ class CodeGenerator implements ASTVisitor
 
     public function visitReturnStmt(ReturnStmtNode $node): string
     {
+        // return throw expr; → throw 永不返回，直接生成 throw 语句
+        if ($node->expr !== null && $node->expr instanceof ThrowExprNode) {
+            return $this->genThrowCode($node->expr->expr) . ';';
+        }
         if ($this->inGenerator) {
             // 生成器内：push 返回值（t_var），然后裸 return
             if ($node->expr !== null) {
@@ -1854,6 +1927,10 @@ class CodeGenerator implements ASTVisitor
 
     public function visitAssignStmt(AssignStmtNode $node): string
     {
+        // $x = throw expr; → throw 永不返回，直接生成 throw 语句（不赋值）
+        if ($node->expr instanceof ThrowExprNode) {
+            return $this->genThrowCode($node->expr->expr) . ';';
+        }
         $var = self::varName($node->varName);
         $isDeclared = isset($this->declaredVars[$var]);
         $prevType = $this->varTypes[$var] ?? '';
@@ -2419,6 +2496,32 @@ class CodeGenerator implements ASTVisitor
                     $objCN = rtrim($objType, '*');
                 }
             }
+            // ── readonly 属性编译期检查 ──
+            // PHP 8.2 语义: readonly 属性只能在声明它的类的 __construct 内赋值一次
+            if ($objCN !== '' && !ctype_upper($prop[0] ?? '')) {
+                if ($this->symbols->isPropReadonly($objCN, $prop)) {
+                    $declCN = $this->symbols->getReadonlyPropDeclaringClass($objCN, $prop);
+                    // 必须在声明该 readonly 属性的类的 __construct 内
+                    if ($this->currentMethodName !== '__construct' || $this->className !== $declCN) {
+                        $phpCls = $this->phpClassName;
+                        throw new \RuntimeException(
+                            "Cannot assign readonly property '{$phpCls}::\${$prop}' "
+                            . "outside of its declaring class's __construct "
+                            . "(readonly properties can only be initialized in the class that declares them)"
+                        );
+                    }
+                    // 检查重复赋值
+                    $key = "{$declCN}::{$prop}";
+                    if (isset($this->assignedReadonlyProps[$key])) {
+                        $phpCls = $this->phpClassName;
+                        throw new \RuntimeException(
+                            "Cannot reassign readonly property '{$phpCls}::\${$prop}' "
+                            . "(readonly properties can only be initialized once)"
+                        );
+                    }
+                    $this->assignedReadonlyProps[$key] = true;
+                }
+            }
             if ($objCN !== '' && !ctype_upper($prop[0] ?? '')) {
                 $hookInfo = $this->resolveHookInfo($objCN, $prop);
                 if ($hookInfo !== null && $hookInfo['set']) {
@@ -2497,6 +2600,21 @@ class CodeGenerator implements ASTVisitor
         foreach ($expr->entries as $entry) {
             $val = $entry->value ?? $entry;
             if ($val === null) continue;
+            // spread 元素: ...$arr → 取源数组的元素类型
+            if ($entry->isSpread) {
+                if ($val instanceof VariableExpr) {
+                    $vn = self::varName($val->name);
+                    $et = $this->arrElementTypes[$vn] ?? null;
+                    if ($et !== null && $et !== 't_int') return $et;
+                }
+                $cType = $this->inferType($val);
+                if ($cType === 't_array*') {
+                    // 无法确定元素类型时，回退到 t_int（元素类型追踪不覆盖所有情况）
+                    continue;
+                }
+                if ($cType !== 'null' && $cType !== 't_int') return $cType;
+                continue;
+            }
             $cType = $this->inferType($val);
             if ($cType !== 'null' && $cType !== 't_int') return $cType;
         }
@@ -2524,6 +2642,11 @@ class CodeGenerator implements ASTVisitor
     {
         foreach ($expr->entries as $entry) {
             $val = $entry->value ?? $entry;
+            // spread 嵌套数组: ...$arr（其中 $arr 元素本身是数组）→ 取源数组嵌套元素类型
+            if ($entry->isSpread && $val instanceof VariableExpr) {
+                $vn = self::varName($val->name);
+                if (isset($this->arrNestedTypes[$vn])) return $this->arrNestedTypes[$vn];
+            }
             if ($val instanceof ArrayLiteralExpr) {
                 return $this->inferArrayElementType($val);
             }
@@ -2588,6 +2711,12 @@ class CodeGenerator implements ASTVisitor
             : ($this->varTypes[$objKey] ?? '');
         // 去掉尾部 *（指针类型）以匹配 SymbolTable key
         $objType = rtrim($objType, '*');
+        // 静态属性访问: ClassName::$prop — 解析类名
+        if ($objType === '' && $pa->object instanceof VariableExpr
+            && !str_starts_with($pa->object->name, '$') && $pa->object->name !== 'self') {
+            $resolved = $this->symbols->resolveClass($pa->object->name);
+            if ($resolved !== null) $objType = $resolved;
+        }
         // 链式数组访问: $catalog[0][0]->prop — 用 inferType 推导对象类型
         if ($objType === '' && $pa->object instanceof ArrayAccessExpr) {
             $inferred = $this->inferType($pa->object);
@@ -2611,14 +2740,16 @@ class CodeGenerator implements ASTVisitor
             }
         }
         if ($objType !== '' && $this->symbols->hasClass($objType)) {
-            $pt = $this->symbols->getClassPropType($objType, $pa->property);
+            $propName = ltrim($pa->property, '$');
+            $pt = $this->symbols->getClassPropType($objType, $propName);
             if ($pt !== null) return $pt;
         }
         // Search parent chain for inherited properties
         $cur = $objType;
         while ($this->symbols->hasClass($cur) && $this->symbols->getClassParent($cur) !== '') {
             $cur = $this->symbols->getClassParent($cur);
-            $pt = $this->symbols->getClassPropType($cur, $pa->property);
+            $propName = ltrim($pa->property, '$');
+            $pt = $this->symbols->getClassPropType($cur, $propName);
             if ($pt !== null) {
                 return $pt;
             }
@@ -2629,6 +2760,81 @@ class CodeGenerator implements ASTVisitor
     public function visitExprStmt(ExprStmtNode $node): string
     {
         return $node->expr->accept($this) . ';';
+    }
+
+    /**
+     * 函数内 static 局部变量 → C 函数内 static 变量
+     *   static int $n = 0;   → static t_int n = 0;
+     *   static $n = 0;       → static t_int n = 0;  (类型从字面量推导)
+     *   static string $s = "hi"; → static t_string s = STR_LIT("hi");
+     *
+     * 语义：首次调用时初始化，后续调用保持上次值（C static 语义完全匹配）
+     * 注意：不加入 scopeStrings/scopeArrays — static 变量跨调用持久，不在作用域结束时释放
+     */
+    public function visitStaticStmt(StaticStmtNode $node): string
+    {
+        $var = self::varName($node->varName);
+        // 确定类型：有声明用声明，无则从初始值推导
+        if ($node->type !== null) {
+            $cType = self::mapType($node->type);
+        } elseif ($node->init !== null) {
+            $cType = $this->inferType($node->init);
+            if ($cType === 'null' || $cType === 'void*') {
+                // null 初值 → 用 void* 占位（PHP 语义: static $x; 默认 null）
+                $cType = 'void*';
+            }
+        } else {
+            // static $var; 无初值无类型 → void* (null)
+            $cType = 'void*';
+        }
+        // 注册到作用域变量追踪（后续引用需知道类型）
+        $this->declaredVars[$var] = true;
+        $this->varTypes[$var] = $cType;
+        // 生成 C static 变量声明
+        if ($node->init === null) {
+            return "static {$cType} {$var} = null;";
+        }
+        $initCode = $node->init->accept($this);
+        return "static {$cType} {$var} = {$initCode};";
+    }
+
+    /**
+     * 函数内 const → C 函数内 static const 变量
+     *   const int MAX = 100;      → static const t_int MAX = 100;
+     *   const PI = 3.14;          → static const t_float PI = 3.14;  (类型从字面量推导)
+     *   const string GREETING = "hi"; → static const t_string GREETING = STR_LIT("hi");
+     *
+     * 语义：编译期常量，C 编译器优化为立即数（零运行时开销）
+     * 注意：常量名注册到 localConsts，visitVariable 据此区分局部 const 与全局 const
+     */
+    public function visitConstStmt(ConstStmtNode $node): string
+    {
+        $name = $node->name;
+        // 确定类型：有声明用声明，无则从字面量推导
+        $litCType = self::$litTypeMap[$node->value::class] ?? 't_int';
+        if ($node->type !== null) {
+            $declCType = self::mapType($node->type);
+            if ($litCType !== null && $declCType !== $litCType) {
+                throw new \RuntimeException(
+                    "Constant {$name} type mismatch: "
+                    . "declared '{$node->type}' ({$declCType}) but value is {$litCType}"
+                );
+            }
+            $cType = $declCType;
+        } else {
+            $cType = $litCType ?? 't_int';
+        }
+        // 注册到局部常量集合（visitVariable 据此直接引用变量名而非 TPHP_CONST_）
+        $this->localConsts[$name] = true;
+        $this->declaredVars[$name] = true;
+        $this->varTypes[$name] = $cType;
+        // 生成 C static const 变量声明（字面量初始化）
+        if ($node->value instanceof StringLiteralExpr) {
+            $val = str_replace('"', '\\"', $node->value->value);
+            return "static const {$cType} {$name} = STR_LIT(\"{$val}\");";
+        }
+        $valCode = $node->value->accept($this);
+        return "static const {$cType} {$name} = {$valCode};";
     }
 
     public function visitBlockStmt(BlockStmtNode $node): string
@@ -2722,6 +2928,12 @@ class CodeGenerator implements ASTVisitor
         $parts[] = "t_array* {$varName} = tphp_fn_arr_create({$cap}); tphp_rt_register((void*){$varName}, 1);";
         $parts[] = "if ({$varName} != NULL) {";
         foreach ($node->entries as $entry) {
+            // spread 元素: ...$arr → 调用 tphp_fn_arr_spread 展开源数组
+            if ($entry->isSpread) {
+                $srcCode = $entry->value->accept($this);
+                $parts[] = "{$varName} = tphp_fn_arr_spread({$varName}, {$srcCode});";
+                continue;
+            }
             $valCode = $entry->value->accept($this);
             $wrap = $this->wrapArrayElement($entry->value, $valCode);
 
@@ -2823,12 +3035,18 @@ class CodeGenerator implements ASTVisitor
         $savedTypes    = $this->varTypes;
         $savedIndent   = $this->indent;
         $savedRetType  = $this->currentRetType;
+        $savedPhpRetType = $this->currentPhpRetType;
+        $savedLocalConsts = $this->localConsts;
+        $savedFuncScopeDecls = $this->funcScopeDecls;
 
         $this->declaredVars = [];
         $this->symbols->clearScopeObjects();
         $this->varTypes     = [];
+        $this->localConsts  = [];
+        $this->funcScopeDecls = [];
         $this->indent       = 0;
         $this->currentRetType = $ret;
+        $this->currentPhpRetType = $node->returnType;
         foreach ($node->params as $p) {
             $vn = self::varName($p->name);
             $this->declaredVars[$vn] = true;
@@ -2849,15 +3067,22 @@ class CodeGenerator implements ASTVisitor
         } else {
             $implLines[] = '    (void)_env;';
         }
+        // Phase: body (侧作用: 填充 funcScopeDecls)
+        $bodyLines = [];
         if (empty($node->body)) {
             foreach ($node->params as $p) {
-                $implLines[] = '    (void)' . self::varName($p->name) . ';';
+                $bodyLines[] = '    (void)' . self::varName($p->name) . ';';
             }
         } else {
             foreach ($node->body as $s) {
-                $implLines[] = '    ' . $s->accept($this);
+                $bodyLines[] = '    ' . $s->accept($this);
             }
         }
+        // for 循环提升声明（闭包内 for (int $i = ...) 需要声明 i）
+        foreach ($this->funcScopeDecls as $vn => $ct) {
+            $implLines[] = "    {$ct} {$vn};";
+        }
+        $implLines = array_merge($implLines, $bodyLines);
         foreach ($this->symbols->scopeObjects() as $ov) {
             $implLines[] = '    ' . "tp_obj_release({$ov});";
         }
@@ -2878,6 +3103,9 @@ class CodeGenerator implements ASTVisitor
         $this->varTypes     = $savedTypes;
         $this->indent       = $savedIndent;
         $this->currentRetType = $savedRetType;
+        $this->currentPhpRetType = $savedPhpRetType;
+        $this->localConsts  = $savedLocalConsts;
+        $this->funcScopeDecls = $savedFuncScopeDecls;
 
         // 注册捕获 struct 定义（后处理时插入文件顶部）
         if ($hasCapture) {
@@ -2944,15 +3172,19 @@ class CodeGenerator implements ASTVisitor
         $savedTypes    = $this->varTypes;
         $savedIndent   = $this->indent;
         $savedRetType  = $this->currentRetType;
+        $savedPhpRetType = $this->currentPhpRetType;
         $savedInGenerator = $this->inGenerator;
+        $savedLocalConsts = $this->localConsts;
 
         // 重置作用域
         $this->declaredVars = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->varTypes     = [];
+        $this->localConsts  = [];
         $this->indent       = 0;
         $this->currentRetType = 't_var';
+        $this->currentPhpRetType = $node->returnType;
         $this->inGenerator = true;
         $this->funcScopeDecls = [];
 
@@ -3026,6 +3258,8 @@ class CodeGenerator implements ASTVisitor
         $this->varTypes     = $savedTypes;
         $this->indent       = $savedIndent;
         $this->currentRetType = $savedRetType;
+        $this->currentPhpRetType = $savedPhpRetType;
+        $this->localConsts  = $savedLocalConsts;
         $this->inGenerator = $savedInGenerator;
 
         // capture struct 定义 → SEC_CAPTYPES
@@ -3218,6 +3452,10 @@ class CodeGenerator implements ASTVisitor
         if ($node->name === 'self') return 'self';
         // 原始名字判断是否常量
         if (!str_starts_with($node->name, '$')) {
+            // 函数内 const 局部常量 → 直接引用变量名（C static const 变量）
+            if (isset($this->localConsts[$node->name])) {
+                return $node->name;
+            }
             return 'TPHP_CONST_' . strtoupper($node->name);
         }
         $n = self::varName($node->name);
@@ -3678,12 +3916,12 @@ class CodeGenerator implements ASTVisitor
             return $this->generateVarExport($node->args);
         }
 
-        // error($msg) → 报错 + 清理所有资源 + 退出
+        // error($msg) → 抛出异常（tp_throw），可被 try-catch 捕获
+        // 无 try-catch 时 tp_throw 内部仍会 Fatal error + exit(1)
         if ($node->callee === null && $node->name === 'error') {
+            $this->checkExceptionReturnType();
             $msg  = !empty($node->args) ? $this->castToStr($node->args[0]) : 'STR_LIT("")';
-            $line = !empty($node->args) ? ($node->args[0]->line ?? 0) : 0;
-            $file = '"' . str_replace(['\\', '"'], ['/', '\"'], $this->phpFile) . '"';
-            return 'tphp_fn_error(' . $msg . ', ' . $file . ', ' . $line . ')';
+            return 'tp_throw(STR_PTR_V(' . $msg . '))';
         }
 
         // isset($var) → 非 null 检测（非指针类型始终 true）
@@ -4551,12 +4789,26 @@ class CodeGenerator implements ASTVisitor
                 );
             }
         }
+        // 静态属性访问: Class::$prop / self::$prop → 文件作用域变量 <cn>_<prop>
+        //   (property 名以 $ 开头标识静态属性，object 名无 $ 前缀标识类名/self)
+        if ($node->object instanceof VariableExpr
+            && !str_starts_with($node->object->name, '$')
+            && str_starts_with($node->property, '$')) {
+            $rawName = $node->object->name;
+            $cn = ($rawName === 'self')
+                ? $this->className
+                : ($this->symbols->resolveClass($rawName) ?? $rawName);
+            if ($this->symbols->isStaticProp($cn, $prop)) {
+                return "{$cn}_{$prop}";
+            }
+            throw new \RuntimeException(
+                sprintf("[%d:%d] Access to undeclared static property %s::$%s", $node->line, $node->column, $rawName, $prop)
+            );
+        }
         // COS inheritance: resolve property through _parent chain
         $objCN = '';
         if ($obj === 'self') {
             $objCN = $this->className;
-        } elseif ($node->object instanceof VariableExpr && !str_starts_with($node->object->name, '$')) {
-            // static property — skip
         } elseif ($node->object instanceof VariableExpr) {
             $objType = $this->varTypes[self::varName($node->object->name)] ?? '';
             // tphp_class_Dog* → tphp_class_Dog
@@ -5297,24 +5549,67 @@ class CodeGenerator implements ASTVisitor
 
     public function visitThrowStmt(ThrowStmtNode $node): string
     {
-        $code = $node->expr->accept($this);
+        $this->checkExceptionReturnType();
+        return $this->genThrowCode($node->expr) . ';';
+    }
+
+    /** 检查当前函数/方法的返回类型是否声明了 |Exception */
+    private function checkExceptionReturnType(): void
+    {
+        $rt = $this->currentPhpRetType;
+        if ($rt === '') return; // 全局作用域或未追踪的上下文，跳过
+        // Main::main 是程序入口，try/catch 可捕获异常，无需 |Exception 声明
+        if ($this->phpClassName === 'Main' && $this->currentMethodName === 'main') return;
+        if (!str_contains($rt, '|')) {
+            $fn = $this->currentFuncName !== '' ? $this->currentFuncName : ($this->currentMethodName !== '' ? $this->currentMethodName : '<anonymous>');
+            throw new \LogicException(
+                "Function/method '{$fn}' contains throw/error() but return type does not declare |Exception. "
+                . "Expected: {$rt}|Exception, got: {$rt}"
+            );
+        }
+        $parts = explode('|', $rt);
+        $hasExc = false;
+        foreach ($parts as $p) {
+            if ($this->symbols->isExceptionSubclass($p)) { $hasExc = true; break; }
+        }
+        if (!$hasExc) {
+            $fn = $this->currentFuncName !== '' ? $this->currentFuncName : ($this->currentMethodName !== '' ? $this->currentMethodName : '<anonymous>');
+            throw new \LogicException(
+                "Function/method '{$fn}' contains throw/error() but return type does not declare |Exception. "
+                . "Expected: {$rt}|Exception, got: {$rt}"
+            );
+        }
+    }
+
+    /** 生成 throw 的 C 宏调用（不带分号），供 visitThrowStmt 和 visitThrowExpr 复用 */
+    private function genThrowCode(ExprNode $expr): string
+    {
+        $code = $expr->accept($this);
         // throw new Exception(...) 或 throw new Exception子类(...) → tp_throw_ex()
-        // tp_throw_ex 接收原始对象指针，内部通过 cls->exception_offset 计算 Exception*
-        if ($node->expr instanceof NewExpr) {
-            return "tp_throw_ex({$code});";
+        if ($expr instanceof NewExpr) {
+            return "tp_throw_ex({$code})";
         }
         // throw $exceptionVar (Exception 子类类型) → tp_throw_ex
-        $type = $this->inferType($node->expr);
+        $type = $this->inferType($expr);
         if (str_starts_with($type, 'tphp_class_') && str_ends_with($type, '*')) {
-            return "tp_throw_ex({$code});";
+            return "tp_throw_ex({$code})";
         }
         // throw "string" → tp_throw(STR_PTR_V(msg))
-        // 使用 STR_PTR_V 而非 .data：既正确处理 SSO 短串（≤23B 内联在 .local），
-        // 又避免 TCC 对匿名 union 成员直接访问的兼容性问题
         if ($type === 't_string') {
-            return "tp_throw(STR_PTR_V({$code}));";
+            return "tp_throw(STR_PTR_V({$code}))";
         }
-        return "tp_throw((char*)(uintptr_t)(" . $code . "));";
+        return "tp_throw((char*)(uintptr_t)(" . $code . "))";
+    }
+
+    /** throw 表达式（PHP 8.0+）：出现在表达式位置的 throw
+     *  tp_throw_ex/tp_throw 是 do-while 宏，不能直接嵌入表达式位置
+     *  利用 TCC 的 GNU 语句表达式扩展包装：({ throw_code; 0; })
+     *  throw 永不返回，0 是死代码占位值 */
+    public function visitThrowExpr(ThrowExprNode $node): string
+    {
+        $this->checkExceptionReturnType();
+        $throwCode = $this->genThrowCode($node->expr);
+        return "({ {$throwCode}; 0; })";
     }
 
     /**
@@ -5387,11 +5682,45 @@ class CodeGenerator implements ASTVisitor
         ]);
     }
 
+    /**
+     * 静态属性文件作用域初始化器
+     *   - 标量: ` = 42` / ` = 3.14` / ` = true`
+     *   - 字符串字面量: ` = STR_LIT("hello")`
+     *   - 无默认值: ``（零初始化由 C 文件作用域 static 保证）
+     *   - 数组/对象: 不支持文件作用域初始化（需运行时），返回空串
+     */
+    private function staticPropInitializer(string $cType, PropertyDeclNode $prop): string
+    {
+        if ($prop->default === null) return '';
+        $def = $prop->default;
+        if ($cType === 't_string' && $def instanceof StringLiteralExpr) {
+            $val = str_replace('"', '\\"', $def->value);
+            return " = STR_LIT(\"{$val}\")";
+        }
+        if ($def instanceof IntLiteralExpr) {
+            return " = {$def->value}";
+        }
+        if ($def instanceof FloatLiteralExpr) {
+            $fv = $def->value;
+            return ' = ' . (($fv == (float)(int)$fv) ? sprintf('%.1f', $fv) : rtrim(rtrim(sprintf('%.15g', $fv), '0'), '.'));
+        }
+        if ($def instanceof BoolLiteralExpr) {
+            return ' = ' . ($def->value ? 'true' : 'false');
+        }
+        // 数组/对象/复杂表达式默认值：文件作用域无法初始化，留空（零初始化）
+        //   用户可在构造函数或静态 init 方法中手动赋值
+        return '';
+    }
+
     // ============================================================
     private function methodDecl(MethodNode $m): string
     {
         $ret = self::mapType($m->returnType);
         $params = array_map(fn($p) => $this->visitParam($p), $m->params);
+        // 静态方法签名省略 self 参数（AOT: 编译期已知，无 this 指针）
+        if ($m->isStatic) {
+            return "{$ret} {$this->className}_{$m->name}(" . (empty($params) ? 'void' : implode(', ', $params)) . ')';
+        }
         return "{$ret} {$this->className}_{$m->name}({$this->className}* self" .
             (empty($params) ? '' : ', ' . implode(', ', $params)) . ')';
     }
@@ -5606,15 +5935,15 @@ class CodeGenerator implements ASTVisitor
             }
         }
         return match ($et) {
-            't_int'      => "tphp_fn_arr_item_int({$arr}, (int)({$idx}))",
-            't_float'    => "tphp_fn_arr_item_float({$arr}, (int)({$idx}))",
-            't_string'   => "tphp_fn_arr_item_str({$arr}, (int)({$idx}))",
-            't_bool'     => "tphp_fn_arr_item_bool({$arr}, (int)({$idx}))",
-            't_array*'   => "tphp_fn_arr_item_array({$arr}, (int)({$idx}))",
-            't_callback' => "tphp_fn_arr_item_callback({$arr}, (int)({$idx}))",
+            't_int'      => "tphp_fn_arr_get_int_int({$arr}, (t_int)({$idx}))",
+            't_float'    => "tphp_fn_arr_get_int_float({$arr}, (t_int)({$idx}))",
+            't_string'   => "tphp_fn_arr_get_int_str({$arr}, (t_int)({$idx}))",
+            't_bool'     => "tphp_fn_arr_get_int_bool({$arr}, (t_int)({$idx}))",
+            't_array*'   => "tphp_fn_arr_get_int_arr({$arr}, (t_int)({$idx}))",
+            't_callback' => "tphp_fn_arr_get_int_callback({$arr}, (t_int)({$idx}))",
             default      => (str_contains($et, 'tphp_class_') || str_contains($et, 'tphp_enum_'))
-                ? "((" . $et . ")tphp_fn_arr_item_object({$arr}, (int)({$idx})))"
-                : "tphp_fn_arr_item_int({$arr}, (int)({$idx}))",
+                ? "((" . $et . ")tphp_fn_arr_get_int_object({$arr}, (t_int)({$idx})))"
+                : "tphp_fn_arr_get_int_int({$arr}, (t_int)({$idx}))",
         };
     }
 
@@ -5787,6 +6116,11 @@ class CodeGenerator implements ASTVisitor
                     ? $this->className
                     : ($this->varTypes[$objKey] ?? '');
                 $objClean = rtrim($objType, '*'); // COS objects always have *
+                // 静态方法调用 ClassName::method() — 解析类名
+                if ($objClean === '' && $expr->callee instanceof VariableExpr) {
+                    $resolved = $this->symbols->resolveClass($expr->callee->name);
+                    if ($resolved !== null) $objClean = $resolved;
+                }
                 if ($objClean !== '') {
                     $mInfo = $this->symbols->getClassMethod($objClean, $expr->name);
                     if ($mInfo !== null) {
@@ -5964,8 +6298,15 @@ class CodeGenerator implements ASTVisitor
         if ($t === 'self') return $this->className . '*';
         if ($t === 'mixed') return 't_var';
         if ($t === 'callable') return 't_callback';
-        // 联合类型 → t_var
-        if (str_contains($t, '|')) return 't_var';
+        // Type|Exception 语法：|Exception 为文档提示，C 仅生成 Type
+        if (str_contains($t, '|')) {
+            $parts = explode('|', $t);
+            $nonExc = array_filter($parts, fn($p) => !$this->symbols->isExceptionSubclass($p));
+            if (count($nonExc) === 1) {
+                return $this->mapType(reset($nonExc));
+            }
+            return 't_var'; // 纯联合类型 → t_var
+        }
         // C 类型: C.IDENTIFIER — 借鉴 vlang 的 C 命名空间设计
         //   C.X 直接直译为 C 类型 X: C.int→int, C.float→double, C.char→char, C.void→void
         //   指针用 * 后缀: C.void*→void*, C.char*→char*, C.int*→int*, C.Point*→Point*
@@ -6004,7 +6345,7 @@ class CodeGenerator implements ASTVisitor
     }
     public static function varName(string $v): string { return $v === '$this' ? 'self' : ltrim($v, '$'); }
 
-    /** 解析类型到 C 类型（处理联合类型 | → t_var） */
+    /** 解析类型到 C 类型（参数类型用；联合类型 | → t_var） */
     private static function resolveType(string $type): string {
         if (str_contains($type, '|')) return 't_var';
         if ($type === 'callable') return 't_callback';
@@ -6058,6 +6399,14 @@ class CodeGenerator implements ASTVisitor
         return $p->byRef ? "{$ct}*" : $ct;
     }
 
+    /** 参数 C 类型（实例方法版：通过 mapType 解析命名空间类名）
+     *  resolveType 是静态方法，无法解析 use 导入的命名空间类（如 User → tphp_na_NS_tphp_class_User），
+     *  varTypes 和参数 struct 字段必须用此方法才能正确解析跨命名空间类引用 */
+    private function paramCTypeResolved(ParamNode $p): string {
+        $ct = $this->mapType($p->type);
+        return $p->byRef ? "{$ct}*" : $ct;
+    }
+
     /** 如果变量是 byRef 类型，生成写目标（*var） */
     private function varWrite(string $var, string $type): string {
         if ($this->isByRefType($type)) return "(*{$var})";
@@ -6074,8 +6423,9 @@ class CodeGenerator implements ASTVisitor
         // 指针类型的双指针：t_array**, tphp_class_X**, tphp_enum_X** → byRef
         if (str_ends_with($type, '**')) return true;
         if (str_starts_with($type, 't_array') && str_ends_with($type, '*')) return false;
-        if (str_starts_with($type, 'tphp_class_') && str_ends_with($type, '*')) return false;
-        if (str_starts_with($type, 'tphp_enum_') && str_ends_with($type, '*')) return false;
+        // str_contains 而非 str_starts_with：命名空间类名 tphp_na_NS_tphp_class_X* 也需排除
+        if (str_contains($type, 'tphp_class_') && str_ends_with($type, '*')) return false;
+        if (str_contains($type, 'tphp_enum_') && str_ends_with($type, '*')) return false;
         return str_ends_with($type, '*');
     }
 

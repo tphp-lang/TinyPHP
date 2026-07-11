@@ -67,4 +67,5 @@ class Main
         var_dump($i); // callable
         var_dump($i(1, 2)); // int(3)
     }
+    
 }

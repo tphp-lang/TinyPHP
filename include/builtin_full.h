@@ -508,7 +508,7 @@ inline t_string tphp_fn_strrev(t_string s) {
 inline t_string tphp_fn_str_repeat(t_string s, t_int n) {
     if (STR_PTR(s) == NULL || s.length <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (n < 0) {
-        tphp_fn_error((t_string){"str_repeat(): Argument #2 ($times) must be greater than or equal to 0", 71}, "<php>", 0);
+        tp_throw("str_repeat(): Argument #2 ($times) must be greater than or equal to 0");
         return (t_string){.data = NULL, .length = 0, .is_local = false};
     }
     if (n == 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
@@ -525,7 +525,7 @@ inline t_string tphp_fn_str_repeat(t_string s, t_int n) {
 // str_split($s, $chunk?) — 分割字符串为数组，默认 chunk=1
 inline t_array* tphp_fn_str_split(t_string s, t_int chunk) {
     if (chunk < 1) {
-        tphp_fn_error((t_string){"str_split(): Argument #2 ($length) must be greater than 0", 56}, "<php>", 0);
+        tp_throw("str_split(): Argument #2 ($length) must be greater than 0");
         return NULL;
     }
     t_array* out = tphp_fn_arr_create(0);
@@ -670,13 +670,13 @@ static int _hexval(char x); // 前置声明
 inline t_string tphp_fn_hex2bin(t_string s) {
     if (STR_PTR(s) == NULL || s.length == 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (s.length % 2 != 0) {
-        tphp_fn_error((t_string){"hex2bin(): Hexadecimal input string must have an even length", 58}, "<php>", 0);
+        tp_throw("hex2bin(): Hexadecimal input string must have an even length");
         return (t_string){.data = NULL, .length = 0, .is_local = false};
     }
     // validate characters
     for (int i = 0; i < s.length; i++) {
         if (!_is_hex(STR_PTR(s)[i])) {
-            tphp_fn_error((t_string){"hex2bin(): Input string must be hexadecimal string", 50}, "<php>", 0);
+            tp_throw("hex2bin(): Input string must be hexadecimal string");
             return (t_string){.data = NULL, .length = 0, .is_local = false};
         }
     }
@@ -1538,21 +1538,21 @@ inline t_bool tphp_fn_ctype_xdigit(t_string s) { _TPHP_CTYPE_CHECK(isxdigit, s);
 inline int _tphp_random_bytes(unsigned char* buf, size_t n);
 
 inline t_int tphp_fn_random_int(t_int min, t_int max) {
-    if (min > max) { tphp_fn_error(STR_LIT("random_int(): min must be <= max"), "<php>", 0); return 0; }
+    if (min > max) { tp_throw("random_int(): min must be <= max"); return 0; }
     return tphp_fn_rand_int(min, max);
 }
 
 inline t_string tphp_fn_random_bytes(t_int length) {
     if (length <= 0) return (t_string){NULL, 0};
     if (length > 1048576) {
-        tphp_fn_error(STR_LIT("random_bytes(): length must be <= 1048576"), "<php>", 0);
+        tp_throw("random_bytes(): length must be <= 1048576");
         return (t_string){NULL, 0};
     }
     unsigned char* buf = (unsigned char*)malloc((size_t)length);
     if (!buf) return (t_string){NULL, 0};
     if (_tphp_random_bytes(buf, (size_t)length) != 0) {
         free(buf);
-        tphp_fn_error(STR_LIT("random_bytes(): unable to generate random bytes"), "<php>", 0);
+        tp_throw("random_bytes(): unable to generate random bytes");
         return (t_string){NULL, 0};
     }
     t_string s = tphp_rt_str_dup((t_string){(char*)buf, (int)length});
