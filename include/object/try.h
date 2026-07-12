@@ -167,6 +167,7 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
             longjmp(_tp_ex_top->jmp_buf, 1); \
         } else { \
             tphp_rt_free_all(); \
+            fflush(stdout); \
             fprintf(stderr, "\nFatal error: Uncaught exception: %s\n\n", \
                 _e && STR_PTR_V(_e->message) ? STR_PTR_V(_e->message) : "(null)"); \
             exit(1); \
@@ -185,6 +186,7 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
             longjmp(_tp_ex_top->jmp_buf, 1); \
         } else { \
             tphp_rt_free_all(); \
+            fflush(stdout); \
             fprintf(stderr, "\nFatal error: Uncaught exception: %s\n\n", (_tp_msg)); \
             exit(1); \
         } \
