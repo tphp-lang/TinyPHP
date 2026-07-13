@@ -855,30 +855,67 @@ class Lexer
             $this->advance();
         }
         // 跳过换行
-        if ($this->peek() === "\r") { $this->advance(); $this->line++; $this->column = 1; }
-        if ($this->peek() === "\n") { $this->advance(); $this->line++; $this->column = 1; }
+        if ($this->peek() === "\r") {
+            $this->advance();
+            if ($this->peek() === "\n") {
+                $this->advance();  // advance() 内部已处理 \n 的 line++
+            } else {
+                $this->line++; $this->column = 1;  // \r 单独换行
+            }
+        } elseif ($this->peek() === "\n") {
+            $this->advance();  // advance() 内部已处理 \n 的 line++
+        }
 
-        // 读取内容直到单独一行的结束标识符
+        // 读取内容直到单独一行的结束标识符（结束标识符必须在行首，无缩进）
         $body = '';
+        $foundIndentClose = false;  // 是否检测到缩进的结束标识符（语法错误）
         while ($this->pos < strlen($this->source)) {
             // 检测行首的结束标识符（column==1 说明刚换行）
-            if ($this->column === 1 && $this->peek() === $id[0]) {
-                $match = true;
-                $idLen = strlen($id);
-                for ($j = 0; $j < $idLen; $j++) {
-                    if ($this->peek($j) !== $id[$j]) { $match = false; break; }
-                }
-                if ($match) {
-                    $after = $this->peek($idLen);
-                    // 标识符后必须是 ; 或换行 或 EOF
-                    if ($after === ';' || $after === "\n" || $after === "\r" || $after === '') {
-                        $this->advance($idLen);
-                        // ; 是语句终止符，必须保留给 Parser
-                        if ($this->peek() === ';') {
-                            // 不 advance，留给下一次 scanToken 生成 SEMICOLON
+            if ($this->column === 1) {
+                // 先检测：行首有前导空白后跟结束标识符 → 语法错误
+                if ($this->peek() === ' ' || $this->peek() === "\t") {
+                    $pk = 0;
+                    while ($this->pos + $pk < strlen($this->source)) {
+                        $ch = $this->peek($pk);
+                        if ($ch === ' ' || $ch === "\t") {
+                            $pk++;
+                        } else {
+                            break;
                         }
-                        while ($this->pos < strlen($this->source) && ($this->peek() === ' ' || $this->peek() === "\t")) $this->advance();
-                        break;
+                    }
+                    // 检查缩进后是否为结束标识符
+                    if ($this->peek($pk) === $id[0]) {
+                        $match = true;
+                        $idLen = strlen($id);
+                        for ($j = 0; $j < $idLen; $j++) {
+                            if ($this->peek($pk + $j) !== $id[$j]) { $match = false; break; }
+                        }
+                        if ($match) {
+                            $after = $this->peek($pk + $idLen);
+                            if ($after === ';' || $after === "\n" || $after === "\r" || $after === '' || $after === "\0") {
+                                $foundIndentClose = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                // 行首无缩进，检查是否为结束标识符
+                if ($this->peek() === $id[0]) {
+                    $match = true;
+                    $idLen = strlen($id);
+                    for ($j = 0; $j < $idLen; $j++) {
+                        if ($this->peek($j) !== $id[$j]) { $match = false; break; }
+                    }
+                    if ($match) {
+                        $after = $this->peek($idLen);
+                        // 标识符后必须是 ; 或换行 或 EOF
+                        if ($after === ';' || $after === "\n" || $after === "\r" || $after === '' || $after === "\0") {
+                            $this->advance($idLen);
+                            // ; 是语句终止符，必须保留给 Parser
+                            // 不 advance，留给下一次 scanToken 生成 SEMICOLON
+                            while ($this->pos < strlen($this->source) && ($this->peek() === ' ' || $this->peek() === "\t")) $this->advance();
+                            break;
+                        }
                     }
                 }
             }
@@ -887,21 +924,29 @@ class Lexer
             if ($c === "\r") {
                 $body .= "\n";
                 $this->advance();
-                if ($this->peek() === "\n") $this->advance();
-                $this->line++; $this->column = 1;
+                if ($this->peek() === "\n") {
+                    $this->advance();  // advance() 内部已处理 \n 的 line++
+                } else {
+                    $this->line++; $this->column = 1;  // \r 单独换行
+                }
             } elseif ($c === "\n") {
                 $body .= "\n";
-                $this->advance();
-                $this->line++; $this->column = 1;
+                $this->advance();  // advance() 内部已处理 \n 的 line++
             } else {
                 $body .= $c;
                 $this->advance();
             }
         }
 
+        // 缩进的结束标识符 → 语法错误
+        if ($foundIndentClose) {
+            $this->error("Heredoc closing identifier '{$id}' must not be indented (must be at start of line)");
+        }
+
         if ($quote === "'") {
-            // nowdoc: 无插值，直接输出
-            $this->addToken(TokenType::STRING_LIT, $body, $body);
+            // nowdoc: 无插值，转义反斜杠以保留字面量（避免 C 转义序列被解释）
+            $escaped = str_replace('\\', '\\\\', $body);
+            $this->addToken(TokenType::STRING_LIT, $escaped, $escaped);
         } else {
             // heredoc: 处理转义序列 + 插值
             $this->emitHeredocString($body);
@@ -935,11 +980,35 @@ class Lexer
                 $i += 2;
                 continue;
             }
+            // {$var} 或 {$var->prop} 语法（PHP 标准花括号插值）
+            if ($c === '{' && $i + 1 < $len && $str[$i + 1] === '$') {
+                $varEnd = strpos($str, '}', $i + 1);
+                if ($varEnd !== false) {
+                    if ($buf !== '') {
+                        if ($needDot) $this->addToken(TokenType::DOT, '.');
+                        $this->addToken(TokenType::STRING_LIT, $buf, $buf);
+                        $buf = '';
+                        $needDot = true;
+                    }
+                    if ($needDot) $this->addToken(TokenType::DOT, '.');
+                    // 提取 {$...} 内的内容（含 $ 前缀）
+                    $inner = substr($str, $i + 1, $varEnd - $i - 1);
+                    $parts = explode('->', $inner);
+                    $this->addToken(TokenType::IDENTIFIER, $parts[0]);
+                    for ($p = 1; $p < count($parts); $p++) {
+                        $this->addToken(TokenType::ARROW, '->');
+                        $this->addToken(TokenType::IDENTIFIER, $parts[$p]);
+                    }
+                    $needDot = true;
+                    $i = $varEnd + 1;
+                    continue;
+                }
+            }
             if ($c === '$') {
                 // 检测变量名
                 $j = $i + 1;
                 if ($j < $len && $str[$j] === '{') {
-                    // {$var} 或 {$var->prop} 语法
+                    // ${var} 语法（非标准，但兼容）
                     $varEnd = strpos($str, '}', $j + 1);
                     if ($varEnd !== false) {
                         if ($buf !== '') {
@@ -997,6 +1066,9 @@ class Lexer
         if ($buf !== '') {
             if ($needDot) $this->addToken(TokenType::DOT, '.');
             $this->addToken(TokenType::STRING_LIT, $buf, $buf);
+        } elseif (!$needDot) {
+            // 空 heredoc/nowdoc — 输出空字符串字面量
+            $this->addToken(TokenType::STRING_LIT, '', '');
         }
     }
 }

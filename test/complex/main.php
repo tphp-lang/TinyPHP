@@ -1,5 +1,189 @@
 <?php // @multi @with enums.php
 
+#debug ========================================
+#debug TinyPHP Complex Test
+#debug ========================================
+#debug ===== Math & Logic =====
+#debug int(107)
+#debug int(93)
+#debug int(700)
+#debug int(14)
+#debug float(12.56)
+#debug int(5)
+#debug int(-15)
+#debug int(95)
+#debug int(2)
+#debug int(7)
+#debug int(5)
+#debug bool(true)
+#debug bool(true)
+#debug bool(true)
+#debug bool(true)
+#debug bool(true)
+#debug bool(true)
+#debug bool(true)
+#debug bool(false)
+#debug complex logic: true
+#debug apple < banana (lexicographic)
+#debug null check ok
+#debug ===== String Ops =====
+#debug Hello World!
+#debug Welcome to TinyPHP v1
+#debug string(13) "one-two-three"
+#debug Part1 Part2 Part3
+#debug num=42 pi=3.14 flag=1
+#debug ===== Objects =====
+#debug int(10)
+#debug int(35)
+#debug [test-log #1] first message
+#debug [test-log #2] second message
+#debug int(42)
+#debug float(3.14)
+#debug string(11) "hello world"
+#debug store int > calc value
+#debug ===== Arrays =====
+#debug int(15)
+#debug name: string(5) "Alice"
+#debug age: string(0) ""
+#debug score: string(0) ""
+#debug int(3)
+#debug array(3) {
+#debug   ["items"]=>
+#debug   array(3) {
+#debug     [0]=>
+#debug     int(10)
+#debug     [1]=>
+#debug     int(20)
+#debug     [2]=>
+#debug     int(30)
+#debug   }
+#debug   ["count"]=>
+#debug   int(3)
+#debug   ["label"]=>
+#debug   string(6) "scores"
+#debug }
+#debug int(20)
+#debug int(120)
+#debug int(2)
+#debug int(5)
+#debug ===== Closures & Casts =====
+#debug int(42)
+#debug int(30)
+#debug int(42)
+#debug string(2) "42"
+#debug int(3)
+#debug bool(true)
+#debug float(1)
+#debug int(123)
+#debug bool(false)
+#debug bool(true)
+#debug bool(false)
+#debug bool(true)
+#debug array(1) {
+#debug   [0]=>
+#debug   int(42)
+#debug }
+#debug array(0) {
+#debug }
+#debug ===== Control Flow =====
+#debug string(1) "B"
+#debug >0
+#debug deep nested: all pass
+#debug string(2) "1 "
+#debug int(4)
+#debug int(15)
+#debug ===== Switch =====
+#debug int(20)
+#debug int(30)
+#debug string(5) "other"
+#debug int(2)
+#debug int(42)
+#debug int(100)
+#debug ===== Closure Use =====
+#debug int(50)
+#debug int(10)
+#debug [LOG] hello world
+#debug int(6)
+#debug int(5)
+#debug int(220)
+#debug int(6)
+#debug ===== New Ops =====
+#debug int(1)
+#debug int(2)
+#debug string(4) "pass"
+#debug string(1) "B"
+#debug string(7) "default"
+#debug int(42)
+#debug int(10)
+#debug die test ok
+#debug int(1)
+#debug int(1)
+#debug int(0)
+#debug int(10)
+#debug int(20)
+#debug int(30)
+#debug int(2)
+#debug int(7)
+#debug int(5)
+#debug int(-1)
+#debug int(16)
+#debug int(4)
+#debug int(5)
+#debug int(1)
+#debug int(1)
+#debug int(99)
+#debug ===== Enum =====
+#debug int(1)
+#debug int(2)
+#debug int(3)
+#debug string(3) "ONE"
+#debug string(3) "red"
+#debug string(6) "yellow"
+#debug string(5) "green"
+#debug string(3) "RED"
+#debug string(3) "two"
+#debug string(2) "go"
+#debug int enum identity == ok
+#debug int enum identity != ok
+#debug string enum identity == ok
+#debug string enum identity != ok
+#debug int(3)
+#debug int(2)
+#debug string(3) "red"
+#debug string(5) "green"
+#debug red
+#debug green
+#debug enum logical && ok
+#debug enum logical || ok
+#debug int(6)
+#debug int(3)
+#debug string(4) "high"
+#debug int(100)
+#debug string(16) "red-yellow-green"
+#debug === cross-namespace enum ===
+#debug int(1)
+#debug int(3)
+#debug string(6) "ACTIVE"
+#debug string(5) "admin"
+#debug string(5) "guest"
+#debug string(5) "ADMIN"
+#debug string(8) "inactive"
+#debug cross-ns identity == ok
+#debug cross-ns identity != ok
+#debug cross-ns value == ok
+#debug cross-ns value < ok
+#debug int(4)
+#debug admin
+#debug guest
+#debug ===== Memory Stress =====
+#debug int(33)
+#debug int(7)
+#debug string(1) "2"
+#debug int(111)
+#debug int(222)
+#debug ===== Exit Test =====
+#debug exit test: calling exit(0) now
+
 use Complex\Enums\Status;
 use Complex\Enums\Role;
 

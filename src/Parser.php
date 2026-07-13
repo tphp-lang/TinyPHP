@@ -1516,9 +1516,11 @@ class Parser
                     TokenType::TYPE_VOID,
                 ];
                 if (!in_array($t3->type, $validCTypeTokens, true)) return false;
-                // 跳过指针后缀 *: C.int* $x, C.char** $x
+                // 跳过指针后缀 *: C.int* $x, C.char** $x, C.char*** $x
+                // 注意: ** 被 Lexer 识别为 STAR_STAR（幂运算符），需同时处理
                 $i = 3;
-                while ($this->peek($i)->type === TokenType::STAR) {
+                while ($this->peek($i)->type === TokenType::STAR
+                    || $this->peek($i)->type === TokenType::STAR_STAR) {
                     $i++;
                 }
                 return $this->peek($i)->type === TokenType::IDENTIFIER
@@ -2220,10 +2222,11 @@ class Parser
             $this->advance(); // 消费 .
             $subType = $this->advance()->lexeme;
             $castType = 'C.' . $subType;
-            // 支持指针后缀: (C.void*), (C.char**)
-            while ($this->check(TokenType::STAR)) {
-                $this->advance();
-                $castType .= '*';
+            // 支持指针后缀: (C.void*), (C.char**), (C.char***)
+            // 注意: ** 被 Lexer 识别为 STAR_STAR（幂运算符），需同时处理
+            while ($this->check(TokenType::STAR) || $this->check(TokenType::STAR_STAR)) {
+                $t = $this->advance();
+                $castType .= ($t->type === TokenType::STAR_STAR) ? '**' : '*';
             }
         }
         $this->consume(TokenType::RPAREN, 'Expected )');
@@ -2382,10 +2385,11 @@ class Parser
                 $this->error("Expected C type name after 'C.', got '{$memberToken->lexeme}'");
             }
             $result = 'C.' . $memberToken->lexeme;
-            // 支持 C.int* => int*, C.char** => char** 等指针后缀
-            while ($this->check(TokenType::STAR)) {
-                $this->advance();
-                $result .= '*';
+            // 支持 C.int* => int*, C.char** => char**, C.char*** => char*** 等指针后缀
+            // 注意: ** 被 Lexer 识别为 STAR_STAR（幂运算符），需同时处理
+            while ($this->check(TokenType::STAR) || $this->check(TokenType::STAR_STAR)) {
+                $t = $this->advance();
+                $result .= ($t->type === TokenType::STAR_STAR) ? '**' : '*';
             }
             return $result;
         }

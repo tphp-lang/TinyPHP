@@ -2024,15 +2024,23 @@ class CodeGenerator implements ASTVisitor
                     }
                 }
             } else {
-                // tphp 标准类型可自动推导；phpc C 指针类型必须显式声明
+                // tphp 标准类型可自动推导；phpc C 指针类型须显式声明
                 //   原因：C->func() 返回 void* 时 inferType 统一推导为 'null'，类型信息丢失，
                 //   后续 cstruct 字段访问（$p->x）等操作无法正确展开。
+                //   但用户定义函数的返回类型来自 PHP 类型注解（如 : C.Point*），类型明确，
+                //   应允许自动推导（区分于 raw C 调用的 'null' 不可靠推导）。
                 if (!self::isAutoInferableType($inferredType)) {
-                    throw new \RuntimeException(
-                        "Variable \${$var} requires explicit type declaration: "
-                        . "inferred C pointer type '{$inferredType}'. "
-                        . "Use 'C.Type \${$var} = ...' (e.g. C.void*, C.Point*, C.int*) to declare."
-                    );
+                    // 用户定义函数的明确返回类型 → 允许自动推导
+                    $isUserFuncRet = ($node->expr instanceof CallExpr
+                        && !$node->expr->isRawC
+                        && $inferredType !== 'null');
+                    if (!$isUserFuncRet) {
+                        throw new \RuntimeException(
+                            "Variable \${$var} requires explicit type declaration: "
+                            . "inferred C pointer type '{$inferredType}'. "
+                            . "Use 'C.Type \${$var} = ...' (e.g. C.void*, C.Point*, C.int*) to declare."
+                        );
+                    }
                 }
                 $cType = $inferredType;
             }
@@ -2054,7 +2062,7 @@ class CodeGenerator implements ASTVisitor
         } else {
             // 自动释放：对象/t_string 重赋值时先求值再释放（防止 $var=$var->method() 的 use-after-free）
             $w = $this->varWrite($var, $prevType);
-            if (str_starts_with($prevType, 'tphp_class_') || str_starts_with($prevType, 'tphp_enum_')) {
+            if (self::isClassCType($prevType) || self::isEnumCType($prevType)) {
                 $tmp = '_tmp_' . (++$this->tmpVarCounter);
                 $code = "{$prevType} {$tmp} = {$expr}; tp_obj_release((void*){$var}); {$var} = {$tmp};";
             } elseif ($prevType === 't_string') {
@@ -2161,8 +2169,34 @@ class CodeGenerator implements ASTVisitor
         static $tphpTypes = ['t_int', 't_float', 't_string', 't_bool', 't_array*', 't_var', 't_callback'];
         if (in_array($type, $tphpTypes, true)) return true;
         // TinyPHP 类对象 / 枚举对象（含指针）
-        if (str_starts_with($type, 'tphp_class_') || str_starts_with($type, 'tphp_enum_')) return true;
+        //   全局: tphp_class_Foo* / tphp_enum_Color*
+        //   命名空间: tphp_na_Ns_tphp_class_Foo* / tphp_na_Ns_tphp_enum_Color*
+        if (self::isClassCType($type) || self::isEnumCType($type)) return true;
         // null (void*) / void* / char* / int* / Point* 等 C 指针 → 必须显式声明
+        return false;
+    }
+
+    /**
+     * 判断是否为 TinyPHP 类对象的 C 类型（含指针）
+     *   全局: tphp_class_Foo / tphp_class_Foo*
+     *   命名空间: tphp_na_Ns_tphp_class_Foo / tphp_na_Ns_tphp_class_Foo*
+     */
+    private static function isClassCType(string $type): bool
+    {
+        if (str_starts_with($type, 'tphp_class_')) return true;
+        if (str_starts_with($type, 'tphp_na_') && str_contains($type, '_tphp_class_')) return true;
+        return false;
+    }
+
+    /**
+     * 判断是否为 TinyPHP 枚举对象的 C 类型（含指针）
+     *   全局: tphp_enum_Color / tphp_enum_Color*
+     *   命名空间: tphp_na_Ns_tphp_enum_Status / tphp_na_Ns_tphp_enum_Status*
+     */
+    private static function isEnumCType(string $type): bool
+    {
+        if (str_starts_with($type, 'tphp_enum_')) return true;
+        if (str_starts_with($type, 'tphp_na_') && str_contains($type, '_tphp_enum_')) return true;
         return false;
     }
 
@@ -2250,7 +2284,7 @@ class CodeGenerator implements ASTVisitor
                 $objType = $this->symbols->getEnumCType($expr->object->enumName) ?? '';
             }
             // 枚举属性访问 → enum->value 返回 backing 类型, enum->name 返回 t_string
-            if ($objType !== '' && str_starts_with($objType, 'tphp_enum_')) {
+            if ($objType !== '' && self::isEnumCType($objType)) {
                 if ($expr->property === 'name') return 't_string';
                 if ($expr->property === 'value') {
                     $base = rtrim($objType, '*');
@@ -2727,7 +2761,7 @@ class CodeGenerator implements ASTVisitor
             $objType = rtrim($this->symbols->getEnumCType($pa->object->enumName) ?? '', '*');
         }
         // 枚举属性 → enum->value 返回 backing 类型, enum->name 返回 t_string
-        if ($objType !== '' && str_starts_with($objType, 'tphp_enum_')) {
+        if ($objType !== '' && self::isEnumCType($objType)) {
             if ($pa->property === 'name') return 't_string';
             if ($pa->property === 'value') {
                 $base = rtrim($objType, '*');
@@ -3963,7 +3997,7 @@ class CodeGenerator implements ASTVisitor
                     'null'       => "{$code} = NULL;",
                     default      => "{$code} = 0;",
                 };
-                if (str_starts_with($type, 'tphp_class_') || str_starts_with($type, 'tphp_enum_')) {
+                if (self::isClassCType($type) || self::isEnumCType($type)) {
                     $lines[count($lines)-1] = "tphp_rt_unregister((void*){$code}); tphp_fn_unset_obj((void**)&{$code});";
                     $vn = self::varName($arg->name);
                     $this->symbols->removeScopeObjects([$vn]);
@@ -4509,7 +4543,7 @@ class CodeGenerator implements ASTVisitor
         if ($checkType === 'resource') {
             // t_var (mixed/union) 已在上方处理
             // 静态类型：以 tphp_class_ 开头且继承自 Resource → true
-            if (str_starts_with($argType, 'tphp_class_')) {
+            if (self::isClassCType($argType)) {
                 return 'true';
             }
             return 'false';
@@ -4823,7 +4857,8 @@ class CodeGenerator implements ASTVisitor
         }
         if ($objCN !== '' && !$this->symbols->hasClassOwnProp($objCN, $prop)) {
             // 枚举类型直接访问字段（无 COS _parent 包装）
-            if (str_starts_with($objCN, 'tphp_enum_')) {
+            //   全局: tphp_enum_Color；命名空间: tphp_na_Ns_tphp_enum_Status
+            if (self::isEnumCType($objCN)) {
                 return $obj . '->' . $prop;
             }
             // 类常量（大写开头）→ 不经过 _parent，由下方 const 逻辑处理
@@ -5591,7 +5626,7 @@ class CodeGenerator implements ASTVisitor
         }
         // throw $exceptionVar (Exception 子类类型) → tp_throw_ex
         $type = $this->inferType($expr);
-        if (str_starts_with($type, 'tphp_class_') && str_ends_with($type, '*')) {
+        if (self::isClassCType($type) && str_ends_with($type, '*')) {
             return "tp_throw_ex({$code})";
         }
         // throw "string" → tp_throw(STR_PTR_V(msg))
@@ -6272,7 +6307,7 @@ class CodeGenerator implements ASTVisitor
         if ($call->callee instanceof VariableExpr) {
             $key = self::varName($call->callee->name);
             $raw = $this->varTypes[$key] ?? '';
-            if (str_starts_with($raw, 'tphp_class_')) $cn = rtrim($raw, '*');
+            if (self::isClassCType($raw)) $cn = rtrim($raw, '*');
         } elseif ($call->callee instanceof CallExpr) {
             // 链式调用递归
             return '';
