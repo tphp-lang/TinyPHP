@@ -60,6 +60,8 @@ class FunctionNode extends ASTNode
         public readonly array $body,
         public readonly string $namespace = '',  // 所属命名空间
         public readonly bool $isGenerator = false,
+        /** @var AttributeUseNode[] */
+        public readonly array $attributes = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -89,6 +91,8 @@ class ClassNode extends ASTNode
         /** @var array[] trait names to flatten */
         public readonly array $traits = [],
         public readonly bool $isReadonly = false, // readonly class: 所有属性自动 readonly
+        /** @var AttributeUseNode[] */
+        public readonly array $attributes = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -145,6 +149,8 @@ class MethodNode extends ASTNode
         public readonly array $promoted = [],
         public readonly bool $isGenerator = false,
         public readonly bool $isStatic = false, // 静态方法（签名省略 self 参数）
+        /** @var AttributeUseNode[] */
+        public readonly array $attributes = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -691,6 +697,37 @@ class EnumAccessExpr extends ExprNode
     }
 }
 
+// 注解类型声明: #[Attribute(path: string, method: array)]
+//   附着于 const ROUTE = []; 声明注解类型及其参数格式
+class AttributeDeclNode extends ASTNode
+{
+    /** @param array[] $params [['name'=>'path','type'=>'string','default'=>?ExprNode], ...] */
+    public function __construct(
+        public readonly array $params,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitAttributeDecl($this);
+    }
+}
+
+// 注解使用: #[ROUTE("/test", ["GET", "POST"])]
+//   附着于 class/method/function，编译期收集到对应注解常量数组
+class AttributeUseNode extends ASTNode
+{
+    public function __construct(
+        public readonly string $name,   // 注解名（如 "ROUTE"），可含命名空间前缀
+        /** @var ExprNode[] 位置参数 */
+        public readonly array $args,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitAttributeUse($this);
+    }
+}
+
 // 常量声明（全局 const + 类 const）
 class ConstNode extends ASTNode
 {
@@ -705,6 +742,8 @@ class ConstNode extends ASTNode
         public readonly ?string $visibility = null,
         /** 所属类名，null=全局 const */
         public readonly ?string $className = null,
+        /** 注解类型声明（#[Attribute(...)]），null=普通常量 */
+        public readonly ?AttributeDeclNode $attributeDecl = null,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -1058,4 +1097,6 @@ interface ASTVisitor
     public function visitContinueStmt(ContinueStmtNode $node): string;
     public function visitPipeExpr(PipeExpr $node): string;
     public function visitPlaceholderExpr(PlaceholderExpr $node): string;
+    public function visitAttributeDecl(AttributeDeclNode $node): string;
+    public function visitAttributeUse(AttributeUseNode $node): string;
 }

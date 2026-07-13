@@ -45,6 +45,7 @@ enum TokenType: string
     case HASH_CALLBACK = '#callback';
     case HASH_CSTRUCT  = '#cstruct';
     case HASH_DEBUG    = '#debug';
+    case HASH_ATTRIBUTE = '#[';  // PHP 8 attribute syntax #[...]
     case TRY_KW       = 'try';
     case CATCH_KW     = 'catch';
     case FINALLY_KW   = 'finally';

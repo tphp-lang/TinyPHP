@@ -32,6 +32,7 @@ $options = getopt('f:o:h', ['help', 'os:', 'arch:', 'debug']);
 $cc        = null;
 $targetOS  = null; // -os windows|linux|macos
 $targetArch = null; // -arch x86_64|aarch64
+$isShared  = false; // -shared: 生成动态库
 
 // Normalize arch name
 $archMap = ['x86_64' => 'x86_64', 'amd64' => 'x86_64', 'x64' => 'x86_64',
@@ -51,6 +52,8 @@ for ($i = 1, $n = count($argv); $i < $n; $i++) {
         if ($targetOS === 'macos' || $targetOS === 'mac') $targetOS = 'darwin';
     } elseif ($argv[$i] === '-o' && isset($argv[$i + 1])) {
         $outExe = $argv[++$i]; // 覆盖 getopt 解析
+    } elseif ($argv[$i] === '-shared') {
+        $isShared = true;
     } elseif (!str_starts_with($argv[$i], '-')) {
         $posArgs[] = $argv[$i];
     }
@@ -79,6 +82,12 @@ if ((empty($args) && !isset($options['f'])) || isset($options['h']) || isset($op
 }
 
 $outExe = $outExe ?? $options['o'] ?? '';
+
+// Convert relative output path to absolute — TCC may chdir() to its binary dir,
+// so a relative -o path would land in the wrong place.
+if ($outExe !== '' && !str_starts_with($outExe, '/') && !preg_match('#^[A-Za-z]:#', $outExe)) {
+    $outExe = getcwd() . DIRECTORY_SEPARATOR . $outExe;
+}
 
 // --- Collect all source files ---
 [$files, $userCFiles] = collectFiles($args);
@@ -632,6 +641,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
 
     $gen   = new CodeGenerator();
+    $gen->isShared = $isShared;
     $cFile = $gen->generate($merged, $entryFile, $outDir);
 
     echo "       [YES] {$cFile}\n";
@@ -743,7 +753,13 @@ if ($targetOS !== null) {
         }
     }
     // Platform-specific output extension
-    if ($targetOS === 'windows' && !str_ends_with($outExe, '.exe')) {
+    if ($isShared) {
+        // -shared 模式：动态库扩展名
+        $shExt = ($targetOS === 'windows' || ($targetOS === null && PHP_OS_FAMILY === 'Windows')) ? '.dll'
+               : (($targetOS === 'darwin' || ($targetOS === null && PHP_OS_FAMILY === 'Darwin')) ? '.dylib' : '.so');
+        if (str_ends_with($outExe, '.exe')) $outExe = substr($outExe, 0, -4);
+        if (!str_ends_with($outExe, $shExt)) $outExe .= $shExt;
+    } elseif ($targetOS === 'windows' && !str_ends_with($outExe, '.exe')) {
         $outExe .= '.exe';
     } elseif ($targetOS !== 'windows' && str_ends_with($outExe, '.exe')) {
         $outExe = substr($outExe, 0, -4);
@@ -806,9 +822,11 @@ if (PHP_OS_FAMILY !== 'Windows' && ($targetOS === null || $targetOS !== 'windows
 if ($targetOS === 'darwin' || ($targetOS === null && PHP_OS_FAMILY === 'Darwin')) {
     $linkFlags .= ' -liconv';
 }
+// -shared 模式：生成动态库
+$sharedFlag = $isShared ? ' -shared' : '';
 $cmd = sprintf(
-    '"%s" %s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
-    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $extraSrcs, $lateLinkFlags
+    '"%s" %s%s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
+    $ccExe, $bFlag, $extraFlags, $linkFlags, $sharedFlag, $includeDir, $outExe, $cFile, $extraSrcs, $lateLinkFlags
 );
 
 $tccOutput = [];
@@ -1153,6 +1171,7 @@ Options:
   -cc <compiler>    specify C compiler (default: built-in TCC)
   -os <target>      cross-compile target: windows, linux, macos
   -arch <arch>      target architecture: x86_64, aarch64 (default: host)
+  -shared           compile as shared library (.dll/.so/.dylib)
   --debug           print full compile command
   -h, --help        show help
 
@@ -1165,6 +1184,7 @@ Examples:
   tphp main.php -os linux                          (x86_64 Linux)
   tphp main.php -os linux -arch aarch64             (ARM64 Linux)
   tphp main.php -os windows -cc gcc                 (x86_64 Windows via mingw)
+  tphp lib.php -shared -o mylib.dll                 (shared library with #[Export])
 
 HELP;
     exit(0);

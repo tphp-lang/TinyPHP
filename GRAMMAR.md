@@ -745,6 +745,11 @@ phpc_ptr_bridge:
 | `phpc_ptr_to_int` `phpc_int_to_ptr` | 指针↔整数桥接(让 C 指针以 t_int 在 PHP 层流转) |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | 多线程 OOP API（tinycthread 封装，Thread-Local 运行时无锁竞争） |
 | `Parallel::for`/`Parallel::map` | 数据并行（连续分片，线程失败降级为内联执行） |
+| `#[Attribute(p: type, ...)] const NAME = [];` | 注解类型声明（附着于全局/命名空间 const，详见 §14） |
+| `#[NAME(arg1, arg2, ...)]` | 注解使用（仅位置参数，附着于 class/method/function，编译期收集） |
+| `ROUTE[0]->data` / `->type` / `->name` | 注解 entry 属性访问（编译期展开为静态指针，零开销） |
+| `ROUTE[0]->call(...$args)` | 注解 entry 调用方法/静态方法/函数（编译期展开为直接调用，零开销） |
+| `ROUTE[0]->newInstance(...$args)` | 注解 entry 实例化类（编译期展开为 `new_tphp_class_X(args)`，零开销） |
 
 ### ❌ 不支持（AOT 物理不可行）
 
@@ -768,30 +773,6 @@ phpc_ptr_bridge:
 | `__COMPILER_HALT_OFFSET__` | 无运行时文件加载 |
 | `$GLOBALS` 超全局 | 无运行时全局符号表 |
 
-### ⬜ AOT 可行但未实现
-
-以下语法 AOT 物理可行（编译期信息完整，不影响性能），但当前尚未实现，属于待办：
-
-| 语法 | PHP 版本 | 可行原因 | 实现思路 |
-|------|---------|---------|---------|
-| `public string $name { get => ...; set => ...; }` Property Hook | 8.4 | hook 代码编译期已知，纯语法糖 | ✅ 已实现 — 属性访问改写为 getter/setter 方法调用 |
-| `$x \|> f(...)` Pipe Operator | 8.4 RFC | 纯语法糖，等价于 `f($x)` | ✅ 已实现 — 解析为嵌套函数调用，`...` 占位符控制参数位置 |
-| `static` 属性 / `static` 方法（用户类） | 5.0+ | 编译期已知类名，等价于 C 静态变量/函数 | ✅ 已实现 — 静态属性生成文件作用域 `static` 变量（零运行时查找），静态方法省略 `self` 参数，`Class::method()` / `self::method()` 直接调用，`Class::$prop` / `self::$prop` 直接地址访问 |
-| `static` 局部变量 `function f() { static $n = 0; }` | 5.0+ | 等价于 C 函数内 `static` 变量，编译期初始化 | ✅ 已实现 — `StaticStmtNode` 直接映射为 C `static <type> <var> = <init>;`，跨调用保持值（C static 语义完全匹配），不参与作用域自动释放 |
-| 函数内 `const`（PHP 8.3+） | 8.3 | 编译期常量，等价于文件作用域 `static const` | ✅ 已实现 — `ConstStmtNode` 映射为 C `static const <type> <name> = <value>;`，`localConsts` 集合跟踪局部常量名，`visitVariable` 优先查局部 const 再回退全局 `TPHP_CONST_`，类型标记可选（省略时按字面量推导） |
-| `readonly` class / `readonly` 属性 | 8.1/8.2 | 纯编译期检查（赋值后禁止改），无运行时开销 | ✅ 已实现 — `ClassNode`/`PropertyDeclNode`/`ParamNode` 加 `isReadonly` 字段；`parseModifiers`/`parseVisibility` 识别 `readonly` 关键字（修饰符顺序灵活）；`SymbolTable` 加 `readonlyProps` + `isReadonlyClass` 字段及 `isPropReadonly()`/`getReadonlyPropDeclaringClass()` 沿父链查询；`visitAssignPropStmt` 编译期检查：必须在声明类的 `__construct` 内赋值且仅一次，`assignedReadonlyProps` 集合跟踪重复赋值；不支持 `static readonly`；readonly 属性不能有默认值 |
-| `#[Attribute]` 注解 | 8.0 | 编译期解析存储，无运行时反射需求 | Lexer 识别 `#[`，Parser 解析为 `AttributeNode`（可附加到类/方法/属性） |
-| first-class callable `strlen(...)` | 8.1 | 编译期已知函数名，等价于闭包包装 | Lexer 加 `ELLIPSIS` token，`parsePostfix` 识别 `name(...)` 生成闭包 |
-| `true`/`false`/`null` 字面量类型 | 8.2 | 编译期已知字面值，映射到 `bool`/`null` | `parseType` 接受 `TRUE_KW`/`FALSE_KW`/`NULL_KW` |
-| `static` 返回类型 | 8.0 | 编译期已知当前类名（同 self，但支持后期绑定语义可简化为 self） | `parseType` 接受 `STATIC_KW`，按 self 处理 |
-| DNF/intersection 类型 `A&B` `(A&B)\|C` | 8.2 | 编译期已知类型，可映射到接口 vtable 或 `t_var` | `parseType` 加 `AMP` 交集处理 |
-| `throw` 作为表达式 `$x = throw new E();` | 8.0 | 编译期已知抛出点，等价于语句展开 | ✅ 已实现 — `ThrowExprNode` AST 节点；`parsePrimary` 识别 `THROW_KW`；`visitThrowExpr` 用 TCC 语句表达式 `({ throw_code; 0; })` 包装（throw 永不返回，0 为死代码占位）；语句上下文（`$x = throw`/`return throw`）直接展开为 throw 语句避免类型不匹配 |
-| 数组展开 `[...$arr1, ...$arr2]` | 7.4 | 编译期展开为 `array_merge` 或逐元素 push | ✅ 已实现 — `parseArrayLiteral` 识别 `...` 前缀（三个 DOT token）；`ArrayEntryNode.isSpread` 标记；`genArrayLiteralInline` 调用 `tphp_fn_arr_spread(dst, src)` 运行时展开（int 键重新索引 append，string 键保留覆盖）；`inferArrayElementType`/`inferArrayDeepElementType` 从源数组变量推导元素类型；支持嵌套 spread、混合字面量、内联函数参数 |
-
-> ⚠️ 定参 vs 可变参数的 `func_get_args()`：
-> - **定参函数**（`function f(int $a, string $b)`）：参数编译为独立 C 形参 `t_int a, t_string b`，没有统一容器 → `func_get_args()` **不可行**
-> - **可变参数函数**（`function f(...$args)`）：可编译为 `t_array* args` 形参 → `func_get_args()` 直接返回 `args` 即可 → **可行**
-
 ### ❌ 不做（权衡）
 
 | 语法 | 原因 |
@@ -799,3 +780,239 @@ phpc_ptr_bridge:
 | `?int` `int\|string` | 破坏类型固定优势 |
 | `...$args` 可变参数 | 需动态栈构造 |
 | 命名参数 | AOT 无意义 |
+| `#[Route(path: "/x")]` 命名参数注解 | 与全局命名参数禁用一致；注解仅支持位置参数 `#[Route("/x")]` |
+| 运行时反射 `Reflection*` | AOT 无运行时元数据，注解仅供编译期消费 |
+| first-class callable `strlen(...)` | AOT 下函数编译期已知，可用闭包 `function() use() {}` 或直接函数调用替代，额外语法无收益 |
+| `true`/`false`/`null` 字面量类型 | AOT 零性能收益；编译期验证成本高收益低；与现有 `?T` 不做的哲学冲突；纯文档性特性 |
+| `static` 返回类型 | AOT 无后期绑定，语义与 `self` 完全相同，多此一举 |
+| DNF/intersection 类型 `A&B` `(A&B)\|C` | 实现复杂（需接口 vtable 或 `t_var` 降级），收益有限，破坏类型固定优势 |
+
+> ⚠️ 定参 vs 可变参数的 `func_get_args()`：
+> - **定参函数**（`function f(int $a, string $b)`）：参数编译为独立 C 形参 `t_int a, t_string b`，没有统一容器 → `func_get_args()` **不可行**
+> - **可变参数函数**（`function f(...$args)`）：可编译为 `t_array* args` 形参 → `func_get_args()` 直接返回 `args` 即可 → **可行**
+
+---
+
+## 14. 注解系统（TinyPHP 扩展）
+
+TinyPHP 注解采用**纯编译期消费**策略（方向 A）：注解在编译期被消费生成代码或进行检查，运行时零开销，明确**不支持运行时反射**（方向 B）。
+
+### 14.1 设计哲学
+
+| 维度 | 选择 | 理由 |
+|------|------|------|
+| 消费时机 | 编译期 | AOT 零开销，注解信息编译期已知 |
+| 运行时元数据 | 无 | 避免二进制体积膨胀和运行时查找开销 |
+| 参数形式 | 仅位置参数 | 与全局命名参数禁用一致；命名参数在 AOT 下无意义 |
+| 索引形式 | 仅静态索引 `ROUTE[0]` | 编译期展开为零开销直接调用；动态索引 `ROUTE[$i]` 不支持 |
+| 跨命名空间 | 与普通常量作用域一致 | 短名匹配（同命名空间 + 全局回退）；`use const` 导入解析为 FQ 名精确匹配 |
+
+### 14.2 语法
+
+```
+// 注解类型声明：附着于全局/命名空间 const
+annotation_decl:
+    '#[Attribute' '(' param_list ')' ']' 'const' IDENTIFIER '=' '[' ']' ';'
+  // param_list: name ':' type ['=' default_expr] (',' ...)*
+  //   type: 'int' | 'float' | 'string' | 'bool' | 'array' | ...
+  //   const 必须为空数组字面量 []
+
+// 注解使用：附着于 class / method / function（可连续多个 #[...]）
+annotation_use:
+    '#[' IDENTIFIER ['(' arg_list ')'] ']'
+  // IDENTIFIER 可含命名空间限定（Ns\Name）
+  // arg_list: expr (',' expr)*  — 仅位置参数，命名参数报语法错误
+```
+
+### 14.3 示例
+
+```php
+<?php // @multi @with child/child.php
+
+// 1. 声明注解类型
+#[Attribute(path: string)]
+const ROUTE = [];
+
+class Main {
+    // 2. 使用注解（仅位置参数）
+    #[ROUTE("/test")]
+    public function test(int $id): void {
+        echo "test->$id\n";
+    }
+
+    #[ROUTE("/test2")]
+    public function test2(): void { ... }
+
+    public function main(): void {
+        // 3. 访问注解 entry 属性（编译期展开为静态指针）
+        var_dump(ROUTE);                 // array(N) { [0]=>object(AnnotationEntry) ... }
+        var_dump(ROUTE[0]->name);        // string(10) "Main->test"
+        var_dump(ROUTE[0]->type);        // string(6) "method"
+        var_dump(ROUTE[0]->data);        // array(1) { [0]=>string(5) "/test" }
+
+        // 4. 调用注解目标（编译期展开为直接调用，零开销）
+        ROUTE[0]->call(12);              // → tphp_class_Main_test(new_tphp_class_Main(...), 12)
+        ROUTE[1]->call();                // → tphp_class_Main_test2(new_tphp_class_Main(...))
+
+        // 5. 实例化注解类目标（编译期展开为 new_tphp_class_X(args)）
+        $demo = ROUTE[2]->newInstance("TinyPHP");  // → new_tphp_class_Demo(STR_LIT("TinyPHP"))
+        $demo->hello();
+    }
+}
+
+#[ROUTE("/Demo")]
+class Demo {
+    public function __construct(string $name) { ... }
+    public function hello(): void { ... }
+}
+```
+
+### 14.4 AnnotationEntry 内置类
+
+每个注解使用编译期收集为一个 `AnnotationEntry` 实例（C 结构体，非用户类）：
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `$data` | `array` | 位置参数数组（注解使用时传入的参数） |
+| `$type` | `string` | 目标类型：`method` / `static_method` / `class` / `function` |
+| `$name` | `string` | 限定名：`Ns\Class->method` / `Ns\Class::staticMethod` / `Ns\func` / `Ns\Class` |
+
+| 方法 | 说明 |
+|------|------|
+| `call(...$args): T` | 调用目标方法/静态方法/函数，返回目标返回类型（class 目标报错） |
+| `newInstance(...$args): ClassType` | 实例化目标类，返回精确类类型（非 class 目标报错） |
+
+### 14.5 编译期展开规则
+
+| 源代码 | 编译期展开为 | 开销 |
+|--------|-------------|------|
+| `ROUTE[0]` | `_annot_ROUTE_0`（静态 `AnnotationEntry*` 指针） | 零 |
+| `ROUTE[0]->data` | `_annot_ROUTE_0->data` | 零 |
+| `ROUTE[0]->type` | `_annot_ROUTE_0->type` | 零 |
+| `ROUTE[0]->name` | `_annot_ROUTE_0->name` | 零 |
+| `ROUTE[0]->call(12)`（method） | `(tphp_class_Main_test(new_tphp_class_Main(...), 12))` | 零（直接调用） |
+| `ROUTE[0]->call(12)`（static_method） | `tphp_class_Main_staticMethod(12)` | 零 |
+| `ROUTE[0]->call(12)`（function） | `tphp_fn_funcName(12)` | 零 |
+| `ROUTE[0]->newInstance("x")`（class） | `new_tphp_class_Demo(STR_LIT("x"))` | 零 |
+| `ROUTE[$i]->call(12)`（动态索引） | **不支持**（编译期无法确定目标） | — |
+
+### 14.6 扫描顺序与限定名规则
+
+注解 entry 按以下顺序收集到常量数组：
+
+1. `mainClass`（Main 类）的类级注解 → 方法级注解（按方法声明顺序）
+2. `extraClasses`（辅助文件优先解析，按文件参数顺序）的类级注解 → 方法级注解
+3. `functions` 的函数级注解
+
+限定名命名规则：
+
+| 目标类型 | 限定名格式 | 示例 |
+|---------|-----------|------|
+| method | `Ns\Class->method` | `Main->test` / `Child\MyChild->hello` |
+| static_method | `Ns\Class::method` | `Main::create` |
+| function | `Ns\func` | `greet` / `Utils\helper` |
+| class | `Ns\Class` | `Demo` / `Child\MyChild` |
+
+### 14.7 跨命名空间匹配
+
+注解名匹配与普通常量作用域规则一致：
+- **短名** → 匹配短名（同命名空间常量 + 全局常量回退，与 PHP 普通常量行为相同）
+- **FQ 名**（含 `\` 或经 `use const` 导入）→ 精确匹配 FQ 名
+
+`use const` 导入是可选的：全局常量无需导入即可跨命名空间使用（全局回退）；命名空间常量也可通过 `use const` 导入或直接使用 FQ 名。
+
+```php
+// child.php
+namespace Child;
+#[Attribute(name: string)]
+const GET_NAME = [];
+
+// main.php（全局命名空间）
+use const Child\GET_NAME;  // 可选：导入后解析为 FQ 名 Child\GET_NAME
+
+class Main {
+    #[GET_NAME("/test3")]  // 短名匹配 Child\GET_NAME（经 use const 导入或全局回退）
+    public function test3(): void { ... }
+}
+
+// child.php 中引用全局注解常量
+#[ROUTE("/MyChild")]  // ROUTE 是全局常量，无需 use const 导入（全局回退）
+class MyChild { ... }
+```
+
+### 14.8 编译期校验
+
+- **参数数量校验**：注解使用的参数数量必须在声明参数的 `[required, total]` 范围内（支持默认值）
+- **命名参数禁用**：`#[ROUTE(path: "/x")]` 报语法错误，应使用 `#[ROUTE("/x")]`
+- **目标类型校验**：`call()` 仅用于 method/static_method/function，`newInstance()` 仅用于 class
+- **静态索引校验**：`ROUTE[N]` 的 N 必须为编译期整数常量且在有效范围内
+
+### 14.9 不支持
+
+| 特性 | 原因 |
+|------|------|
+| 运行时反射 `ReflectionAttribute` | AOT 无运行时元数据 |
+| 动态索引 `ROUTE[$i]->call()` | 编译期无法确定目标 |
+| 注解继承（子类继承父类注解） | 编译期收集不递归父类 |
+| 注解作用于属性/参数 | 当前仅支持 class/method/function |
+
+## 15. 动态库导出 `#[Export]` + `-shared`（TinyPHP 扩展）
+
+`#[Export("name")]` 是内置注解，标记独立函数导出为 C 函数。配合 `-shared` 编译选项，生成可被外部 C 代码调用的动态库（`.dll`/`.so`/`.dylib`）。
+
+与 §14 注解系统**独立**：`#[Export]` 不经过 `#[Attribute]` 声明，不收集到注解常量数组，仅控制 C 符号导出。
+
+### 15.1 语法
+
+```php
+#[Export("c_function_name")]
+function phpFunc(params): retType { ... }
+```
+
+- 参数为字符串字面量，指定导出的 C 函数名（必须为合法 C 标识符，全局唯一）
+- 仅可用于独立函数（`function`），用于方法报语法错误
+- 非 `-shared` 模式下静默忽略，函数仍可正常调用
+
+### 15.2 类型约束
+
+| 方面 | 规则 |
+|------|------|
+| 参数类型 | 允许 `int`/`float`/`bool`/`string`/`void`/`C.Type`，**禁止 `array`** |
+| 返回值类型 | 同上，**禁止 `array`** |
+| string 映射 | 直接暴露 `t_string*`（不桥接 `char*`），C 侧需包含 `tphp_runtime.h` |
+
+### 15.3 生成机制
+
+`-shared` 模式下，每个 `#[Export("name")]` 函数生成同签名 trampoline：
+
+```c
+TPHP_EXPORT t_int add(t_int a, t_int b) {
+    return tphp_fn_add(a, b);   // 调用原始 AOT 函数
+}
+```
+
+- **TPHP_EXPORT 宏**：Windows `__declspec(dllexport)` / GCC `__attribute__((visibility("default")))`
+- **Runtime 自动初始化**：Windows `DllMain(DLL_PROCESS_ATTACH)` / Linux/macOS `__attribute__((constructor))`，调用 `tphp_rt_init()` + 注解初始化函数
+- **Main 类**：`-shared` 模式仍需 Main 入口类（不豁免），但 `main()` 不被执行
+
+### 15.4 `-shared` 编译选项
+
+```bash
+tphp foo.php -shared -o foo.dll     # Windows
+tphp foo.php -shared -o foo.so      # Linux
+tphp foo.php -shared -o foo.dylib   # macOS
+```
+
+- 输出文件名机制与可执行文件一致（`-o` 指定，默认从入口文件名派生 + 平台扩展名）
+- 传递 `-shared` 给链接器
+- `--debug` 模式下不做输出比较（DLL 不可直接执行）
+
+### 15.5 多注解共存
+
+`#[Export]` 可与 §14 用户注解共存于同一函数，互不干扰：
+
+```php
+#[Export("multi_fn")]     // 导出为 C 函数（-shared 模式）
+#[ROUTE("/api/multi")]    // 收集到 ROUTE 注解数组（所有模式）
+function multiFn(int $n): void { ... }
+```

@@ -47,6 +47,25 @@ class CodeGenerator implements ASTVisitor
     /** 当前是否在 hook 体内（hook 体内 $this->prop 直接访问 backing field） */
     private bool $inHookBody = false;
 
+    /** ProgramNode 引用（visitConst 扫描注解使用） */
+    private ?ProgramNode $program = null;
+    /** 注解常量注册表：shortName/FQName → [
+     *      'fqName' => string, 'shortName' => string,
+     *      'constName' => 'TPHP_CONST_XXX', 'initFn' => '_annot_XXX_init',
+     *      'entryVarPrefix' => '_annot_XXX_',
+     *      'entries' => [ ['kind'=>'method'|'static_method'|'class'|'function',
+     *                       'class'=>string,'method'=>string,'function'=>string,
+     *                       'namespace'=>string,'name'=>string,'args'=>ExprNode[]], ... ]
+     *  ] */
+    private array $annotationRegistry = [];
+    /** 注解初始化函数列表（generateCEntry 中调用） */
+    private array $annotationInitFns = [];
+    /** 变量 → 注解常量名追踪（foreach 遍历注解数组时，记录 $v 来自哪个注解常量） */
+    private array $varAnnotSource = [];
+
+    /** 是否 -shared 共享库模式（生成导出 trampoline + 库自动初始化） */
+    public bool $isShared = false;
+
     /** 字面量 → C 类型的映射 */
     private static array $litTypeMap = [
         IntLiteralExpr::class    => 't_int',
@@ -291,6 +310,7 @@ class CodeGenerator implements ASTVisitor
     private const SEC_FUNCIMPL  = 'funcimpl';   // 独立函数实现
     private const SEC_CLOSURES  = 'closures';   // 闭包函数实现
     private const SEC_THUNKS    = 'thunks';     // Thunk 函数实现
+    private const SEC_EXPORTS   = 'exports';    // 导出函数 trampoline + 库初始化（-shared 模式）
     private const SEC_MAIN      = 'main';       // C entry main()
 
     private array $sections = [];
@@ -320,6 +340,7 @@ class CodeGenerator implements ASTVisitor
         $this->indent = 0;
         $this->resetState();
         $this->preScanGenerators($node);
+        $this->program = $node;
 
         // 收集 #callback 声明
         foreach ($node->callbacks as $cb) {
@@ -489,6 +510,9 @@ class CodeGenerator implements ASTVisitor
             $this->sectionBlock(self::SEC_FUNCIMPL, $fn->accept($this));
         }
 
+        // ── SEC_EXPORTS: 导出函数 trampoline + 库初始化（-shared 模式） ──
+        $this->sectionBlock(self::SEC_EXPORTS, $this->emitExports($node));
+
         // ── SEC_MAIN: C 入口 ──
         if ($node->mainClass !== null) {
             $this->className = self::classCName($node->mainClass);
@@ -618,6 +642,15 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Parallel')->methods['for']  = new MethodInfo('void', ['t_int', 't_callback', 't_int'], true, 'public', 1, 3);
         // map(array $data, callable $fn, int $threads = 0): array — 3 params, 1 default
         $this->symbols->getClass('tphp_class_Parallel')->methods['map']  = new MethodInfo('t_array*', ['t_array*', 't_callback', 't_int'], true, 'public', 1, 3);
+
+        // 内置 AnnotationEntry 类（注解系统）
+        $this->symbols->addClass('tphp_class_AnnotationEntry');
+        $this->symbols->addClassName('AnnotationEntry', 'tphp_class_AnnotationEntry');
+        $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'data', 't_array*');
+        $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'type', 't_string');
+        $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'name', 't_string');
+        $this->symbols->getClass('tphp_class_AnnotationEntry')->methods['__construct'] = new MethodInfo('void', ['t_array*', 't_string', 't_string']);
+        $this->symbols->getClass('tphp_class_AnnotationEntry')->methods['__destruct']  = new MethodInfo('void');
     }
 
     // ── 多段输出方法 ─────────────────────────────────────────
@@ -661,6 +694,7 @@ class CodeGenerator implements ASTVisitor
             self::SEC_FUNCIMPL,
             self::SEC_CLOSURES,
             self::SEC_THUNKS,
+            self::SEC_EXPORTS,
             self::SEC_MAIN,
         ];
         // 段注释头（仅在段有内容时输出）
@@ -2325,6 +2359,10 @@ class CodeGenerator implements ASTVisitor
                     if (str_contains($et, 'tphp_class_') && !str_ends_with($et, '*')) $et .= '*';
                     return $et;
                 }
+                // 注解常量数组：元素类型为 tphp_class_AnnotationEntry*
+                if (isset($this->annotationRegistry[$arrName])) {
+                    return 'tphp_class_AnnotationEntry*';
+                }
             }
             // 链式访问 $arr[0][0]：向上查找根数组的嵌套类型
             if ($expr->array instanceof ArrayAccessExpr) {
@@ -2404,6 +2442,80 @@ class CodeGenerator implements ASTVisitor
     /** 推导 CallExpr 的返回类型 */
     private function inferCallReturnType(CallExpr $expr): string
     {
+        // ── 注解常量静态索引 call() / newInstance() 返回类型推导 ──
+        // AST: CallExpr { callee: ArrayAccessExpr { array: VariableExpr, index: IntLiteral }, name: 'call'|'newInstance' }
+        if ($expr->callee instanceof ArrayAccessExpr
+            && $expr->callee->array instanceof VariableExpr
+            && !str_starts_with($expr->callee->array->name, '$')
+            && $expr->callee->index instanceof IntLiteralExpr
+            && isset($this->annotationRegistry[$expr->callee->array->name])
+            && ($expr->name === 'call' || $expr->name === 'newInstance')) {
+            $reg = $this->annotationRegistry[$expr->callee->array->name];
+            $idx = (int)$expr->callee->index->value;
+            if (isset($reg['entries'][$idx])) {
+                $entry = $reg['entries'][$idx];
+                if ($expr->name === 'newInstance') {
+                    return self::classRefName($entry['class']) . '*';
+                }
+                // call() → 方法/函数返回类型
+                if ($entry['kind'] === 'function') {
+                    $fnCName = $entry['namespace'] !== ''
+                        ? 'tphp_na_' . self::mangleCName($entry['namespace']) . '_tphp_fn_' . $entry['function']
+                        : 'tphp_fn_' . $entry['function'];
+                    return $this->symbols->getFuncRet($fnCName) ?? 't_int';
+                }
+                $classCName = self::classRefName($entry['class']);
+                $m = $this->symbols->getClassMethod($classCName, $entry['method']);
+                return $m !== null ? $m->returnType : 't_int';
+            }
+        }
+
+        // ── 注解常量动态索引 / foreach 变量 call() / newInstance() 返回类型推导 ──
+        // $v->call() → void（运行时分发，返回类型不确定时用 void）
+        // $v->newInstance() → 若只有一个 class entry，返回该类指针类型；否则 void*
+        if ($expr->callee instanceof VariableExpr
+            && str_starts_with($expr->callee->name, '$')
+            && ($expr->name === 'call' || $expr->name === 'newInstance')) {
+            $valVar = self::varName($expr->callee->name);
+            if (isset($this->varAnnotSource[$valVar])) {
+                $annotName = $this->varAnnotSource[$valVar];
+                $reg = $this->annotationRegistry[$annotName];
+                if ($expr->name === 'newInstance') {
+                    // 收集所有 class entry
+                    $classEntries = array_filter($reg['entries'], fn($e) => $e['kind'] === 'class');
+                    if (count($classEntries) === 1) {
+                        $entry = reset($classEntries);
+                        return self::classRefName($entry['class']) . '*';
+                    }
+                    // 多个 class entry：检查共同基类
+                    $commonBase = $this->findCommonBaseClass($classEntries);
+                    if ($commonBase !== '') {
+                        return self::classRefName($commonBase) . '*';
+                    }
+                    return 'void*';
+                }
+                // call() → 收集所有非 class entry 的返回类型
+                $callEntries = array_filter($reg['entries'], fn($e) => $e['kind'] !== 'class');
+                $retTypes = [];
+                foreach ($callEntries as $e) {
+                    if ($e['kind'] === 'function') {
+                        $fnCName = $e['namespace'] !== ''
+                            ? 'tphp_na_' . self::mangleCName($e['namespace']) . '_tphp_fn_' . $e['function']
+                            : 'tphp_fn_' . $e['function'];
+                        $retTypes[] = $this->symbols->getFuncRet($fnCName) ?? 't_int';
+                    } else {
+                        $classCName = self::classRefName($e['class']);
+                        $m = $this->symbols->getClassMethod($classCName, $e['method']);
+                        $retTypes[] = $m !== null ? $m->returnType : 't_int';
+                    }
+                }
+                $retTypes = array_unique($retTypes);
+                if (count($retTypes) === 1) {
+                    return $retTypes[0];
+                }
+                return 'void';
+            }
+        }
         // 内置函数返回类型 — 查注册表
         if ($expr->callee === null) {
             $name = $expr->name;
@@ -3774,6 +3886,16 @@ class CodeGenerator implements ASTVisitor
         throw new \RuntimeException('Placeholder `...` is only valid in pipe operator context');
     }
 
+    public function visitAttributeDecl(AttributeDeclNode $node): string
+    {
+        return '';  // 注解类型声明不生成代码，由 visitConst 收集
+    }
+
+    public function visitAttributeUse(AttributeUseNode $node): string
+    {
+        return '';  // 注解使用不生成独立代码，由注解收集器处理
+    }
+
     /**
      * 简单转发通用处理器：按 $simpleFnMap 配置生成 tphp_fn_xxx(args) 代码。
      *
@@ -3833,6 +3955,48 @@ class CodeGenerator implements ASTVisitor
 
     public function visitCall(CallExpr $node): string
     {
+        // ── 注解常量静态索引 call() / newInstance() 编译期展开 ──
+        // ROUTE[0]->call(12)        → 直接调用目标方法/函数
+        // ROUTE[0]->newInstance(...) → new_tphp_class_X(args)
+        // AST: CallExpr { callee: ArrayAccessExpr { array: VariableExpr, index: IntLiteral }, name: 'call'|'newInstance' }
+        if ($node->callee instanceof ArrayAccessExpr
+            && $node->callee->array instanceof VariableExpr
+            && !str_starts_with($node->callee->array->name, '$')
+            && $node->callee->index instanceof IntLiteralExpr
+            && isset($this->annotationRegistry[$node->callee->array->name])
+            && ($node->name === 'call' || $node->name === 'newInstance')) {
+            $reg = $this->annotationRegistry[$node->callee->array->name];
+            $idx = (int)$node->callee->index->value;
+            if (isset($reg['entries'][$idx])) {
+                return $this->emitAnnotationCall($reg['entries'][$idx], $node->name, $node->args);
+            }
+        }
+
+        // ── 注解常量动态索引 call() / newInstance() 运行时分发 ──
+        // ROUTE[$i]->call(12) → _annot_ROUTE_dispatch_call(ROUTE[$i], 1, (t_var[]){VAR_INT(12)})
+        if ($node->callee instanceof ArrayAccessExpr
+            && $node->callee->array instanceof VariableExpr
+            && !str_starts_with($node->callee->array->name, '$')
+            && isset($this->annotationRegistry[$node->callee->array->name])
+            && ($node->name === 'call' || $node->name === 'newInstance')) {
+            $annotName = $node->callee->array->name;
+            $calleeCode = $node->callee->accept($this);  // 动态索引 → 运行时 AnnotationEntry*
+            return $this->emitAnnotationRuntimeCall($annotName, $node->name, $calleeCode, $node->args);
+        }
+
+        // ── foreach 变量 $v->call() / $v->newInstance() 运行时分发 ──
+        // $v 来自 foreach(ROUTE as $v)，通过 varAnnotSource 追踪来源
+        if ($node->callee instanceof VariableExpr
+            && str_starts_with($node->callee->name, '$')
+            && ($node->name === 'call' || $node->name === 'newInstance')) {
+            $valVar = self::varName($node->callee->name);
+            if (isset($this->varAnnotSource[$valVar])) {
+                $annotName = $this->varAnnotSource[$valVar];
+                $calleeCode = $node->callee->accept($this);
+                return $this->emitAnnotationRuntimeCall($annotName, $node->name, $calleeCode, $node->args);
+            }
+        }
+
         // PHPC 互操作函数名集合（B 段、C 段共享，避免重复定义）
         static $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone','php_str_ptr','c_void_ptr',
             'phpc_arr_int','phpc_arr_dbl','phpc_arr_str','phpc_new_arr_int',
@@ -4018,8 +4182,14 @@ class CodeGenerator implements ASTVisitor
             return 'tphp_fn_' . $node->name . '(' . $node->args[0]->accept($this) . ')';
         }
 
-        // is_int / is_string / is_float / is_bool / is_array / is_object / is_null / is_callable
-        if ($node->callee === null && str_starts_with($node->name, 'is_')) {
+        // is_int / is_string / is_float / is_bool / is_array / is_object / is_null / is_callable / is_resource
+        // 仅拦截内置类型检测函数，避免误吞用户自定义的 is_* 函数（如 is_positive）
+        static $builtinIsFns = [
+            'is_int' => 1, 'is_float' => 1, 'is_string' => 1, 'is_bool' => 1,
+            'is_array' => 1, 'is_null' => 1, 'is_object' => 1, 'is_callable' => 1,
+            'is_resource' => 1,
+        ];
+        if ($node->callee === null && isset($builtinIsFns[$node->name])) {
             $args = array_map(fn($a) => $a->accept($this), $node->args);
             $code = !empty($args) ? $args[0] : 'false';
             $type = !empty($node->args) ? $this->inferType($node->args[0]) : 't_int';
@@ -4585,6 +4755,21 @@ class CodeGenerator implements ASTVisitor
         }
         if ($expr instanceof PropertyAccessExpr) {
             $code = $expr->accept($this);
+            // ── 注解 entry 属性访问: ROUTE[0]->data/type/name ──
+            // _annot_ROUTE_0->data → VAR_ARRAY, ->type/->name → VAR_STRING
+            if ($expr->object instanceof ArrayAccessExpr
+                && $expr->object->array instanceof VariableExpr
+                && !str_starts_with($expr->object->array->name, '$')
+                && $expr->object->index instanceof IntLiteralExpr
+                && isset($this->annotationRegistry[$expr->object->array->name])) {
+                $prop = ltrim($expr->property, '$');
+                return match ($prop) {
+                    'data'  => "VAR_ARRAY({$code})",
+                    'type'  => "VAR_STRING({$code})",
+                    'name'  => "VAR_STRING({$code})",
+                    default => "VAR_INT({$code})",
+                };
+            }
             // 类常量访问 → 查 SymbolTable
             if (str_starts_with($code, 'TPHP_CONST_')) {
                 $ct = $this->symbols->getConstType($code) ?? $this->symbols->getConstType(strtoupper(substr($code, 12))) ?? 't_int';
@@ -4798,6 +4983,24 @@ class CodeGenerator implements ASTVisitor
 
     public function visitPropertyAccess(PropertyAccessExpr $node): string
     {
+        // ── 注解常量静态索引属性访问编译期展开 ──
+        // ROUTE[0]->data / ->type / ->name → _annot_ROUTE_0->data / ->type / ->name
+        if ($node->object instanceof ArrayAccessExpr
+            && $node->object->array instanceof VariableExpr
+            && !str_starts_with($node->object->array->name, '$')
+            && $node->object->index instanceof IntLiteralExpr
+            && isset($this->annotationRegistry[$node->object->array->name])) {
+            $reg = $this->annotationRegistry[$node->object->array->name];
+            $idx = (int)$node->object->index->value;
+            if (isset($reg['entries'][$idx])) {
+                $entryVar = $reg['entryVarPrefix'] . $idx;
+                $prop = ltrim($node->property, '$');
+                if (in_array($prop, ['data', 'type', 'name'], true)) {
+                    return "{$entryVar}->{$prop}";
+                }
+            }
+        }
+
         // C->CONST — direct C constant/enum/macro access (no parentheses)
         if ($node->object instanceof VariableExpr && $node->object->name === 'C') {
             return $node->property;
@@ -4904,6 +5107,11 @@ class CodeGenerator implements ASTVisitor
 
     public function visitConst(ConstNode $node): string
     {
+        // 注解类型声明: #[Attribute(...)] const NAME = [];
+        //   扫描整个 ProgramNode 收集 #[NAME(...)] 使用，生成 AnnotationEntry 数组
+        if ($node->attributeDecl !== null) {
+            return $this->emitAnnotationConstant($node);
+        }
         $name = 'TPHP_CONST_' . strtoupper($node->name);
         // 有声明类型时校验一致性，并以声明类型注册；无则按字面量推导
         $litCType = self::$litTypeMap[$node->value::class] ?? null;
@@ -4936,6 +5144,487 @@ class CodeGenerator implements ASTVisitor
             return '#define ' . $name . ' ' . ($node->value->value ? 'true' : 'false');
         }
         return '/* const ' . $node->name . ' */';
+    }
+
+    /**
+     * 注解常量发射：扫描 ProgramNode 收集 #[NAME(...)] 使用，生成 AnnotationEntry 数组
+     *
+     * 生成结构:
+     *   static tphp_class_AnnotationEntry* _annot_NAME_0 = NULL;  // 静态索引编译期展开
+     *   static t_array* TPHP_CONST_NAME = NULL;
+     *   static void _annot_NAME_init(void) { ... 填充数组 ... }
+     *
+     * 注册到 $annotationRegistry，供 visitArrayAccess/visitCall/visitPropertyAccess 静态展开使用
+     */
+    private function emitAnnotationConstant(ConstNode $node): string
+    {
+        $shortName = $node->name;
+        $fqName = $node->namespace !== '' ? $node->namespace . '\\' . $node->name : $node->name;
+        $constName = 'TPHP_CONST_' . strtoupper($node->name);
+        $initFn = '_annot_' . $node->name . '_init';
+        $entryPrefix = '_annot_' . $node->name . '_';
+
+        // 收集所有 AttributeUseNode 匹配此注解
+        $entries = [];
+        $declParams = $node->attributeDecl->params;
+
+        $allClasses = array_merge(
+            $this->program->mainClass ? [$this->program->mainClass] : [],
+            $this->program->extraClasses
+        );
+        foreach ($allClasses as $class) {
+            $classFq = $class->namespace !== '' ? $class->namespace . '\\' . $class->name : $class->name;
+            // 类级注解
+            foreach ($class->attributes as $attr) {
+                if ($this->attrNameMatches($attr->name, $shortName, $fqName)) {
+                    $this->validateAttrArgs($node->name, $declParams, $attr->args, "class {$classFq}");
+                    $entries[] = [
+                        'kind' => 'class',
+                        'class' => $classFq,
+                        'namespace' => $class->namespace,
+                        'className' => $class->name,
+                        'method' => null,
+                        'function' => null,
+                        'name' => $classFq,
+                        'args' => $attr->args,
+                    ];
+                }
+            }
+            // 方法级注解
+            foreach ($class->methods as $m) {
+                foreach ($m->attributes as $attr) {
+                    if ($this->attrNameMatches($attr->name, $shortName, $fqName)) {
+                        $kind = $m->isStatic ? 'static_method' : 'method';
+                        $qualified = $classFq . ($m->isStatic ? '::' : '->') . $m->name;
+                        $this->validateAttrArgs($node->name, $declParams, $attr->args, "method {$qualified}");
+                        $entries[] = [
+                            'kind' => $kind,
+                            'class' => $classFq,
+                            'namespace' => $class->namespace,
+                            'className' => $class->name,
+                            'method' => $m->name,
+                            'isStatic' => $m->isStatic,
+                            'function' => null,
+                            'name' => $qualified,
+                            'args' => $attr->args,
+                        ];
+                    }
+                }
+            }
+        }
+        // 函数级注解
+        foreach ($this->program->functions as $fn) {
+            foreach ($fn->attributes as $attr) {
+                if ($this->attrNameMatches($attr->name, $shortName, $fqName)) {
+                    $fnFq = $fn->namespace !== '' ? $fn->namespace . '\\' . $fn->name : $fn->name;
+                    $this->validateAttrArgs($node->name, $declParams, $attr->args, "function {$fnFq}");
+                    $entries[] = [
+                        'kind' => 'function',
+                        'class' => null,
+                        'namespace' => $fn->namespace,
+                        'className' => null,
+                        'method' => null,
+                        'function' => $fn->name,
+                        'name' => $fnFq,
+                        'args' => $attr->args,
+                    ];
+                }
+            }
+        }
+
+        // 注册到符号表 — 注解常量为 t_array* 类型
+        $this->symbols->addConst($node->name, 't_array*');
+
+        // 注册到 annotationRegistry（短名 + FQ 名均可查）
+        $reg = [
+            'fqName' => $fqName,
+            'shortName' => $shortName,
+            'constName' => $constName,
+            'initFn' => $initFn,
+            'entryVarPrefix' => $entryPrefix,
+            'entries' => $entries,
+        ];
+        $this->annotationRegistry[$shortName] = $reg;
+        if ($fqName !== $shortName) {
+            $this->annotationRegistry[$fqName] = $reg;
+        }
+        $this->annotationInitFns[] = $initFn;
+
+        // ── 生成 C 代码 ──
+        $declLines = [];
+        $declLines[] = "/* ── Annotation Constant: {$fqName} ──────────── */";
+        // 每条 entry 的静态指针变量（供静态索引编译期展开使用）
+        foreach ($entries as $i => $e) {
+            $declLines[] = "static tphp_class_AnnotationEntry* {$entryPrefix}{$i} = NULL;";
+        }
+        $declLines[] = "static t_array* {$constName} = NULL;";
+        $declLines[] = '';
+
+        // init 函数实现
+        $implLines = [];
+        $implLines[] = "static void {$initFn}(void) {";
+        $implLines[] = "    {$constName} = tphp_fn_arr_create(" . count($entries) . ");";
+        foreach ($entries as $i => $e) {
+            // 构建 data 数组（位置参数）
+            $dataVar = "{$entryPrefix}{$i}_data";
+            $implLines[] = "    t_array* {$dataVar} = tphp_fn_arr_create(" . count($e['args']) . ");";
+            foreach ($e['args'] as $ai => $arg) {
+                $implLines[] = "    tphp_fn_arr_set_int({$dataVar}, {$ai}, " . $this->wrapVar($arg) . ");";
+            }
+            // 构建 AnnotationEntry
+            $typeStr = $e['kind'];
+            $nameStr = $e['name'];
+            $typeC = 'STR_LIT("' . $typeStr . '")';
+            $nameC = 'STR_LIT("' . str_replace('\\', '\\\\', $nameStr) . '")';
+            $implLines[] = "    {$entryPrefix}{$i} = new_tphp_class_AnnotationEntry({$dataVar}, {$typeC}, {$nameC});";
+            $implLines[] = "    tphp_fn_arr_set_int({$constName}, {$i}, VAR_OBJ({$entryPrefix}{$i}));";
+        }
+        $implLines[] = "}";
+
+        // ── 生成运行时 dispatch 函数（供 foreach 中 $v->call() / $v->newInstance() 使用） ──
+        $dispatchLines = $this->emitAnnotationDispatch($node->name, $entries);
+        $dispatchBlock = implode("\n", $dispatchLines);
+
+        // 将声明 + init 函数实现 + dispatch 函数加入 SEC_CLSIMPL（在 main 之前执行）
+        $this->sectionBlock(self::SEC_CLSIMPL, implode("\n", $declLines) . implode("\n", $implLines) . $dispatchBlock);
+        // 前向声明 init 函数（main 中调用）
+        $this->sectionLine(self::SEC_FUNCFWDS, "static void {$initFn}(void);");
+
+        // 注解常量本身不输出 #define（已是 static 变量，由 visitVariable 解析）
+        return "/* const {$fqName} — annotation constant, see _annot_*  */";
+    }
+
+    /** 生成运行时分发调用代码（$v->call() / $v->newInstance()） */
+    private function emitAnnotationRuntimeCall(string $annotName, string $method, string $calleeCode, array $args): string
+    {
+        $argCodes = array_map(fn($a) => $a->accept($this), $args);
+        $argc = count($argCodes);
+        $dispatchFn = '_annot_' . $annotName . '_dispatch_' . ($method === 'call' ? 'call' : 'new');
+
+        if ($argc === 0) {
+            $argv = 'NULL';
+        } else {
+            // 参数包装为 t_var 数组
+            $wrapped = [];
+            for ($i = 0; $i < $argc; $i++) {
+                $wrapped[] = $this->wrapVarExpr($argCodes[$i], $args[$i]);
+            }
+            $argv = '(t_var[]){' . implode(', ', $wrapped) . '}';
+        }
+
+        $callExpr = "{$dispatchFn}({$calleeCode}, {$argc}, {$argv})";
+
+        if ($method === 'newInstance') {
+            // newInstance 返回 void*，需要 cast 到目标类型
+            $reg = $this->annotationRegistry[$annotName] ?? null;
+            if ($reg !== null) {
+                $classEntries = array_filter($reg['entries'], fn($e) => $e['kind'] === 'class');
+                if (count($classEntries) === 1) {
+                    $entry = reset($classEntries);
+                    $classCName = self::classRefName($entry['class']);
+                    return "(({$classCName}*){$callExpr})";
+                }
+                $commonBase = $this->findCommonBaseClass($classEntries);
+                if ($commonBase !== '') {
+                    $classCName = self::classRefName($commonBase);
+                    return "(({$classCName}*){$callExpr})";
+                }
+            }
+        }
+
+        return $callExpr;
+    }
+
+    /** 将表达式代码包装为 t_var（用于运行时分发参数传递） */
+    private function wrapVarExpr(string $code, ?ExprNode $expr): string
+    {
+        if ($expr === null) return "VAR_INT({$code})";
+        $type = $this->inferType($expr);
+        return match ($type) {
+            't_int'    => "VAR_INT({$code})",
+            't_float'  => "VAR_FLOAT({$code})",
+            't_bool'   => "VAR_BOOL({$code})",
+            't_string' => "VAR_STRING({$code})",
+            default    => "VAR_INT({$code})",
+        };
+    }
+
+    /** 检查属性使用名是否匹配注解常量
+     *  规则（与普通常量作用域一致）:
+     *    - FQ 名（含 \ 或经 use const 导入）→ 精确匹配 FQ 名
+     *    - 短名 → 匹配短名（同命名空间常量 + 全局常量回退） */
+    private function attrNameMatches(string $attrName, string $shortName, string $fqName): bool
+    {
+        return $attrName === $fqName || $attrName === $shortName;
+    }
+
+    /** 生成注解运行时 dispatch 函数（call / newInstance）
+     *  供 foreach 中 $v->call() / $v->newInstance() 使用 — 通过 entry->name 字符串匹配分发 */
+    private function emitAnnotationDispatch(string $annotName, array $entries): array
+    {
+        $lines = [];
+        $callFn = '_annot_' . $annotName . '_dispatch_call';
+        $newInstFn = '_annot_' . $annotName . '_dispatch_new';
+
+        // ── call() dispatch ──
+        $hasCallable = false;
+        foreach ($entries as $e) {
+            if ($e['kind'] !== 'class') { $hasCallable = true; break; }
+        }
+        if ($hasCallable) {
+            $lines[] = '';
+            $lines[] = "/* {$annotName} call() 运行时分发 */";
+            $lines[] = "static void {$callFn}(tphp_class_AnnotationEntry* _entry, int _argc, t_var* _argv) {";
+            $first = true;
+            foreach ($entries as $e) {
+                if ($e['kind'] === 'class') continue;
+                $nameC = 'STR_LIT("' . str_replace('\\', '\\\\', $e['name']) . '")';
+                $kw = $first ? 'if' : 'else if';
+                $lines[] = "    {$kw} (tphp_rt_str_eq(_entry->name, {$nameC})) {";
+                // 生成目标调用
+                $callExpr = $this->buildEntryCallExpr($e, '_argv');
+                $lines[] = "        {$callExpr};";
+                $lines[] = "    }";
+                $first = false;
+            }
+            $lines[] = "}";
+        }
+
+        // ── newInstance() dispatch ──
+        $hasClass = false;
+        foreach ($entries as $e) {
+            if ($e['kind'] === 'class') { $hasClass = true; break; }
+        }
+        if ($hasClass) {
+            $lines[] = '';
+            $lines[] = "/* {$annotName} newInstance() 运行时分发 */";
+            $lines[] = "static void* {$newInstFn}(tphp_class_AnnotationEntry* _entry, int _argc, t_var* _argv) {";
+            $first = true;
+            foreach ($entries as $e) {
+                if ($e['kind'] !== 'class') continue;
+                $nameC = 'STR_LIT("' . str_replace('\\', '\\\\', $e['name']) . '")';
+                $kw = $first ? 'if' : 'else if';
+                $lines[] = "    {$kw} (tphp_rt_str_eq(_entry->name, {$nameC})) {";
+                $classCName = self::classRefName($e['class']);
+                if ($this->isMainClassCName($classCName)) {
+                    $lines[] = "        return (void*)new_{$classCName}((t_int)0, (t_array*)NULL);";
+                } else {
+                    // 查找构造器参数类型，从 _argv 提取
+                    $ctorParams = $this->lookupMethodParams($e['class'], '__construct');
+                    $args = $this->buildRuntimeArgs($ctorParams, '_argv');
+                    $lines[] = "        return (void*)new_{$classCName}(" . implode(', ', $args) . ");";
+                }
+                $lines[] = "    }";
+                $first = false;
+            }
+            $lines[] = "    return NULL;";
+            $lines[] = "}";
+        }
+
+        return $lines;
+    }
+
+    /** 为 dispatch 分支构建目标调用表达式（参数从 _argv 运行时提取） */
+    private function buildEntryCallExpr(array $entry, string $argvVar): string
+    {
+        $kind = $entry['kind'];
+        if ($kind === 'function') {
+            $fnCName = $entry['namespace'] !== ''
+                ? 'tphp_na_' . self::mangleCName($entry['namespace']) . '_tphp_fn_' . $entry['function']
+                : 'tphp_fn_' . $entry['function'];
+            $params = $this->lookupFunctionParams($entry['function'], $entry['namespace']);
+            $args = $this->buildRuntimeArgs($params, $argvVar);
+            return "{$fnCName}(" . implode(', ', $args) . ")";
+        }
+        // method / static_method
+        $classCName = self::classRefName($entry['class']);
+        $methodCName = $classCName . '_' . $entry['method'];
+        $params = $this->lookupMethodParams($entry['class'], $entry['method']);
+        $args = $this->buildRuntimeArgs($params, $argvVar);
+        if ($kind === 'static_method') {
+            return "{$methodCName}(" . implode(', ', $args) . ")";
+        }
+        // 实例方法：先 new 再调
+        $newExpr = $this->isMainClassCName($classCName)
+            ? "new_{$classCName}((t_int)0, (t_array*)NULL)"
+            : "new_{$classCName}()";
+        return "(" . $methodCName . "(" . $newExpr . (empty($args) ? "" : ", " . implode(', ', $args)) . "))";
+    }
+
+    /** 从 t_var* _argv 提取参数，按目标函数参数类型转换 */
+    private function buildRuntimeArgs(array $paramTypes, string $argvVar): array
+    {
+        $args = [];
+        foreach ($paramTypes as $i => $type) {
+            $cType = self::mapType($type);
+            $args[] = match ($cType) {
+                't_int'    => "(_argc > {$i} && _argv[{$i}].type == TYPE_INT) ? (t_int)_argv[{$i}].value._int : 0",
+                't_float'  => "(_argc > {$i} && _argv[{$i}].type == TYPE_FLOAT) ? (t_float)_argv[{$i}].value._float : 0.0",
+                't_bool'   => "(_argc > {$i} && _argv[{$i}].type == TYPE_BOOL) ? (t_bool)_argv[{$i}].value._bool : false",
+                't_string' => "(_argc > {$i} && _argv[{$i}].type == TYPE_STRING) ? _argv[{$i}].value._string : ((t_string){NULL, 0})",
+                default    => "0",
+            };
+        }
+        return $args;
+    }
+
+    /** 查找独立函数的参数类型列表 */
+    private function lookupFunctionParams(string $fnName, string $namespace): array
+    {
+        foreach ($this->program->functions as $fn) {
+            if ($fn->name === $fnName && $fn->namespace === $namespace) {
+                return array_map(fn($p) => $p->type, $fn->params);
+            }
+        }
+        return [];
+    }
+
+    /** 查找类方法的参数类型列表 */
+    private function lookupMethodParams(string $className, string $methodName): array
+    {
+        $allClasses = array_merge(
+            $this->program->mainClass ? [$this->program->mainClass] : [],
+            $this->program->extraClasses
+        );
+        foreach ($allClasses as $class) {
+            $classFq = $class->namespace !== '' ? $class->namespace . '\\' . $class->name : $class->name;
+            if ($classFq === $className || $class->name === $className) {
+                foreach ($class->methods as $m) {
+                    if ($m->name === $methodName) {
+                        return array_map(fn($p) => $p->type, $m->params);
+                    }
+                }
+            }
+        }
+        return [];
+    }
+
+    /** 查找多个 class entry 的共同基类（用于 newInstance() 返回类型推断） */
+    private function findCommonBaseClass(array $classEntries): string
+    {
+        $classLists = [];
+        foreach ($classEntries as $e) {
+            $chain = [];
+            $current = $e['class'];
+            while ($current !== null && $current !== '') {
+                $chain[] = $current;
+                $current = $this->lookupParentClass($current);
+            }
+            $classLists[] = $chain;
+        }
+        if (empty($classLists)) return '';
+        // 取所有类链的交集
+        $common = $classLists[0];
+        for ($i = 1; $i < count($classLists); $i++) {
+            $common = array_intersect($common, $classLists[$i]);
+        }
+        return !empty($common) ? reset($common) : '';
+    }
+
+    /** 查找类的父类名 */
+    private function lookupParentClass(string $className): ?string
+    {
+        $allClasses = array_merge(
+            $this->program->mainClass ? [$this->program->mainClass] : [],
+            $this->program->extraClasses
+        );
+        foreach ($allClasses as $class) {
+            $classFq = $class->namespace !== '' ? $class->namespace . '\\' . $class->name : $class->name;
+            if ($classFq === $className || $class->name === $className) {
+                return $class->parentName;
+            }
+        }
+        return null;
+    }
+
+    /** 编译期校验注解参数（数量、类型） */
+    private function validateAttrArgs(string $annotName, array $declParams, array $args, string $context): void
+    {
+        $total = count($declParams);
+        $required = 0;
+        foreach ($declParams as $p) {
+            if ($p['default'] === null) $required++;
+        }
+        if (count($args) < $required || count($args) > $total) {
+            throw new \RuntimeException(sprintf(
+                "Annotation #[%s(...)] on %s expects %d-%d args, got %d",
+                $annotName, $context, $required, $total, count($args)
+            ));
+        }
+    }
+
+    /** 检查 C 类名是否为 Main 入口类（构造器签名为 (t_int argc, t_array* argv)） */
+    private function isMainClassCName(string $classCName): bool
+    {
+        return $this->program !== null
+            && $this->program->mainClass !== null
+            && self::classCName($this->program->mainClass) === $classCName;
+    }
+
+    /**
+     * 注解 entry 的 call() / newInstance() 编译期展开
+     *
+     * call(...$args) — 调用目标方法/函数:
+     *   - method:        (tphp_class_Main_test(new_tphp_class_Main(), args))
+     *   - static_method: (tphp_class_Main_staticMethod(args))
+     *   - function:      (tphp_fn_func(args))
+     *   - class:         错误（class 目标不支持 call）
+     *
+     * newInstance(...$args) — 实例化目标类:
+     *   - class:         new_tphp_class_Demo(args)
+     *   - 其他:          错误
+     */
+    private function emitAnnotationCall(array $entry, string $method, array $args): string
+    {
+        $argCodes = array_map(fn($a) => $a->accept($this), $args);
+
+        if ($method === 'call') {
+            $kind = $entry['kind'];
+            if ($kind === 'class') {
+                throw new \RuntimeException(sprintf(
+                    "Annotation entry '%s' is a class target, use newInstance() instead of call()",
+                    $entry['name']
+                ));
+            }
+            if ($kind === 'function') {
+                // 函数调用: tphp_fn_X(args) or tphp_na_Ns_tphp_fn_X(args)
+                $fnCName = $entry['namespace'] !== ''
+                    ? 'tphp_na_' . self::mangleCName($entry['namespace']) . '_tphp_fn_' . $entry['function']
+                    : 'tphp_fn_' . $entry['function'];
+                return "{$fnCName}(" . implode(', ', $argCodes) . ")";
+            }
+            // 方法调用
+            $classCName = self::classRefName($entry['class']);
+            $methodCName = $classCName . '_' . $entry['method'];
+            if ($kind === 'static_method') {
+                return "{$methodCName}(" . implode(', ', $argCodes) . ")";
+            }
+            // 实例方法: 需要先 new 实例再调用
+            // Main 入口类构造器签名 (t_int argc, t_array* argv)，传 dummy 参数
+            $newExpr = $this->isMainClassCName($classCName)
+                ? "new_{$classCName}((t_int)0, (t_array*)NULL)"
+                : "new_{$classCName}()";
+            return "(" . $methodCName . "(" . $newExpr . (empty($argCodes) ? "" : ", " . implode(', ', $argCodes)) . "))";
+        }
+
+        // newInstance
+        if ($entry['kind'] !== 'class') {
+            throw new \RuntimeException(sprintf(
+                "Annotation entry '%s' is a %s target, use call() instead of newInstance()",
+                $entry['name'], $entry['kind']
+            ));
+        }
+        $classCName = self::classRefName($entry['class']);
+        // Main 入口类构造器签名 (t_int argc, t_array* argv)
+        if ($this->isMainClassCName($classCName)) {
+            return empty($argCodes)
+                ? "new_{$classCName}((t_int)0, (t_array*)NULL)"
+                : "new_{$classCName}((t_int)0, (t_array*)NULL)";
+        }
+        if (empty($argCodes)) {
+            return "new_{$classCName}()";
+        }
+        return "new_{$classCName}(" . implode(', ', $argCodes) . ")";
     }
 
     public function visitEnum(EnumNode $node): string
@@ -5324,6 +6013,10 @@ class CodeGenerator implements ASTVisitor
                 $values = $this->arrValueTypes[$arrVarName];
                 if (!empty($values)) $elemType = reset($values);
             }
+            // 注解常量数组：元素类型为 tphp_class_AnnotationEntry*
+            if ($elemType === 't_int' && isset($this->annotationRegistry[$arrVarName])) {
+                $elemType = 'tphp_class_AnnotationEntry*';
+            }
         }
         // 规范化元素类型名
         if (str_contains($elemType, 'tphp_class_') && !str_ends_with($elemType, '*')) {
@@ -5336,6 +6029,13 @@ class CodeGenerator implements ASTVisitor
 
         $this->declaredVars[$valVar] = true;
         $this->varTypes[$valVar] = $elemType;
+        // 注解常量数组：记录 $v 的来源注解名（供 $v->call() 运行时调度使用）
+        if ($elemType === 'tphp_class_AnnotationEntry*' && $node->array instanceof VariableExpr) {
+            $arrVarName = self::varName($node->array->name);
+            if (isset($this->annotationRegistry[$arrVarName])) {
+                $this->varAnnotSource[$valVar] = $arrVarName;
+            }
+        }
         // 传播嵌套类型：foreach($rows as $row) 中 $row 是数组时，记录其元素类型
         if ($elemType === 't_array*' && $node->array instanceof VariableExpr) {
             $arrVarName = self::varName($node->array->name);
@@ -5702,19 +6402,24 @@ class CodeGenerator implements ASTVisitor
     // ============================================================
     private function generateCEntry(): string
     {
-        return implode("\n", [
+        $lines = [
             "/* ── C entry: main() ─────────────────────────── */",
             "int main(int argc, char* argv[]) {",
             $this->ind("tphp_rt_init();"),
-            $this->ind("t_array* _argv = tphp_rt_build_argv(argc, argv);"),
-            $this->ind("{$this->className}* _main = new_{$this->className}((t_int)argc, _argv);"),
-            $this->ind("if (_main == NULL) { tphp_fn_arr_free(_argv); return 1; }"),
-            $this->ind("{$this->className}_main(_main);"),
-            $this->ind("tp_obj_release(_main);"),
-            $this->ind("tphp_fn_arr_free(_argv);"),
-            $this->ind("return 0;"),
-            "}",
-        ]);
+        ];
+        // 注解常量初始化（在用户代码之前填充）
+        foreach ($this->annotationInitFns as $initFn) {
+            $lines[] = $this->ind("{$initFn}();");
+        }
+        $lines[] = $this->ind("t_array* _argv = tphp_rt_build_argv(argc, argv);");
+        $lines[] = $this->ind("{$this->className}* _main = new_{$this->className}((t_int)argc, _argv);");
+        $lines[] = $this->ind("if (_main == NULL) { tphp_fn_arr_free(_argv); return 1; }");
+        $lines[] = $this->ind("{$this->className}_main(_main);");
+        $lines[] = $this->ind("tp_obj_release(_main);");
+        $lines[] = $this->ind("tphp_fn_arr_free(_argv);");
+        $lines[] = $this->ind("return 0;");
+        $lines[] = "}";
+        return implode("\n", $lines);
     }
 
     /**
@@ -5913,6 +6618,29 @@ class CodeGenerator implements ASTVisitor
 
     public function visitArrayAccess(ArrayAccessExpr $node): string
     {
+        // ── 注解常量静态索引编译期展开 ──
+        // ROUTE[0] → _annot_ROUTE_0（AnnotationEntry* 指针，零开销）
+        if ($node->array instanceof VariableExpr
+            && !str_starts_with($node->array->name, '$')
+            && $node->index instanceof IntLiteralExpr
+            && isset($this->annotationRegistry[$node->array->name])) {
+            $reg = $this->annotationRegistry[$node->array->name];
+            $idx = (int)$node->index->value;
+            if (isset($reg['entries'][$idx])) {
+                return $reg['entryVarPrefix'] . $idx;
+            }
+        }
+
+        // ── 注解常量动态索引：ROUTE[$i] → 运行时从 t_var* 解包 AnnotationEntry* ──
+        if ($node->array instanceof VariableExpr
+            && !str_starts_with($node->array->name, '$')
+            && isset($this->annotationRegistry[$node->array->name])) {
+            $reg = $this->annotationRegistry[$node->array->name];
+            $arrCode = $reg['constName'];
+            $idxCode = $node->index->accept($this);
+            return "((tphp_class_AnnotationEntry*)tphp_fn_arr_get_int_object({$arrCode}, (t_int)({$idxCode})))";
+        }
+
         $arr  = $node->array->accept($this);
         $idx  = $node->index->accept($this);
         $vn   = $node->array instanceof VariableExpr ? self::varName($node->array->name) : '';
@@ -6614,6 +7342,155 @@ class CodeGenerator implements ASTVisitor
             return 'tphp_na_' . self::mangleCName($ns) . '_tphp_fn_' . $fn;
         }
         return 'tphp_fn_' . $expr->name;
+    }
+
+    /**
+     * 生成导出函数 trampoline + 共享库自动初始化（-shared 模式）
+     *
+     * #[Export("name")] function fn(params): ret { ... }
+     * → TPHP_EXPORT ret name(params) { return tphp_fn_fn(params); }
+     *
+     * 验证:
+     *   - 仅独立函数可导出（方法上报错）
+     *   - 参数/返回值不能是 array
+     *   - 导出名必须是合法 C 标识符且全局唯一
+     */
+    private function emitExports(ProgramNode $node): string
+    {
+        if (!$this->isShared) return '';
+
+        $exports = [];
+        $seenNames = [];
+
+        // 1. 检查方法上的 #[Export] — 报错（仅独立函数可导出）
+        $allClasses = array_merge(
+            $node->mainClass ? [$node->mainClass] : [],
+            $node->extraClasses
+        );
+        foreach ($allClasses as $class) {
+            foreach ($class->methods as $m) {
+                foreach ($m->attributes as $attr) {
+                    if ($this->isExportAttr($attr)) {
+                        $classFq = $class->namespace !== '' ? $class->namespace . '\\' . $class->name : $class->name;
+                        throw new \RuntimeException(
+                            "#[Export] can only be used on standalone functions, not method {$classFq}::{$m->name}"
+                        );
+                    }
+                }
+            }
+        }
+
+        // 2. 收集独立函数上的 #[Export]
+        foreach ($node->functions as $fn) {
+            foreach ($fn->attributes as $attr) {
+                if (!$this->isExportAttr($attr)) continue;
+
+                if (empty($attr->args)) {
+                    throw new \RuntimeException("#[Export] requires a string argument: #[Export(\"name\")]");
+                }
+                $arg = $attr->args[0];
+                if (!($arg instanceof StringLiteralExpr)) {
+                    throw new \RuntimeException("#[Export] argument must be a string literal");
+                }
+                $exportName = $arg->value;
+
+                if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $exportName)) {
+                    throw new \RuntimeException(
+                        "Invalid export name '{$exportName}': must be a valid C identifier"
+                    );
+                }
+                if (isset($seenNames[$exportName])) {
+                    throw new \RuntimeException("Duplicate export name '{$exportName}'");
+                }
+                $seenNames[$exportName] = true;
+
+                if ($fn->returnType === 'array') {
+                    throw new \RuntimeException(
+                        "#[Export] function {$fn->name} return type cannot be array"
+                    );
+                }
+                foreach ($fn->params as $p) {
+                    if ($p->type === 'array') {
+                        throw new \RuntimeException(
+                            "#[Export] function {$fn->name} parameter {$p->name} type cannot be array"
+                        );
+                    }
+                }
+
+                $exports[] = ['fn' => $fn, 'exportName' => $exportName];
+            }
+        }
+
+        if (empty($exports)) return '';
+
+        // 生成 C 代码
+        $lines = [];
+        $lines[] = "/* ── Exported functions (-shared mode) ──────────── */";
+        $lines[] = '';
+        $lines[] = '#if defined(_WIN32)';
+        $lines[] = '  #define TPHP_EXPORT __declspec(dllexport)';
+        $lines[] = '#else';
+        $lines[] = '  #define TPHP_EXPORT __attribute__((visibility("default")))';
+        $lines[] = '#endif';
+        $lines[] = '';
+
+        // Trampoline 函数
+        foreach ($exports as $e) {
+            $fn = $e['fn'];
+            $exportName = $e['exportName'];
+            $fnCName = self::funcCName($fn);
+            $retCType = self::mapType($fn->returnType);
+
+            $params = [];
+            $args = [];
+            foreach ($fn->params as $p) {
+                $cType = $this->paramCTypeResolved($p);
+                $varName = ltrim($p->name, '$');
+                $params[] = "{$cType} {$varName}";
+                $args[] = $varName;
+            }
+            $paramStr = empty($params) ? 'void' : implode(', ', $params);
+
+            $lines[] = "TPHP_EXPORT {$retCType} {$exportName}({$paramStr}) {";
+            if ($fn->returnType === 'void') {
+                $lines[] = "    {$fnCName}(" . implode(', ', $args) . ");";
+            } else {
+                $lines[] = "    return {$fnCName}(" . implode(', ', $args) . ");";
+            }
+            $lines[] = "}";
+            $lines[] = '';
+        }
+
+        // 共享库 runtime 自动初始化
+        $lines[] = '/* ── Shared library runtime auto-init ── */';
+        $lines[] = '#if defined(_WIN32)';
+        $lines[] = '#include <windows.h>';
+        $lines[] = 'BOOL WINAPI DllMain(HINSTANCE _hinst, DWORD _fdwReason, LPVOID _lpvReserved) {';
+        $lines[] = '    if (_fdwReason == DLL_PROCESS_ATTACH) {';
+        $lines[] = '        tphp_rt_init();';
+        foreach ($this->annotationInitFns as $initFn) {
+            $lines[] = "        {$initFn}();";
+        }
+        $lines[] = '    }';
+        $lines[] = '    return TRUE;';
+        $lines[] = '}';
+        $lines[] = '#else';
+        $lines[] = '__attribute__((constructor))';
+        $lines[] = 'static void _tphp_shared_init(void) {';
+        $lines[] = '    tphp_rt_init();';
+        foreach ($this->annotationInitFns as $initFn) {
+            $lines[] = "    {$initFn}();";
+        }
+        $lines[] = '}';
+        $lines[] = '#endif';
+
+        return implode("\n", $lines);
+    }
+
+    /** 检查是否为 #[Export] 注解 */
+    private function isExportAttr(AttributeUseNode $attr): bool
+    {
+        return $attr->name === 'Export' || $attr->name === '\\Export';
     }
 
     private function indentStr(): string { return str_repeat('    ', $this->indent); }

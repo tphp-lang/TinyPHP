@@ -156,6 +156,7 @@ use MyApp\Models\User;
 | 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`[...$arr1, ...$arr2]` 数组展开（spread）、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、`int $x = 42;` 局部变量可选类型标记、`const int MAX = 100;` 全局常量可选类型标记、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
 | Generator | `yield`、`yield $k => $v`、`send()`、`getReturn()`、`return`、foreach 迭代（基于 minicoro 协程，不使用 yield 时零开销） |
 | 多线程 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` OOP 线程 API（基于 tinycthread，Thread-Local 运行时无锁竞争） |
+| 注解 | `#[Attribute(p: type, ...)] const NAME = [];` 声明 + `#[NAME(args)]` 使用（仅位置参数），`ROUTE[0]->call()/newInstance()` 编译期展开为零开销直接调用，详见 [GRAMMAR.md §14](GRAMMAR.md) |
 
 ### ❌ 不支持（AOT 物理不可行）
 

@@ -36,6 +36,7 @@ static inline void tphp_rt_free_all(void);
 #include "hash.h"
 #include "object/generator.h"    // Generator 类（基于 minicoro 协程）
 #include "object/resource.h"     // Resource 基类（资源对象化根）
+#include "object/annotation.h"   // AnnotationEntry 类（注解系统）
 #include "os/times.h"
 #include "os/json.h"
 #include "os/file.h"

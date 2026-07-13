@@ -1131,6 +1131,62 @@ $tid = Thread::id();
 
 ---
 
+## 注解系统（Annotation）
+
+> 文件: `include/object/annotation.h`, `src/CodeGenerator.php`
+> 设计: 纯编译期消费（方向 A），运行时零开销，不支持运行时反射。详见 `GRAMMAR.md` §14
+
+### 声明与使用
+
+```php
+// 声明注解类型（附着于全局/命名空间 const，必须为空数组）
+#[Attribute(path: string, method: array = [])]
+const ROUTE = [];
+
+// 使用注解（仅位置参数，附着于 class/method/function）
+#[ROUTE("/test", ["GET", "POST"])]
+public function test(int $id): void { ... }
+```
+
+### AnnotationEntry 内置类
+
+每个注解使用编译期收集为一个 `AnnotationEntry` 实例（C 结构体，非用户类）：
+
+| 成员 | 类型 | 说明 |
+|------|------|------|
+| `$data` | `array` | 位置参数数组 |
+| `$type` | `string` | `method` / `static_method` / `class` / `function` |
+| `$name` | `string` | 限定名（`Ns\Class->method` / `Ns\Class::static` / `Ns\func` / `Ns\Class`） |
+
+### 编译期 API
+
+| 表达式 | 展开为 | 说明 |
+|--------|--------|------|
+| `ROUTE[0]` | `_annot_ROUTE_0` | 静态 `AnnotationEntry*` 指针 |
+| `ROUTE[0]->data` | `_annot_ROUTE_0->data` | 位置参数数组 |
+| `ROUTE[0]->type` | `_annot_ROUTE_0->type` | 目标类型字符串 |
+| `ROUTE[0]->name` | `_annot_ROUTE_0->name` | 限定名字符串 |
+| `ROUTE[0]->call(...$args)` | 直接调用目标方法/静态方法/函数 | 零开销（编译期展开） |
+| `ROUTE[0]->newInstance(...$args)` | `new_tphp_class_X(args)` | 零开销（编译期展开） |
+
+### 限制
+
+| 特性 | 状态 | 原因 |
+|------|------|------|
+| 位置参数 | ✅ 支持 | — |
+| 命名参数 `#[ROUTE(path: "/x")]` | ❌ 禁用 | 与全局命名参数禁用一致 |
+| 静态索引 `ROUTE[0]` | ✅ 支持 | 编译期展开 |
+| 动态索引 `ROUTE[$i]` | ❌ 不支持 | 编译期无法确定目标 |
+| 运行时反射 `ReflectionAttribute` | ❌ 不支持 | AOT 无运行时元数据 |
+| 注解作用于属性/参数 | ❌ 不支持 | 当前仅 class/method/function |
+| 注解继承 | ❌ 不支持 | 编译期收集不递归父类 |
+
+### 示例
+
+参见 `test/attribute/main.php` + `test/attribute/child/child.php`（多文件测试，覆盖 method/class/跨命名空间注解）。
+
+---
+
 ## 内存安全
 
 | 机制 | 说明 |

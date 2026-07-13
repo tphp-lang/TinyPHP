@@ -138,9 +138,12 @@ class Parser
             $this->parseUseDecl();
         }
 
-        // const 声明
+        // const 声明（可能有 #[Attribute(...)] 前缀声明注解类型）
         $constants = [];
-        while ($this->match(TokenType::CONST_KW)) {
+        while ($this->check(TokenType::CONST_KW)
+            || ($this->check(TokenType::HASH_ATTRIBUTE)
+                && $this->peek(1)->type === TokenType::IDENTIFIER
+                && $this->peek(1)->lexeme === 'Attribute')) {
             $constants[] = $this->parseConstDecl();
         }
 
@@ -156,14 +159,25 @@ class Parser
         $functions = [];
 
         while (!$this->check(TokenType::EOF)) {
+            // 解析 #[...] 属性前缀（注解使用）
+            $prefixAttrs = $this->parseAttributeUses();
+            if (!empty($prefixAttrs)) {
+                // 属性后必须跟 class/function/enum 声明
+                if (!$this->check(TokenType::ABSTRACT_KW) && !$this->check(TokenType::READONLY_KW)
+                    && !$this->check(TokenType::FINAL_KW) && !$this->check(TokenType::CLASS_KW)
+                    && !$this->check(TokenType::FUNCTION) && !$this->check(TokenType::ENUM_KW)) {
+                    $this->error('Attributes must be followed by class/function/enum declaration, got ' . $this->peek()->lexeme);
+                }
+            }
+
             if ($this->match(TokenType::ABSTRACT_KW)) {
                 // abstract class（可选 readonly 前缀，PHP 中 abstract+readonly 合法）
                 $isReadOnly = $this->match(TokenType::READONLY_KW);
                 $this->consume(TokenType::CLASS_KW, 'Expected class keyword');
-                $cls = $this->parseClassDeclBody(true, $isReadOnly);
+                $cls = $this->parseClassDeclBody(true, $isReadOnly, $prefixAttrs);
                 $extraClasses[] = $cls;
             } elseif ($this->check(TokenType::READONLY_KW) || $this->check(TokenType::FINAL_KW) || $this->check(TokenType::CLASS_KW)) {
-                $cls = $this->parseClassDecl();
+                $cls = $this->parseClassDecl($prefixAttrs);
                 if ($mainClass === null) {
                     $mainClass = $cls;
                 } else {
@@ -180,7 +194,7 @@ class Parser
                 $this->advance();
                 $enums[] = $this->parseEnumDecl();
             } elseif ($this->check(TokenType::FUNCTION)) {
-                $functions[] = $this->parseFunction();
+                $functions[] = $this->parseFunction($prefixAttrs);
             } elseif ($this->check(TokenType::ECHO_KW) || $this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP)) {
                 $tok = $this->peek();
                 $this->error("Unsupported top-level code '{$tok->lexeme}' (multi-file compilation only accepts namespace/use/class/function/const/enum declarations)");
@@ -196,6 +210,8 @@ class Parser
                 $this->error('#import must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_DEBUG)) {
                 $this->error('#debug must be placed at the top of the file (before namespace/use/class/function declarations)');
+            } elseif ($this->check(TokenType::HASH_ATTRIBUTE)) {
+                $this->error('#[Attribute(...)] must be placed before const to declare annotation types');
             } else {
                 $this->error('Expected namespace/use/class/function/const/enum, got ' . $this->peek()->lexeme);
             }
@@ -210,6 +226,12 @@ class Parser
     // ============================================================
     private function parseConstDecl(): ConstNode
     {
+        // 可选 #[Attribute(...)] 注解类型声明前缀
+        $attrDecl = null;
+        if ($this->check(TokenType::HASH_ATTRIBUTE)) {
+            $attrDecl = $this->parseAttributeDecl();
+        }
+        $this->consume(TokenType::CONST_KW, 'Expected const');
         // 可选类型标记探测
         $type = null;
         $t1 = $this->peek(0);
@@ -244,7 +266,7 @@ class Parser
         $this->consume(TokenType::EQUALS, 'Expected =');
         $value = $this->parsePrimary(); // 只接受字面量
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
-        return new ConstNode($name, $value, $this->currentNamespace, $type);
+        return new ConstNode($name, $value, $this->currentNamespace, $type, null, null, $attrDecl);
     }
 
     // ============================================================
@@ -299,6 +321,88 @@ class Parser
         $this->consume(TokenType::RBRACE, 'Expected }');
 
         return new EnumNode($name, $bt, $cases, $this->currentNamespace, $methods, $classConsts, $implements);
+    }
+
+    // ============================================================
+    // 注解属性解析
+    //   #[Attribute(path: string, method: array)] — 注解类型声明（仅 const 前）
+    //   #[ROUTE("/test", ["GET"])]               — 注解使用（class/method/function 前）
+    //   不支持命名参数（使用命名参数时报语法错误）
+    // ============================================================
+
+    /** 解析 #[Attribute(name: type, ...)] 注解类型声明 */
+    private function parseAttributeDecl(): AttributeDeclNode
+    {
+        $this->consume(TokenType::HASH_ATTRIBUTE, 'Expected #[');
+        $name = $this->consume(TokenType::IDENTIFIER, 'Expected Attribute')->lexeme;
+        if ($name !== 'Attribute') {
+            $this->error("Expected 'Attribute' declaration, got '{$name}' (use #[Attribute(...)] to declare annotation types)");
+        }
+        $this->consume(TokenType::LPAREN, 'Expected (');
+        $params = [];
+        if (!$this->check(TokenType::RPAREN)) {
+            do {
+                $pname = $this->consume(TokenType::IDENTIFIER, 'Expected parameter name')->lexeme;
+                $this->consume(TokenType::COLON, 'Expected : after parameter name');
+                $ptype = $this->parseType();
+                $default = null;
+                if ($this->match(TokenType::EQUALS)) {
+                    $default = $this->parsePrimary();
+                }
+                $params[] = ['name' => $pname, 'type' => $ptype, 'default' => $default];
+            } while ($this->match(TokenType::COMMA));
+        }
+        $this->consume(TokenType::RPAREN, 'Expected )');
+        $this->consume(TokenType::RBRACKET, 'Expected ]');
+        return new AttributeDeclNode($params);
+    }
+
+    /** 解析 #[NAME(args), ...] 注解使用（可连续多个 #[...]），返回 AttributeUseNode[]
+     *  注解名按常量作用域规则解析（与普通常量一致）:
+     *    - 已限定名（含 \）→ 保持 FQ 名
+     *    - 短名 → 查 use const 导入表；命中则替换为 FQ 名；否则保持短名
+     *      （CodeGenerator 负责短名匹配：同命名空间常量 + 全局常量回退） */
+    private function parseAttributeUses(): array
+    {
+        $uses = [];
+        while ($this->check(TokenType::HASH_ATTRIBUTE)) {
+            $this->consume(TokenType::HASH_ATTRIBUTE, 'Expected #[');
+            // 注解名：IDENTIFIER (NS_SEP IDENTIFIER)* — 支持命名空间限定
+            $name = $this->consume(TokenType::IDENTIFIER, 'Expected attribute name')->lexeme;
+            $qualified = false;
+            while ($this->match(TokenType::NS_SEP)) {
+                $name .= '\\' . $this->consume(TokenType::IDENTIFIER, 'Expected attribute name')->lexeme;
+                $qualified = true;
+            }
+            // 作用域解析：短名 → 仅查 use const 导入表（全局常量回退由 CodeGenerator 处理）
+            if (!$qualified && isset($this->constImports[$name])) {
+                $name = $this->constImports[$name];
+            }
+            // 可选参数列表 (仅位置参数，命名参数报错)
+            $args = [];
+            if ($this->match(TokenType::LPAREN)) {
+                if (!$this->check(TokenType::RPAREN)) {
+                    do {
+                        // 命名参数检测：IDENTIFIER ':' → 报错
+                        if ($this->check(TokenType::IDENTIFIER) && $this->peek(1)->type === TokenType::COLON) {
+                            $namedName = $this->peek()->lexeme;
+                            $this->error("Named arguments are not supported in attributes ( '{$namedName}: ...' ), use positional arguments only");
+                        }
+                        $args[] = $this->parseExpr();
+                    } while ($this->match(TokenType::COMMA));
+                }
+                $this->consume(TokenType::RPAREN, 'Expected )');
+            }
+            $this->consume(TokenType::RBRACKET, 'Expected ]');
+            // 同名注解重复检测：同一目标上不允许多次使用同名 #[Attribute] 注解
+            foreach ($uses as $prev) {
+                if ($prev->name === $name) {
+                    $this->error("Duplicate attribute '#[{$name}]' on the same target — multiple different attributes are allowed, but the same attribute cannot be used more than once");
+                }
+            }
+            $uses[] = new AttributeUseNode($name, $args);
+        }
+        return $uses;
     }
 
     // ============================================================
@@ -498,7 +602,7 @@ class Parser
     // ============================================================
     // function_decl → FUNCTION IDENTIFIER LPAREN params? RPAREN COLON? type? LBRACE stmt* RBRACE
     // ============================================================
-    private function parseFunction(): FunctionNode
+    private function parseFunction(array $attributes = []): FunctionNode
     {
         $this->consume(TokenType::FUNCTION, 'Expected function keyword');
 
@@ -525,14 +629,14 @@ class Parser
         $isGen = array_pop($this->genStack);
         $this->consume(TokenType::RBRACE, 'Expected }');
 
-        return new FunctionNode($name, $params, $returnType, $body, $this->currentNamespace, $isGen);
+        return new FunctionNode($name, $params, $returnType, $body, $this->currentNamespace, $isGen, $attributes);
     }
 
     // ============================================================
     // class_decl → (final)? (readonly)? CLASS_KW IDENTIFIER (extends NAME)? (implements NAME,...)?
     //   readonly 与 final 可互换顺序: final readonly class / readonly final class
     // ============================================================
-    private function parseClassDecl(): ClassNode
+    private function parseClassDecl(array $attributes = []): ClassNode
     {
         $this->match(TokenType::FINAL_KW);
         $isReadOnly = $this->match(TokenType::READONLY_KW);
@@ -541,10 +645,10 @@ class Parser
             $this->match(TokenType::FINAL_KW);
         }
         $this->consume(TokenType::CLASS_KW, 'Expected class keyword');
-        return $this->parseClassDeclBody(false, $isReadOnly);
+        return $this->parseClassDeclBody(false, $isReadOnly, $attributes);
     }
 
-    private function parseClassDeclBody(bool $isAbstract, bool $isReadonly = false): ClassNode
+    private function parseClassDeclBody(bool $isAbstract, bool $isReadonly = false, array $attributes = []): ClassNode
     {
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected class name')->lexeme;
         $parentName = null;
@@ -565,6 +669,18 @@ class Parser
         $classConsts = [];
         $traits = [];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+            // 解析方法前的 #[...] 属性前缀
+            $methodAttrs = $this->parseAttributeUses();
+            if (!empty($methodAttrs)) {
+                $m = $this->parseMethod($methodAttrs);
+                if (!empty($m->promoted)) {
+                    foreach ($m->promoted as $pp) {
+                        $properties[] = $pp;
+                    }
+                }
+                $methods[] = $m;
+                continue;
+            }
             // use TraitName; → compile-time flattening
             if ($this->match(TokenType::USE)) {
                 do {
@@ -597,7 +713,7 @@ class Parser
         }
 
         $this->consume(TokenType::RBRACE, 'Expected }');
-        return new ClassNode($name, $methods, $this->currentNamespace, $properties, $classConsts, $parentName, $isAbstract, $implements, $traits, $isReadonly);
+        return new ClassNode($name, $methods, $this->currentNamespace, $properties, $classConsts, $parentName, $isAbstract, $implements, $traits, $isReadonly, $attributes);
     }
 
     // interface → INTERFACE_KW IDENTIFIER LBRACE method* RBRACE
@@ -798,7 +914,7 @@ class Parser
     // ============================================================
     // method → visibility FUNCTION name LPAREN params? RPAREN COLON type LBRACE stmt* RBRACE
     // ============================================================
-    private function parseMethod(): MethodNode
+    private function parseMethod(array $attributes = []): MethodNode
     {
         $mods = $this->parseModifiers();
         if ($mods['isReadonly']) {
@@ -857,7 +973,7 @@ class Parser
             $this->consume(TokenType::RBRACE, 'Expected }');
         }
 
-        return new MethodNode($name, $mods['vis'], $params, $returnType, $body, $promoted, $isGen, $mods['isStatic']);
+        return new MethodNode($name, $mods['vis'], $params, $returnType, $body, $promoted, $isGen, $mods['isStatic'], $attributes);
     }
 
     // ============================================================
