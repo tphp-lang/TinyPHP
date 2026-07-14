@@ -25,12 +25,14 @@
 | `ext/pcre` | `ext/pcre/` | 8 |
 | `include/filter` | `filter.h` | 3 |
 | `include/password` (bcrypt) | `os/password.h` | 2 |
-| `ext/exif` (纯 phpc) | `ext/exif/src/exif.php` | 4 |
+| `ext/exif` (纯 phpc) | `ext/exif/src/exif.php` | 8 |
+| `ext/calendar` (纯 tphp) | `ext/calendar/src/calendar.php` | 16 |
+| `include/fileinfo` (MIME 检测) | `fileinfo.h` | 6 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **281+** |
+| **合计** | | **303+** |
 
 ---
 
@@ -767,9 +769,10 @@ filter_var("0xff", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX);   // int(255)
 
 > 文件: `ext/exif/src/exif.php`，按需引入 `#import exif`
 >
-> **纯 phpc 实现**，无自定义 C 代码。仅通过 C 标准库函数 (fopen/fgetc/fseek/ftell) 实现二进制 JPEG/TIFF EXIF 格式解析。
-> 所有函数参数/返回值使用 tphp 类型 (int/string/array)，C 类型转换封装在函数内部:
+> **纯 phpc 实现**，无自定义 C 代码。仅通过 C 标准库函数 (fopen/fgetc/fseek/ftell/fwrite/fclose) 实现二进制 JPEG/TIFF EXIF 格式解析。
+> **所有函数参数/返回值使用 tphp 类型 (int/string/array)**，C 类型转换封装在函数内部:
 > FILE* 指针通过 `phpc_ptr_to_int()` 转为 `t_int` 在 PHP 层流转，函数内部用 `phpc_int_to_ptr()` 转回 void* 调用 C 库。
+> `defer C->fclose($f)` 确保文件句柄在所有退出路径（含异常）都正确关闭。
 
 ### 常量
 
@@ -782,6 +785,17 @@ filter_var("0xff", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX);   // int(255)
 | `IMAGETYPE_TIFF_II` | 7 | TIFF (Intel 字节序, LE) |
 | `IMAGETYPE_TIFF_MM` | 8 | TIFF (Motorola 字节序, BE) |
 | `IMAGETYPE_WEBP` | 18 | WebP 图像 |
+
+| TIFF 数据类型常量 | 值 | 说明 |
+|------|-----|------|
+| `EXIF_TYPE_BYTE` | 1 | uint8 |
+| `EXIF_TYPE_ASCII` | 2 | null-terminated string |
+| `EXIF_TYPE_SHORT` | 3 | uint16 |
+| `EXIF_TYPE_LONG` | 4 | uint32 |
+| `EXIF_TYPE_RATIONAL` | 5 | uint32 / uint32 |
+| `EXIF_TYPE_UNDEFINED` | 7 | raw bytes |
+| `EXIF_TYPE_SLONG` | 9 | int32 |
+| `EXIF_TYPE_SRATIONAL` | 10 | int32 / int32 |
 
 ### 函数
 
@@ -803,19 +817,160 @@ filter_var("0xff", FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX);   // int(255)
 ### 设计模式
 
 ```php
-// 公开 API 纯 PHP 签名
-function exif_read_data(string $filename): array {
-    // 内部用 phpc 桥接 C 标准库
-    C.void* $fp = C->fopen(php_str_ptr($filename), "rb");  // FILE* → void* → t_int
-    // ... 逐字节解析 EXIF 二进制格式 ...
-}
+// 公开 API 纯 PHP 签名，参数/返回均为 tphp 类型
+function exif_read_data(string $filename): array|Exception {
+    // 内部用 phpc 桥接 C 标准库：FILE* → t_int 在 PHP 层流转
+    $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("rb")));
+    if ($fp == 0) { throw new Exception("unable to open file"); }
+    C.void* $f = phpc_int_to_ptr($fp);
+    defer C->fclose($f);  // 所有退出路径自动关闭（含 return + fall-through）
 
-// FILE* 以 t_int 在 PHP 层流转
-$fp_int = phpc_ptr_to_int($fp);  // void* → t_int
-$byte = exif_rd_byte($fp_int, $offset);  // 内部 phpc_int_to_ptr 转回 void*
+    // 辅助函数接收 int $fp，内部用 phpc_int_to_ptr 转回 void* 调用 C 库
+    $byte = exif_rd_byte($fp, $offset);   // function exif_rd_byte(int $fp, int $offset): int
+    return $result;
+}
 ```
 
 > 测试: `test/exif/test_exif.php` (34 项检查，覆盖 JPEG LE/BE、TIFF II/MM、边界情况、thumbnail) 全部通过。
+
+### 测试辅助函数
+
+> 用于生成合成 JPEG/TIFF 文件供 `exif_read_data`/`exif_imagetype` 测试，非 PHP 原生 API。
+
+| 函数 | 说明 |
+|------|------|
+| `exif_make_test_jpeg(string $filename): int` | 生成 JPEG+EXIF 文件（LE 字节序），返回 0=成功, -1=失败 |
+| `exif_make_test_jpeg_ex(string $filename, int $le): int` | 生成 JPEG+EXIF 文件，`$le` 控制字节序 (1=LE/II, 0=BE/MM) |
+| `exif_make_test_tiff(string $filename, int $le): int` | 生成 TIFF 文件，`$le` 控制字节序 |
+| `exif_make_test_header(string $filename, int $b0, int $b1): int` | 生成指定 2 字节文件头的文件（测试 `exif_imagetype`） |
+
+---
+
+## calendar — 日历转换
+
+> 文件: `ext/calendar/src/calendar.php`，按需引入 `#import calendar`
+>
+> **纯 tphp 实现**，无 C 代码、无外部依赖。基于 PHP ext/calendar 的 C 算法翻译为 tphp，所有日历转换基于儒略日 (Julian Day Number)。
+> **AOT 错误处理**: 无效日期/超出范围 → `throw Exception`（不静默返回 0 或 "0/0/0"）。
+> JD→日历转换返回 `array ["month","day","year"]`（全 int），不返回 PHP 的 "m/d/y" 字符串。
+> 内部 helper 返回哨兵值 (0/`["year"=>0,...]`)，公共 API 检查后 throw — 异常不吞没。
+> 犹太历 64 位直接算术（无需 C 源码的 32 位拆分溢出保护）。
+
+### 常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `CAL_GREGORIAN` | 0 | 公历 (Gregorian) |
+| `CAL_JULIAN` | 1 | 儒略历 (Julian) |
+| `CAL_JEWISH` | 2 | 犹太历 (Jewish / Hebrew) |
+| `CAL_FRENCH` | 3 | 法国共和历 (French Republican) |
+| `CAL_JEWISH_ADD_ALAFIM_GERESH` | 4 | 犹太历格式化标志（保留） |
+| `CAL_NUM_CALS` | 4 | 日历类型总数 |
+| `CAL_EASTER_DEFAULT` | 0 | 复活节算法：默认 |
+| `CAL_EASTER_ROMAN` | 1 | 复活节算法：罗马 |
+| `CAL_EASTER_ALWAYS_GREGORIAN` | 2 | 复活节算法：始终公历 |
+| `CAL_EASTER_ALWAYS_JULIAN` | 3 | 复活节算法：始终儒略历 |
+
+### 函数
+
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `gregoriantojd(int $month, int $day, int $year): int` | `gregoriantojd(int $month, int $day, int $year): int\|Exception` | 纯整数算术，O(1) | 无效日期 `throw`（PHP 返回 0） |
+| `jdtogregorian(int $jd): string` | `jdtogregorian(int $jd): array\|Exception` | 纯整数算术，O(1) | 返回 `["month","day","year"]` 数组（PHP 返回 "m/d/y" 字符串）；JD 超范围 `throw` |
+| `juliantojd(int $month, int $day, int $year): int` | `juliantojd(int $month, int $day, int $year): int\|Exception` | 纯整数算术，O(1) | 无效日期 `throw` |
+| `jdtojulian(int $jd): string` | `jdtojulian(int $jd): array\|Exception` | 纯整数算术，O(1) | 返回数组（非字符串）；JD 超范围 `throw` |
+| `jewishtojd(int $month, int $day, int $year): int` | `jewishtojd(int $month, int $day, int $year): int\|Exception` | 纯整数算术，O(1) | 无效日期 `throw` |
+| `jdtojewish(int $jd): string` | `jdtojewish(int $jd): array\|Exception` | 纯整数算术，O(1) | 返回数组（非字符串）；JD 超范围 `throw` |
+| — | `jdtojewish_str(int $jd): string\|Exception` | 纯整数算术 + 月份名查找 | tphp 新增：返回 "day month_name year" 英文字符串 |
+| — | `jewish_month_name(int $month): string` | O(1) 查表 | tphp 新增：返回犹太历月份英文名（闰年版本） |
+| `frenchtojd(int $month, int $day, int $year): int` | `frenchtojd(int $month, int $day, int $year): int\|Exception` | 纯整数算术，O(1) | 无效日期 `throw`（PHP 返回 0）；仅支持年份 1-14 |
+| `jdtofrench(int $jd): string` | `jdtofrench(int $jd): array\|Exception` | 纯整数算术，O(1) | 返回数组（非字符串）；JD 超范围 `throw` |
+| `cal_days_in_month(int $calendar, int $month, int $year): int` | `cal_days_in_month(int $calendar, int $month, int $year): int\|Exception` | 两次 JD 计算，O(1) | 无效日历/日期 `throw`（PHP 返回 false） |
+| `cal_from_jd(int $jd, int $calendar): array` | `cal_from_jd(int $jd, int $calendar): array\|Exception` | 一次 JD→日历转换，O(1) | 无效日历/JD `throw`；`date` 字段为 "m/d/y"；含 `dow`/`dayname`/`abbrevdayname`/`monthname`/`abbrevmonth` |
+| `cal_to_jd(int $calendar, int $month, int $day, int $year): int` | `cal_to_jd(int $calendar, int $month, int $day, int $year): int\|Exception` | 分发到对应 xxxtojd，O(1) | 无效日历/日期 `throw` |
+| `cal_info(int $calendar = -1): array` | `cal_info(int $calendar = -1): array\|Exception` | O(1) 查表 | 无效日历 `throw`；-1 返回所有日历信息（嵌套数组） |
+| `easter_date(int $year, int $mode = 0): int` | `easter_date(int $year, int $mode = 0): int\|Exception` | Meeus/Jones/Butcher 算法，O(1) | year < 1970 `throw`（PHP 返回 false）；返回 Unix 时间戳 |
+| `easter_days(int $year, int $mode = 0): int` | `easter_days(int $year, int $mode = 0): int\|Exception` | Meeus/Jones/Butcher 算法，O(1) | year <= 0 `throw`（PHP 返回 0）；返回距 3月21日的天数 |
+
+### 设计模式
+
+```php
+// 内部 helper 返回哨兵值（不 throw），公共 API 检查后 throw
+function _cal_gregorian_to_sdn(int $year, int $month, int $day): int {
+    if ($year == 0 || $year < -4714 || $month <= 0 || $month > 12 || ...) {
+        return 0;  // 哨兵值
+    }
+    // ... 纯整数算术
+}
+
+function gregoriantojd(int $month, int $day, int $year): int|Exception {
+    $sdn = _cal_gregorian_to_sdn($year, $month, $day);
+    if ($sdn == 0) {
+        throw new Exception("gregoriantojd: invalid date");  // 有异常就报出
+    }
+    return $sdn;
+}
+```
+
+> 测试: `test/calendar/test_calendar.php` (162 项检查，覆盖 4 种日历往返转换、复活节算法、异常处理) 全部通过。
+
+---
+
+## fileinfo — MIME 类型检测
+
+> 文件: `include/fileinfo.h`（内置库，非 ext 按需引入）
+>
+> **不依赖 libmagic**，无需 magic.mgc 数据库文件分发。内置静态魔数表覆盖 60+ 常见文件类型（图片/音频/视频/文档/压缩包/字体/可执行文件/数据库/脚本/文本 BOM）。
+> 使用 `Resource` 对象包装 finfo 状态（flags），字符串输出走 `str_pool_alloc` 自动释放。
+> **AOT 单返回类型契约**: 失败统一 `tp_throw_ex(new_tphp_class_Exception(...))`，不返回 `false`。
+> 文件检测只读前 512 字节（足够覆盖所有魔数偏移，含 TAR 偏移 257）。
+> RIFF 格式二次检查（WAV/AVI/WebP 共享 RIFF 头，通过 sub-type 区分）。
+
+### 常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `FILEINFO_NONE` | 0 | 无特殊行为（返回文字描述） |
+| `FILEINFO_SYMLINK` | 2 | 跟随符号链接 |
+| `FILEINFO_DEVICES` | 8 | 查看设备内容 |
+| `FILEINFO_MIME_TYPE` | 16 | 返回 MIME 类型 (如 "image/png") |
+| `FILEINFO_CONTINUE` | 32 | 返回第一个匹配后继续查找 |
+| `FILEINFO_PRESERVE_ATIME` | 128 | 不修改文件的访问时间 |
+| `FILEINFO_RAW` | 256 | 不转换不可打印字符 |
+| `FILEINFO_MIME_ENCODING` | 1024 | 返回 MIME 编码 (如 "binary"/"utf-8") |
+| `FILEINFO_MIME` | 1040 | MIME_TYPE \| MIME_ENCODING (如 "image/jpeg; charset=binary") |
+| `FILEINFO_EXTENSION` | 16777216 | 返回文件扩展名 (如 "jpeg"/"pdf") |
+
+### 函数
+
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `finfo_open(int $flags = FILEINFO_NONE, string $magic_file = ""): resource\|false` | `finfo_open(int $flags = FILEINFO_NONE, string $magic_file = ""): Resource\|Exception` | O(1) 分配 | 返回 `Resource`（非 `resource|false`）；`$magic_file` 保留兼容但忽略（内置魔数表）；失败 `throw` |
+| `finfo_file(resource $finfo, string $filename, int $flags = FILEINFO_NONE): string\|false` | `finfo_file(Resource $finfo, string $filename, int $flags = FILEINFO_NONE): string\|Exception` | 读前 512B + O(n) 魔数匹配 | 失败 `throw`（空文件名/文件不存在/无效资源） |
+| `finfo_buffer(resource $finfo, string $data, int $flags = FILEINFO_NONE): string\|false` | `finfo_buffer(Resource $finfo, string $data, int $flags = FILEINFO_NONE): string\|Exception` | O(n) 魔数匹配，零磁盘 I/O | 失败 `throw`（无效资源） |
+| `finfo_close(resource $finfo): bool` | `finfo_close(Resource $finfo): void` | O(1) | 返回 `void`（非 `bool`） |
+| `finfo_set_flags(resource $finfo, int $flags): bool` | `finfo_set_flags(Resource $finfo, int $flags): bool\|Exception` | O(1) | 始终返回 `true`；无效资源 `throw` |
+| `mime_content_type(string $filename): string\|false` | `mime_content_type(string $filename): string\|Exception` | 读前 512B + O(n) 魔数匹配 | 等价 `finfo_open(MIME_TYPE)` + `finfo_file` + `finfo_close`；失败 `throw` |
+
+### 设计模式
+
+```c
+// include/ 头文件风格：static inline + tphp_fn_ 前缀
+// 错误用 tp_throw_ex（创建 Exception 对象，可被 catch(Exception) 捕获）
+static inline t_string tphp_fn_finfo_file(tphp_class_Resource* finfo, t_string filename, t_int flags) {
+    if (finfo == NULL || finfo->ptr == NULL) {
+        tp_throw_ex(new_tphp_class_Exception(STR_LIT("finfo_file(): invalid fileinfo resource")));
+        return (t_string){0};
+    }
+    if (STR_PTR(filename) == NULL || filename.length <= 0) {
+        tp_throw_ex(new_tphp_class_Exception(STR_LIT("finfo_file(): empty filename")));
+        return (t_string){0};
+    }
+    // ... 读取文件前 512 字节，魔数匹配
+}
+```
+
+> 测试: `test/fileinfo/test_fileinfo.php` (104 项检查，覆盖 10 常量、40+ 文件类型 MIME 检测、5 种 flag 模式、finfo_file/mime_content_type、finfo_set_flags、5 个异常边界) 全部通过。
 
 ---
 
@@ -1091,8 +1246,8 @@ $tid = Thread::id();
 
 | 函数 | 方向 | 说明 |
 |------|------|------|
-| `phpc_arr_int/dbl` | PHP→C | 严格类型检查,**类型不匹配抛 tp_throw 异常**,malloc,**自动注册到运行时**(程序结束/异常自动释放) |
-| `phpc_arr_str` | PHP→C | 严格类型检查,malloc,**不自动注册**(需用 phpc_free_str_arr 释放) |
+| `phpc_arr_int/dbl` | PHP→C | 严格类型检查,**类型不匹配抛 tp_throw 异常**,malloc,**自动注册到运行时**(程序结束/异常自动释放，**无需手动 `phpc_free`**) |
+| `phpc_arr_str` | PHP→C | 严格类型检查,malloc,**不自动注册**(需用 `defer phpc_free_str_arr($arr, $len)` 或手动释放) |
 | `phpc_new_arr_int/dbl/str` | C→PHP | 深拷贝 |
 | `phpc_new_arr()` | C→PHP | 深拷贝 |
 
@@ -1127,6 +1282,7 @@ $tid = Thread::id();
 | `phpc_int_to_ptr($v)` | t_int → void* | 函数内部转回 void* 调用 C 库 |
 
 > **设计模式**: 函数参数/返回值用 tphp 类型(int/string/array),内部用 phpc_int_to_ptr 转回 void*。
+> `defer C->fclose($f)` / `defer C->free($p)` 确保所有退出路径正确清理（exif 扩展采用此模式）。
 > 参见 `ext/exif/src/exif.php` — 所有函数签名纯 PHP 风格,C 类型转换封装在函数内部。
 
 ---

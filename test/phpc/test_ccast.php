@@ -28,17 +28,18 @@ class Main {
         echo "=== C Cast Full Test ===\n\n";
 
         // 1. (C.void*) cast: 将 malloc 返回的 void* 显式标记
+        //    用 defer 注册清理，避免手动 free + 指针别名导致的追踪困难
         C.void* $buf = C->malloc(16);
+        defer C->free($buf);
         C.void* $ptr = (C.void*)$buf;
         echo "1. void* cast: " . ($ptr == null ? 0 : 1) . "\n";
-        C->free($ptr);
 
         // 2. (C.char*) cast: void* → char*，可用 php_str 读取
         C.void* $raw = C->malloc(8);
+        defer C->free($raw);
         C->strcpy($raw, c_str("hello"));
         C.char* $cp = (C.char*)$raw;
         echo "2. char* cast: " . php_str($cp) . "\n";
-        C->free($raw);
 
         // 3. (C.int) cast: 明确 int 类型
         $c = (C.int)65;
@@ -79,11 +80,11 @@ class Main {
 
         // 12. cast 链:void* → char* → php_str
         C.void* $mem = C->malloc(4);
+        defer C->free($mem);
         C->strcpy($mem, c_str("hi"));
         C.void* $vp = (C.void*)$mem;
         C.char* $cp2 = (C.char*)$vp;
         echo "12. cast chain: " . (php_str($cp2) == "hi" ? 1 : 0) . "\n";
-        C->free($mem);
 
         echo "\n=== All passed ===\n";
     }

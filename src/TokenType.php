@@ -87,6 +87,7 @@ enum TokenType: string
     case CONTINUE_KW= 'continue';
     case GOTO       = 'goto';
     case MATCH      = 'match';
+    case DEFER_KW   = 'defer';
 
     // 关键字 (继续)
     case VAR_DUMP   = 'var_dump';

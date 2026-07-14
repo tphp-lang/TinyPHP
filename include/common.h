@@ -45,3 +45,4 @@ static inline void tphp_rt_free_all(void);
 #include "phpc.h"
 #include "filter.h"
 #include "iconv.h"
+#include "fileinfo.h"

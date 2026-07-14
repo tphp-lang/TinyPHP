@@ -1,0 +1,32 @@
+# 统一行尾为 CRLF（Windows 开发环境）
+* text=auto eol=crlf
+
+# 二进制文件不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.7z binary
+*.rar binary
+*.bz2 binary
+*.xz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.mp3 binary
+*.mp4 binary
+*.wav binary
+*.avi binary
+*.webm binary
+*.webp binary

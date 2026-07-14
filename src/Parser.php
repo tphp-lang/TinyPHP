@@ -1076,6 +1076,7 @@ class Parser
         if ($this->match(TokenType::GOTO))          return $this->parseGotoStmt();
         if ($this->match(TokenType::TRY_KW))        return $this->parseTryStmt();
         if ($this->match(TokenType::THROW_KW))      return $this->parseThrowStmt();
+        if ($this->match(TokenType::DEFER_KW))      return $this->parseDeferStmt();
         if ($this->match(TokenType::BREAK_KW))      { $lvl = $this->parseBreakLevel(); $this->consume(TokenType::SEMICOLON, 'Expected ;'); return new BreakStmtNode($lvl); }
         if ($this->match(TokenType::CONTINUE_KW))   { $lvl = $this->parseBreakLevel(); $this->consume(TokenType::SEMICOLON, 'Expected ;'); return new ContinueStmtNode($lvl); }
         // 标签: IDENTIFIER COLON
@@ -1222,6 +1223,27 @@ class Parser
         $expr = $this->parseExpr();
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
         return new ThrowStmtNode($expr);
+    }
+
+    // defer EXPR;  或  defer { block }  或  defer echo ...;
+    //   defer 注册清理代码，在作用域正常退出时 LIFO 执行
+    private function parseDeferStmt(): DeferStmtNode
+    {
+        if ($this->check(TokenType::LBRACE)) {
+            $this->advance();
+            $body = $this->parseBlock();
+            $this->consume(TokenType::RBRACE, 'Expected }');
+            return new DeferStmtNode($body);
+        }
+        // defer echo expr; → echo 语句
+        if ($this->match(TokenType::ECHO_KW)) {
+            $stmt = $this->parseEchoStmt();
+            return new DeferStmtNode([$stmt]);
+        }
+        // defer EXPR; → 包装为表达式语句
+        $expr = $this->parseExpr();
+        $this->consume(TokenType::SEMICOLON, 'Expected ;');
+        return new DeferStmtNode([new ExprStmtNode($expr)]);
     }
 
     // do { body } while (cond);

@@ -27,10 +27,20 @@ class CodeGenerator implements ASTVisitor
     private array $arrValueTypes = [];
     /** 嵌套数组元素类型追踪：arrVarName → CType（当数组元素是数组时，记录子数组的元素类型） */
     private array $arrNestedTypes = [];
+    /** 函数返回数组的 per-key 类型追踪：fnCName → [strKey → CType]
+     *  当函数 return ["key" => $val, ...] 时记录，供调用者 $var = func() 后 $var["key"] 类型推断 */
+    private array $fnReturnArrKeyTypes = [];
+    /** 当前函数/方法的 C 名（用于 fnReturnArrKeyTypes 注册） */
+    private string $currentFuncCName = '';
     /** 已声明变量集合 */
     private array $declaredVars = [];
     /** for 循环提升到函数作用域的变量声明：varName => cType */
     private array $funcScopeDecls = [];
+    /** defer 栈：当前函数内已注册的 defer 清理代码（LIFO 执行） */
+    private array $deferStack = [];
+    /** C 指针所有权追踪：varName => ['type' => cType, 'cleaned' => bool, 'line' => int]
+     *  用于编译期泄漏提醒：函数末尾扫描未清理的 transfer 指针 */
+    private array $cPtrOwnership = [];
     /** 函数内 const 常量名集合：name => true（用于 visitVariable 区分局部 const 与全局 const） */
     private array $localConsts = [];
     /** 当前 __construct 内已赋值的 readonly 属性集合: "className::propName" => true */
@@ -117,12 +127,16 @@ class CodeGenerator implements ASTVisitor
         // ── iconv (内置) ──
         'iconv' => 't_string', 'iconv_substr' => 't_string',
         'iconv_mime_encode' => 't_string', 'iconv_mime_decode' => 't_string',
+        // ── fileinfo (内置) ──
+        'finfo_file' => 't_string', 'finfo_buffer' => 't_string',
+        'mime_content_type' => 't_string',
         // ── t_bool ──
         'shuffle' => 't_bool', 'json_validate' => 't_bool', 'password_verify' => 't_bool',
         'in_array' => 't_bool', 'array_key_exists' => 't_bool', 'str_contains' => 't_bool',
         'boolval' => 't_bool', 'str_starts_with' => 't_bool', 'str_ends_with' => 't_bool',
         'array_is_list' => 't_bool', 'file_put_contents' => 't_bool', 'unlink' => 't_bool',
         'iconv_set_encoding' => 't_bool',
+        'finfo_set_flags' => 't_bool',
         // ── t_float ──
         'sin' => 't_float', 'cos' => 't_float', 'tan' => 't_float', 'asin' => 't_float', 'acos' => 't_float',
         'atan' => 't_float', 'exp' => 't_float', 'log' => 't_float', 'log10' => 't_float', 'fmod' => 't_float',
@@ -151,8 +165,10 @@ class CodeGenerator implements ASTVisitor
         'asort' => 'void', 'arsort' => 'void', 'ksort' => 'void', 'krsort' => 'void',
         'putenv' => 'void', 'phpc_unregister_obj' => 'void', 'phpc_free' => 'void', 'phpc_free_str_arr' => 'void',
         'phpc_obj_steal' => 'void', 'phpc_env_unpin' => 'void',
+        'finfo_close' => 'void',
         // ── t_object / t_callback / null (指针/无返回) ──
         'phpc_new_obj' => 't_object',
+        'finfo_open' => 'tphp_class_Resource*',
         'phpc_new_fn' => 't_callback', 'phpc_new_fn_env' => 't_callback',
         'phpc_arr_int' => 'null', 'phpc_arr_dbl' => 'null', 'phpc_arr_str' => 'null', 'phpc_obj' => 'null',
         'phpc_fn' => 'null', 'phpc_env' => 'null', 'phpc_fn_i32' => 'null', 'phpc_fn_i64' => 'null', 'phpc_fn_f64' => 'null',
@@ -194,6 +210,13 @@ class CodeGenerator implements ASTVisitor
         'filter_id'          => ['cName' => 'tphp_fn_filter_id'],
         'iconv'              => ['cName' => 'tphp_fn_iconv'],
         'iconv_set_encoding' => ['cName' => 'tphp_fn_iconv_set_encoding'],
+        // ── fileinfo (内置) ──
+        'mime_content_type'  => ['cName' => 'tphp_fn_mime_content_type', 'modes' => ['direct']],
+        'finfo_close'        => ['cName' => 'tphp_fn_finfo_close', 'modes' => ['direct']],
+        'finfo_set_flags'    => ['cName' => 'tphp_fn_finfo_set_flags', 'modes' => ['direct', 'direct']],
+        'finfo_open'         => ['cName' => 'tphp_fn_finfo_open', 'modes' => ['direct', 'direct'], 'defaults' => [0 => 'TPHP_CONST_FILEINFO_NONE', 1 => '(t_string){0}']],
+        'finfo_file'         => ['cName' => 'tphp_fn_finfo_file', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => 'TPHP_CONST_FILEINFO_NONE']],
+        'finfo_buffer'       => ['cName' => 'tphp_fn_finfo_buffer', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => 'TPHP_CONST_FILEINFO_NONE']],
         // ── 0 参 ──
         'time'               => ['cName' => 'tphp_fn_time'],
         'hrtime'             => ['cName' => 'tphp_fn_hrtime'],
@@ -490,6 +513,11 @@ class CodeGenerator implements ASTVisitor
             }
         }
 
+        // ── SEC_FUNCIMPL: 独立函数实现（先于类实现处理，使 fnReturnArrKeyTypes 可用）──
+        foreach ($node->functions as $fn) {
+            $this->sectionBlock(self::SEC_FUNCIMPL, $fn->accept($this));
+        }
+
         // ── SEC_CLSIMPL: Phase 2 — 所有类的方法实现 + allocator ──
         // 前向声明所有类描述符（catch 子句引用 _class_tphp_class_* 时需要）
         $clsFwdDecls = [];
@@ -508,11 +536,6 @@ class CodeGenerator implements ASTVisitor
             $this->phpClassName = $class->namespace !== '' ? $class->namespace . '\\' . $class->name : $class->name;
             $isMain = (self::classCName($class) === $mainClassName);
             $this->sectionBlock(self::SEC_CLSIMPL, $this->emitClassImpl($class, $isMain));
-        }
-
-        // ── SEC_FUNCIMPL: 独立函数实现 ──
-        foreach ($node->functions as $fn) {
-            $this->sectionBlock(self::SEC_FUNCIMPL, $fn->accept($this));
         }
 
         // ── SEC_EXPORTS: 导出函数 trampoline + 库初始化（-shared 模式） ──
@@ -558,6 +581,8 @@ class CodeGenerator implements ASTVisitor
         $this->thunkCounter = 0;
         $this->methodClassCache = [];
         $this->currentFuncName = '';
+        $this->currentFuncCName = '';
+        $this->fnReturnArrKeyTypes = [];
         $this->inMethod = false;
         $this->currentNamespace = '';
         $this->sections = [];
@@ -1197,6 +1222,7 @@ class CodeGenerator implements ASTVisitor
             return $this->emitGeneratorFunction($node);
         }
         $this->currentFuncName = $node->name; // P2-6: __FUNCTION__ 全局函数名
+        $this->currentFuncCName = self::funcCName($node);
         $this->inMethod = false;
         $this->currentNamespace = $node->namespace; // P2-6: __NAMESPACE__
         $this->declaredVars = [];
@@ -1205,6 +1231,8 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
+        $this->deferStack = [];
+        $this->cPtrOwnership = [];
         $this->currentPhpRetType = $node->returnType;
         $ret = self::mapType($node->returnType);
         $this->currentRetType = $ret;
@@ -1245,6 +1273,8 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
+        $this->deferStack = [];
+        $this->cPtrOwnership = [];
 
         $params = array_map(fn($p) => self::paramDecl($p), $node->params);
         $paramVars = [];
@@ -1266,14 +1296,18 @@ class CodeGenerator implements ASTVisitor
             $declLines[] = $this->ind("{$ct} {$vn};");
         }
 
-        // 自动生成作用域结束时的释放代码
+        // 自动生成作用域结束时的释放代码（defer LIFO → scope cleanup → 对象释放）
         $tail = [];
+        $tail = array_merge($tail, $this->generateDeferCleanup());
         $tail = array_merge($tail, $this->generateScopeCleanup($paramVars));
         foreach ($this->symbols->scopeObjects() as $ov) {
             $tail[] = $this->ind("tp_obj_release({$ov});");
         }
         $tail[] = '}';
         $parts[] = implode("\n", array_merge($header, $declLines, $bodyLines, $tail));
+
+        // 编译期泄漏提醒：扫描未清理的 C 指针变量
+        $this->warnLeakedCPtrs(self::funcCName($node));
 
         return implode("\n\n", $parts);
     }
@@ -1626,6 +1660,7 @@ class CodeGenerator implements ASTVisitor
         $isStatic = $node->isStatic;
         $this->currentMethodName = $node->name;
         $this->currentFuncName = $node->name; // P2-6: __FUNCTION__ 在方法内返回方法名
+        $this->currentFuncCName = $this->className . '_' . $node->name;
         $this->inMethod = true;
         // 静态方法无 self 变量
         $this->declaredVars = $isStatic ? [] : ['self' => true];
@@ -1634,6 +1669,8 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
+        $this->deferStack = [];
+        $this->cPtrOwnership = [];
         $this->currentPhpRetType = $node->returnType;
         $this->currentRetType = $this->mapType($node->returnType);
 
@@ -1656,12 +1693,15 @@ class CodeGenerator implements ASTVisitor
         // 生成主方法（完整参数版本）
         $this->currentMethodName = $node->name;
         $this->currentFuncName = $node->name; // P2-6
+        $this->currentFuncCName = $this->className . '_' . $node->name;
         $this->inMethod = true;
         $this->declaredVars = $isStatic ? [] : ['self' => true];
         $this->varTypes = [];
         $this->symbols->clearScopeObjects();
         $this->symbols->clearScopeVars();
         $this->funcScopeDecls = [];
+        $this->deferStack = [];
+        $this->cPtrOwnership = [];
         $this->currentPhpRetType = $node->returnType;
         $this->currentRetType = $this->mapType($node->returnType);
 
@@ -1698,8 +1738,9 @@ class CodeGenerator implements ASTVisitor
             $declLines[] = $this->ind("{$ct} {$vn};");
         }
 
-        // 自动生成作用域结束时的释放代码
+        // 自动生成作用域结束时的释放代码（defer LIFO → scope cleanup → 对象释放）
         $tail = [];
+        $tail = array_merge($tail, $this->generateDeferCleanup());
         $tail = array_merge($tail, $this->generateScopeCleanup($paramVars));
         foreach ($this->symbols->scopeObjects() as $ov) {
             $tail[] = $this->ind("tp_obj_release({$ov});");
@@ -1707,6 +1748,9 @@ class CodeGenerator implements ASTVisitor
         $tail[] = '}';
 
         $parts[] = implode("\n", array_merge($header, $declLines, $bodyLines, $tail));
+
+        // 编译期泄漏提醒：扫描未清理的 C 指针变量
+        $this->warnLeakedCPtrs($this->className . '::' . $node->name);
 
         return implode("\n\n", $parts);
     }
@@ -1875,6 +1919,9 @@ class CodeGenerator implements ASTVisitor
         if ($node->expr !== null && $node->expr instanceof ThrowExprNode) {
             return $this->genThrowCode($node->expr->expr) . ';';
         }
+        // defer 清理代码（LIFO）— 在 return 前执行
+        $deferLines = $this->generateDeferCleanup();
+        $deferCode = empty($deferLines) ? '' : implode("\n", $deferLines) . "\n";
         if ($this->inGenerator) {
             // 生成器内：push 返回值（t_var），然后裸 return
             if ($node->expr !== null) {
@@ -1884,21 +1931,64 @@ class CodeGenerator implements ASTVisitor
                 }
                 $code = $node->expr->accept($this);
                 $valVar = $this->wrapTvarAssign($node->expr, $code);
-                return "{ t_var _gen_ret = {$valVar}; mco_push(mco_running(), &_gen_ret, sizeof(t_var)); return; }";
+                return "{ t_var _gen_ret = {$valVar}; mco_push(mco_running(), &_gen_ret, sizeof(t_var));\n{$deferCode}    return; }";
             }
-            return "{ t_var _gen_ret = VAR_NULL(); mco_push(mco_running(), &_gen_ret, sizeof(t_var)); return; }";
+            return "{ t_var _gen_ret = VAR_NULL(); mco_push(mco_running(), &_gen_ret, sizeof(t_var));\n{$deferCode}    return; }";
         }
         if ($node->expr) {
             // 追踪返回的变量名（用于排除自动释放）
             if ($node->expr instanceof VariableExpr) {
                 $vn = self::varName($node->expr->name);
                 $this->symbols->addReturnedVar($vn);
+                // 返回 C 指针变量 = 所有权转移给调用者，不算泄漏
+                $this->markCPtrCleaned($vn);
+            }
+            // 追踪函数返回数组的 per-key 类型（供调用者 $var = func() 后 $var["key"] 类型推断）
+            if ($this->currentFuncCName !== '') {
+                if ($node->expr instanceof ArrayLiteralExpr) {
+                    // case 1: return ["key" => $val, ...]
+                    $this->fnReturnArrKeyTypes[$this->currentFuncCName] ??= [];
+                    foreach ($node->expr->entries as $entry) {
+                        if ($entry->key instanceof StringLiteralExpr) {
+                            $valType = $this->inferType($entry->value);
+                            if ($valType !== 'null') {
+                                $this->fnReturnArrKeyTypes[$this->currentFuncCName][$entry->key->value] = $valType;
+                            }
+                        }
+                    }
+                } elseif ($node->expr instanceof VariableExpr) {
+                    // case 2: return $var — 传播 $var 的 arrValueTypes
+                    $rvn = self::varName($node->expr->name);
+                    if (isset($this->arrValueTypes[$rvn])) {
+                        $this->fnReturnArrKeyTypes[$this->currentFuncCName] ??= [];
+                        foreach ($this->arrValueTypes[$rvn] as $k => $t) {
+                            $this->fnReturnArrKeyTypes[$this->currentFuncCName][$k] = $t;
+                        }
+                    }
+                } elseif ($node->expr instanceof CallExpr && $node->expr->callee === null) {
+                    // case 3: return func() — 传播被调用函数的 fnReturnArrKeyTypes
+                    $calledFnCName = self::funcCNameFromCall($node->expr);
+                    if ($calledFnCName !== '' && isset($this->fnReturnArrKeyTypes[$calledFnCName])) {
+                        $this->fnReturnArrKeyTypes[$this->currentFuncCName] ??= [];
+                        foreach ($this->fnReturnArrKeyTypes[$calledFnCName] as $k => $t) {
+                            $this->fnReturnArrKeyTypes[$this->currentFuncCName][$k] = $t;
+                        }
+                    }
+                }
             }
             $code = $node->expr->accept($this);
             if ($this->currentRetType === 't_var') {
                 $code = $this->wrapTvarAssign($node->expr, $code);
             }
+            if ($deferCode !== '') {
+                // 先求值返回表达式到临时变量，执行 defer 清理，再 return 临时变量
+                // 避免返回表达式中引用的变量被 defer 释放后变成野指针
+                return "{ {$this->currentRetType} __defer_ret = {$code};\n{$deferCode}    return __defer_ret; }";
+            }
             return 'return ' . $code . ';';
+        }
+        if ($deferCode !== '') {
+            return "{\n{$deferCode}    return; }";
         }
         return 'return;';
     }
@@ -2113,6 +2203,15 @@ class CodeGenerator implements ASTVisitor
             } elseif ($this->indent >= 1 && $cType === 't_array*') {
                 $this->symbols->addScopeArray($var);
             }
+            // C 指针所有权追踪：记录 transfer 指针（需用户手动 defer/free）
+            //   排除 borrow（c_str/c_int 等透传）和已托管（phpc_new_obj/phpc_auto）
+            if ($this->isCTransferPtr($node->expr, $cType)) {
+                $this->cPtrOwnership[$var] = [
+                    'type' => $cType,
+                    'cleaned' => false,
+                    'line' => $node->line ?? 0,
+                ];
+            }
             if ($this->scopeDepth > 0) {
                 $this->funcScopeDecls[$var] = $declType;
                 $code = "{$w} = {$expr};";
@@ -2204,6 +2303,14 @@ class CodeGenerator implements ASTVisitor
                     $this->arrElementTypes[$var] = 't_array*';
                     $this->arrNestedTypes[$var] = 't_string';
                     break;
+            }
+            // 传播用户函数返回数组的 per-key 类型（$var = func() 后 $var["key"] 类型推断）
+            $fnCName = self::funcCNameFromCall($node->expr);
+            if ($fnCName !== '' && isset($this->fnReturnArrKeyTypes[$fnCName])) {
+                $this->arrValueTypes[$var] ??= [];
+                foreach ($this->fnReturnArrKeyTypes[$fnCName] as $k => $t) {
+                    $this->arrValueTypes[$var][$k] = $t;
+                }
             }
         }
 
@@ -3018,6 +3125,105 @@ class CodeGenerator implements ASTVisitor
             $code .= $stmt->accept($this);
         }
         return $code;
+    }
+
+    /**
+     * defer 语句：注册清理代码，编译期展开到所有 return 点和 fall-through 尾部（LIFO）。
+     *   defer EXPR;  /  defer { body }
+     * 生成的清理代码压入 $deferStack，不在当前位置输出。
+     * visitReturnStmt 和 visitMethod/visitFunction 尾部调用 generateDeferCleanup() 输出。
+     */
+    public function visitDeferStmt(DeferStmtNode $node): string
+    {
+        // 生成 defer body 的 C 代码（每条语句一行，带缩进）
+        // 注意：visit 方法返回的代码已含分号，不再追加
+        $lines = [];
+        foreach ($node->body as $s) {
+            $lines[] = $this->ind($s->accept($this));
+        }
+        $this->deferStack[] = implode("\n", $lines);
+        // defer 语句本身在当前位置不生成任何代码（清理代码已延迟到 return/fall-through）
+        return '';
+    }
+
+    /**
+     * 生成所有已注册 defer 的清理代码（LIFO 逆序）。
+     * 在 return 语句前和函数 fall-through 尾部调用。
+     */
+    private function generateDeferCleanup(): array
+    {
+        if (empty($this->deferStack)) return [];
+        // LIFO：后注册的先执行
+        $lines = [];
+        for ($i = count($this->deferStack) - 1; $i >= 0; $i--) {
+            $lines[] = $this->deferStack[$i];
+        }
+        return $lines;
+    }
+
+    /**
+     * 判断表达式是否返回 transfer 所有权指针（需用户手动 defer/free）。
+     *   - C->func() 返回 T*：默认 transfer（保守，可能泄漏）
+     *   - phpc_arr_int/phpc_arr_dbl/phpc_arr_str：transfer（malloc 返回）
+     *   - c_str/c_int/c_float/c_void_ptr/php_str/php_int/php_float：borrow/值类型（不追踪）
+     *   - phpc_new_obj/phpc_auto：已托管（不需要 defer）
+     */
+    private function isCTransferPtr(ExprNode $expr, string $cType): bool
+    {
+        // 非指针类型不追踪
+        if (!str_contains($cType, '*')) return false;
+        // 排除 tphp 管理的类型（t_string/t_array*/tphp_class_*/tphp_enum_*）
+        if (str_contains($cType, 'tphp_') || $cType === 't_string' || $cType === 't_array*') return false;
+
+        // 借用函数（不追踪）— 透传指针，不转移所有权
+        static $borrowFns = ['c_str', 'c_int', 'c_float', 'c_void_ptr', 'phpc_obj',
+            'phpc_int_to_ptr',  // t_int → void*，仅还原指针值，不转移所有权
+        ];
+        // 已托管函数（不需要 defer，内部 tphp_rt_register 自动释放）
+        //   phpc_arr_int/dbl: malloc + tphp_rt_register (见 phpc.h)
+        //   phpc_new_obj: 对象包装 + register
+        //   phpc_auto: 显式注册自动释放
+        static $managedFns = ['phpc_new_obj', 'phpc_auto', 'phpc_arr_int', 'phpc_arr_dbl'];
+
+        if ($expr instanceof CallExpr) {
+            // CallExpr::$name 始终为 string（见 AST\Node.php CallExpr 定义）
+            $name = $expr->name;
+            if (in_array($name, $borrowFns, true)) return false;
+            if (in_array($name, $managedFns, true)) return false;
+            // phpc_arr_str: 不自动注册（需手动 phpc_free_str_arr），是 transfer
+            // C->func() 返回 T*：transfer
+            if ($expr->isRawC || $name === 'phpc_arr_str') return true;
+            // 用户定义函数返回 C.T*：transfer（用户需 defer 或在函数内 free）
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 标记 C 指针变量已被清理（phpc_free/return/php_str 接管等）。
+     */
+    private function markCPtrCleaned(string $varName): void
+    {
+        if (isset($this->cPtrOwnership[$varName])) {
+            $this->cPtrOwnership[$varName]['cleaned'] = true;
+        }
+    }
+
+    /**
+     * 扫描未清理的 C 指针变量，输出编译期泄漏警告。
+     * 在函数/方法体生成完成后调用。
+     */
+    private function warnLeakedCPtrs(string $funcName): void
+    {
+        foreach ($this->cPtrOwnership as $var => $info) {
+            if (!$info['cleaned']) {
+                $baseVar = ltrim($var, '$');
+                $line = $info['line'] > 0 ? " at line {$info['line']}" : '';
+                fprintf(STDERR, "[WARN] %s: C pointer \${$baseVar} (type: {$info['type']}){$line} "
+                    . "may leak — consider adding 'defer C->free(\${$baseVar});' or calling phpc_free(\${$baseVar})\n",
+                    $funcName);
+            }
+        }
     }
 
     // ============================================================
@@ -4271,13 +4477,25 @@ class CodeGenerator implements ASTVisitor
                 if ($shortN === 'phpc_free' && count($node->args) >= 1
                     && $node->args[0] instanceof VariableExpr) {
                     $varName = $this->visitVariable($node->args[0]);
+                    $this->markCPtrCleaned($varName);
                     return '(tphp_fn_phpc_free(' . $varName . '), (' . $varName . ' = NULL))';
                 }
                 if ($shortN === 'phpc_free_str_arr' && count($node->args) >= 2
                     && $node->args[0] instanceof VariableExpr) {
                     $varName = $this->visitVariable($node->args[0]);
+                    $this->markCPtrCleaned($varName);
                     $lenArg = $a[1];
                     return '(tphp_fn_phpc_free_str_arr(' . $varName . ', (int)(' . $lenArg . ')), (' . $varName . ' = NULL))';
+                }
+                // phpc_unregister_obj / phpc_obj_steal：标记已清理
+                if (($shortN === 'phpc_unregister_obj' || $shortN === 'phpc_obj_steal')
+                    && count($node->args) >= 1 && $node->args[0] instanceof VariableExpr) {
+                    $this->markCPtrCleaned($this->visitVariable($node->args[0]));
+                }
+                // phpc_auto($ptr)：接管 $ptr 所有权（注册自动释放），标记已清理
+                if ($shortN === 'phpc_auto'
+                    && count($node->args) >= 1 && $node->args[0] instanceof VariableExpr) {
+                    $this->markCPtrCleaned($this->visitVariable($node->args[0]));
                 }
                 return 'tphp_fn_' . $shortN . '(' . implode(', ', $a) . ')';
             }
@@ -4393,6 +4611,20 @@ class CodeGenerator implements ASTVisitor
         $callee = $node->callee->accept($this);
         // Raw C call: C->function() → direct C function, no name mangling
         if ($node->isRawC) {
+            // 清理函数启发式识别：函数名以 free/destroy/release/close/delete 结尾时，
+            // 标记第一参数（变量）为已释放，避免误报泄漏警告。
+            // 覆盖 point_free / rect_destroy / fclose / SDL_FreeSurface 等常见命名约定。
+            // 纯编译期分析，零运行时开销；遗漏不会漏报（仅多/少一条提醒，不阻断编译）。
+            if (count($node->args) >= 1 && $node->args[0] instanceof VariableExpr) {
+                $lowerName = strtolower($node->name);
+                if (str_ends_with($lowerName, 'free')
+                    || str_ends_with($lowerName, 'destroy')
+                    || str_ends_with($lowerName, 'release')
+                    || str_ends_with($lowerName, 'close')
+                    || str_ends_with($lowerName, 'delete')) {
+                    $this->markCPtrCleaned(self::varName($node->args[0]->name));
+                }
+            }
             return $node->name . '(' . implode(', ', $args) . ')';
         }
         // 方法调用：类名推导

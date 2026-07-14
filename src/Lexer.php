@@ -100,6 +100,7 @@ class Lexer
         'continue'    => TokenType::CONTINUE_KW,
         'goto'        => TokenType::GOTO,
         'match'       => TokenType::MATCH,
+        'defer'       => TokenType::DEFER_KW,
     ];
 
     public function __construct(string $source, bool $debugMode = false)

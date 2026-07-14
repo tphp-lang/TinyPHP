@@ -4,15 +4,15 @@
 // 验证 phpc 实用性：仅通过 C 标准库函数 (fopen/fgetc/fseek/ftell/fwrite/fclose)
 // 实现二进制 JPEG/TIFF EXIF 格式解析，无需编写任何 C 代码。
 //
-// 设计要点（phpc 实用性验证，已用新特性全面优化）：
+// 设计要点（phpc 实用性验证，defer 清理优化）：
 //   1. 所有函数参数/返回值使用 tphp 类型(int/string/array)，不暴露 C 类型
 //   2. FILE* 指针通过 phpc_ptr_to_int() 转为 t_int 在 PHP 层流转
 //      函数内部用 phpc_int_to_ptr() 转回 void* 调用 C 库
-//   3. ASCII 字符串读取：fgetc 逐字节 + chr() 拼接
-//   4. 整数读取：fseek + fgetc 逐字节组合（支持 LE/BE 字节序）
-//   5. EXIF/JPEG/TIFF 格式解析完全在 PHP 层完成
-//   6. 二进制数据构造：chr() + 字符串拼接 + C->fwrite()
-//   7. 内存管理：FILE* 用 C->fclose() 显式关闭（非 malloc 指针，不适用 phpc_auto）
+//   3. defer C->fclose($f) 确保文件句柄在所有退出路径（含异常）都正确关闭
+//   4. ASCII 字符串读取：fgetc 逐字节 + chr() 拼接
+//   5. 整数读取：fseek + fgetc 逐字节组合（支持 LE/BE 字节序）
+//   6. EXIF/JPEG/TIFF 格式解析完全在 PHP 层完成
+//   7. 二进制数据构造：chr() + 字符串拼接 + C->fwrite()
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -271,9 +271,9 @@ function exif_imagetype(string $filename): int|Exception
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("rb")));
     if ($fp == 0) { throw new Exception("exif_imagetype: unable to open file: " . $filename); }
     C.void* $f = phpc_int_to_ptr($fp);
+    defer C->fclose($f);
     $b0 = php_int(C->fgetc($f));
     $b1 = php_int(C->fgetc($f));
-    C->fclose($f);
 
     if ($b0 == 0x47 && $b1 == 0x49) { return IMAGETYPE_GIF; }       // GIF
     if ($b0 == 0xFF && $b1 == 0xD8) { return IMAGETYPE_JPEG; }      // JPEG
@@ -310,6 +310,7 @@ function exif_read_data(string $filename, string $sections = "",
     if ($fp == 0) { throw new Exception("exif_read_data: unable to open file: " . $filename); }
 
     C.void* $f = phpc_int_to_ptr($fp);
+    defer C->fclose($f);
 
     // 获取文件大小
     C->fseek($f, c_int(0), c_int(2));  // SEEK_END
@@ -369,7 +370,6 @@ function exif_read_data(string $filename, string $sections = "",
         $result = exif_parse_tiff($fp, 0, $result);
     }
 
-    C->fclose($f);
     return $result;
 }
 
@@ -513,9 +513,9 @@ function exif_make_test_jpeg_ex(string $filename, int $le): int
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("wb")));
     if ($fp == 0) { return -1; }
     C.void* $f = phpc_int_to_ptr($fp);
+    defer C->fclose($f);
     $len = strlen($s);
     C->fwrite(c_str($s), c_int(1), c_int($len), $f);
-    C->fclose($f);
     return 0;
 }
 
@@ -541,9 +541,9 @@ function exif_make_test_tiff(string $filename, int $le): int
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("wb")));
     if ($fp == 0) { return -1; }
     C.void* $f = phpc_int_to_ptr($fp);
+    defer C->fclose($f);
     $len = strlen($s);
     C->fwrite(c_str($s), c_int(1), c_int($len), $f);
-    C->fclose($f);
     return 0;
 }
 
@@ -558,7 +558,7 @@ function exif_make_test_header(string $filename, int $b0, int $b1): int
     $fp = phpc_ptr_to_int((C.void*)C->fopen(c_str($filename), c_str("wb")));
     if ($fp == 0) { return -1; }
     C.void* $f = phpc_int_to_ptr($fp);
+    defer C->fclose($f);
     C->fwrite(c_str($s), c_int(1), c_int(2), $f);
-    C->fclose($f);
     return 0;
 }

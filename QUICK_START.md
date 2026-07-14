@@ -87,12 +87,26 @@ function get_x(C.Point* $p): C.double { return C->point_get_x($p); }
 phpc 提供 4 个安全辅助函数，处理 C 指针生命周期边界问题：
 
 ```php
-// 1. phpc_free 释放后自动置零变量（CodeGenerator 自动改写为逗号表达式）
-$data = phpc_arr_int([1, 2, 3]);
-phpc_free($data);
-// $data 现在自动为 null，防 use-after-free
+// 1. defer 是首选清理方式（编译期展开到所有退出路径，零运行时开销）
+//    适用：C 库返回的 T* 指针、fopen 句柄、phpc_arr_str 等
+C.void* $buf = C->malloc(64);
+defer C->free($buf);               // 函数退出自动释放
+C.FILE* $f = C->fopen(c_str("x.txt"), c_str("rb"));
+defer C->fclose($f);               // 所有 return 路径自动关闭
 
-// 2. phpc_assert_ptr 断言指针非 NULL，失败时抛 tp_throw 异常（可 try-catch）
+// 2. phpc_arr_int/dbl 自动注册到运行时，无需手动释放
+//    （仅循环内为避免内存堆积才需手动 phpc_free）
+C.int32_t* $data = phpc_arr_int([1, 2, 3]);   // 自动注册，程序结束/异常自动释放
+$result = C->sum_ints($data, c_int(3));
+
+// phpc_arr_str 不自动注册，需用 defer 释放
+C.char** $strs = phpc_arr_str(["a", "b"]);
+defer phpc_free_str_arr($strs, c_int(2));
+
+// 3. phpc_free 显式释放（释放后自动置零变量，防 use-after-free）
+phpc_free($data);                  // $data 自动为 null
+
+// 4. phpc_assert_ptr 断言指针非 NULL，失败时抛 tp_throw 异常（可 try-catch）
 $ptr = C->maybe_returns_null();
 try {
     phpc_assert_ptr($ptr, "ptr_name");
@@ -101,12 +115,12 @@ try {
     // 捕获 NULL 指针错误
 }
 
-// 3. phpc_obj_steal 标记对象为"已分离"（refcount=-1），防 tp_obj_release double-free
+// 5. phpc_obj_steal 标记对象为"已分离"（refcount=-1），防 tp_obj_release double-free
 $p = C->point_create(1.0, 2.0);
 phpc_obj_steal($p);   // 标记分离
 C->point_free($p);    // C 库释放，TinyPHP GC 不会再次释放
 
-// 4. phpc_env_pin / phpc_env_unpin 钉住闭包 env，防异步回调 UAF
+// 6. phpc_env_pin / phpc_env_unpin 钉住闭包 env，防异步回调 UAF
 $fn = function(int $x) use ($captured): int { return $x * $captured; };
 $env = phpc_env_pin($fn);     // 钉住 env，防闭包出作用域被回收
 // ... C 库异步回调安全使用 $env ...
@@ -115,7 +129,9 @@ phpc_env_unpin($env);          // 用完释放
 
 | API | 作用 | 防护对象 |
 |-----|------|---------|
-| `phpc_free($var)` | 释放 + 自动置零 | use-after-free |
+| `defer C->free($p)` / `defer C->fclose($f)` | 编译期展开到退出路径 | 资源泄漏（首选） |
+| `defer phpc_free_str_arr($a, $n)` | 字符串数组释放 | 资源泄漏 |
+| `phpc_free($var)` | 显式释放 + 自动置零 | use-after-free |
 | `phpc_assert_ptr($ptr, $name)` | NULL 断言 → tp_throw | NULL 解引用 |
 | `phpc_obj_steal($obj)` | refcount=-1 | double-free |
 | `phpc_env_pin($cb)` / `phpc_env_unpin($env)` | 钉住闭包 env | 异步回调 UAF |

@@ -39,27 +39,27 @@ function calc_factorial(int $n): int
 
 function sum_array_int(array $arr): int
 {
+    // phpc_arr_int 自动注册到 tphp_rt_register，无需手动 phpc_free
     C.int32_t* $data = phpc_arr_int($arr);
     $result = C->sum_ints($data, c_int(count($arr)));
-    phpc_free($data);
     return php_int($result);
 }
 
 function sum_array_dbl(array $arr): float
 {
+    // phpc_arr_dbl 自动注册到 tphp_rt_register，无需手动 phpc_free
     C.double* $data = phpc_arr_dbl($arr);
     $result = C->sum_dbls($data, c_int(count($arr)));
-    phpc_free($data);
     return php_float($result);
 }
 
 function double_each_value(array $arr): array
 {
     $len = count($arr);
+    // phpc_arr_int 自动注册，无需手动 phpc_free
     C.int32_t* $data = phpc_arr_int($arr);
     C->double_each($data, c_int($len));
     $out = phpc_new_arr_int($data, $len);
-    phpc_free($data);
     return $out;
 }
 
@@ -97,11 +97,11 @@ function apply_square(int $val): int
 function map_with_closure(array $arr, callable $fn): array
 {
     $len = count($arr);
+    // phpc_arr_int 自动注册；C->map_ints 返回的 malloc 指针用 defer 确保释放
     C.int32_t* $data = phpc_arr_int($arr);
     C.int32_t* $result = C->map_ints($data, c_int($len), phpc_fn_i32($fn), phpc_env($fn));
+    defer phpc_free($result);
     $out = phpc_new_arr_int($result, $len);
-    phpc_free($data);
-    phpc_free($result);
     return $out;
 }
 
@@ -113,9 +113,8 @@ function map_ints_noenv(array $arr, callable $fn): array
     $len = count($arr);
     C.int32_t* $data = phpc_arr_int($arr);
     C.int32_t* $result = C->map_ints_ne($data, c_int($len), phpc_thunk('map_ne_cb', $fn));
+    defer phpc_free($result);
     $out = phpc_new_arr_int($result, $len);
-    phpc_free($data);
-    phpc_free($result);
     return $out;
 }
 
@@ -123,9 +122,9 @@ function map_ints_noenv(array $arr, callable $fn): array
 function fold_double(array $arr, callable $fn): float
 {
     $len = count($arr);
+    // phpc_arr_dbl 自动注册，无需手动 phpc_free
     C.double* $data = phpc_arr_dbl($arr);
     $result = C->fold_dbl($data, c_int($len), phpc_thunk('fold_dbl_cb', $fn));
-    phpc_free($data);
     return php_float($result);
 }
 
@@ -166,11 +165,13 @@ function create_null_point(): C.Point*
 // 字符串数组互操作
 function join_string_array(array $arr): string
 {
+    // phpc_arr_str 不自动注册（需手动 phpc_free_str_arr）
+    // 用 defer 确保所有退出路径都释放，避免泄漏
     C.char** $data = phpc_arr_str($arr);
     $len = c_int(count($arr));
+    defer phpc_free_str_arr($data, $len);
     // 调用 C 函数拼接字符串数组
     C.char* $result = C->join_strs($data, $len);
-    phpc_free_str_arr($data, $len);
     return php_str($result);
 }
 

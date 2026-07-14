@@ -338,6 +338,7 @@ statement:
   | goto_stmt                  ✅
   | try_stmt                   ✅ (COS setjmp/longjmp)
   | throw_stmt                 ✅ (Exception 类)
+  | defer_stmt                 ✅ (Zig 风格作用域清理，编译期展开)
   | assign_stmt                ✅ (支持可选类型标记: `type? '$' IDENTIFIER '=' expr ';'`; 支持链式 `$a = $b = 1`)
   | array_push_stmt            🔧 ($a[] = expr — TinyPHP 内联语法糖)
   | compound_assign            ✅ (+= -= *= /= .=)
@@ -404,7 +405,19 @@ catch:
 
 throw_stmt:
     'throw' expr ';'   ✅
+
+defer_stmt:
+    'defer' expr ';'                ✅ (单表达式清理: defer C->free($buf);)
+  | 'defer' echo_stmt               ✅ (echo 清理: defer echo "done\n";)
+  | 'defer' '{' statement* '}'      ✅ (块清理)
 ```
+
+> **defer 语句**（Zig 风格作用域清理）：注册清理代码，在函数退出时按 LIFO（后进先出）顺序执行。
+> - **函数级作用域**：PHP 无块作用域，defer 为函数级（非块级）。所有 defer 在函数退出时统一执行。
+> - **编译期展开**：defer 代码在编译期展开到所有 `return` 点和 fall-through 尾部，**零运行时开销**。
+> - **return 路径**：先求值 return 表达式到临时变量 `__defer_ret`，执行 defer 清理，再返回临时变量（避免 use-after-free）。
+> - **异常路径限制**：`try-catch` 的 `longjmp` 路径**不执行** defer（与 C 局部变量析构限制一致）。如需异常路径清理，请在 `finally` 块中手动处理。
+> - **典型用途**：C 指针释放（`defer C->free($buf);`）、资源关闭（`defer C->fclose($fp);`）、调试输出（`defer echo "exit\n";`）。
 
 > **catch 类型限制**：
 > - `catch (Exception $e)` / `catch (MyException $e)` — ✅ 支持用户自定义 Exception 子类
@@ -758,6 +771,8 @@ phpc_ptr_bridge:
 | `php_int/php_float/php_str/php_str_ptr/php_str_clone` | C → PHP 类型桥接(前 2 个宏零开销,php_str 保持 inline) |
 | `phpc_arr_*` `phpc_obj` `phpc_new_obj` `phpc_unregister_obj` `phpc_obj_steal` `phpc_fn_*` `phpc_thunk` `phpc_env_pin` `phpc_env_unpin` | 数组/对象/回调互操作 |
 | `phpc_auto` `phpc_free` `phpc_free_str_arr` `phpc_assert_ptr` | C 内存自动管理/释放/安全断言 |
+| `defer EXPR;` / `defer { ... }` | Zig 风格作用域清理：编译期展开到 return/fall-through 路径，LIFO 执行，零运行时开销 |
+| C 指针泄漏编译期提醒 | `C.T*` transfer 指针未 defer/free 时输出 `[WARN]` 到 stderr（不阻断编译；识别 `*_free`/`*_destroy`/`*_release`/`*_close`/`*_delete` 等清理函数命名约定） |
 | `phpc_ptr_to_int` `phpc_int_to_ptr` | 指针↔整数桥接(让 C 指针以 t_int 在 PHP 层流转) |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | 多线程 OOP API（tinycthread 封装，Thread-Local 运行时无锁竞争） |
 | `Parallel::for`/`Parallel::map` | 数据并行（连续分片，线程失败降级为内联执行） |

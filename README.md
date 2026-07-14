@@ -426,12 +426,20 @@ class Main {
 **严格 C 风格**：`phpc_arr_int($arr)` 要求所有元素为 `TYPE_INT`，否则抛 `tp_throw` 异常（可被 try-catch 捕获）。`phpc_arr_dbl` 接受 `int` 或 `float`。
 
 ```php
-// 模式: 提取 → C 操作 → 释放
+// 模式: 提取 → C 操作
+// phpc_arr_int/dbl 自动注册到运行时（程序结束/异常自动释放），无需手动 phpc_free
 function sum_array(array $arr): int {
-    $data = phpc_arr_int($arr);                      // → int32_t* (malloc)
+    C.int32_t* $data = phpc_arr_int($arr);            // → int32_t* (malloc, 自动注册)
     $result = C->sum_ints($data, c_int(count($arr))); // C 操作
-    phpc_free($data);                                 // 释放！
     return php_int($result);
+}
+
+// phpc_arr_str 不自动注册，需用 defer 在所有退出路径释放
+function join_strs(array $arr): string {
+    C.char** $data = phpc_arr_str($arr);              // → char** (malloc, 不自动注册)
+    defer phpc_free_str_arr($data, c_int(count($arr))); // 函数退出自动释放
+    C.char* $r = C->join_strs($data, c_int(count($arr)));
+    return php_str($r);
 }
 ```
 
@@ -527,12 +535,13 @@ try {
 | `c_int($x)` | `int32_t` | 值拷贝，无所有权 |
 | `c_float($x)` | `double` | 值拷贝，无所有权 |
 | `c_str($s)` | `const char*` | **借用指针** ❌ 不可 `free` |
-| `phpc_arr_int($arr)` | `int32_t*` | **malloc** ⚠ 必须 `phpc_free()` |
-| `phpc_arr_dbl($arr)` | `double*` | **malloc** ⚠ 必须 `phpc_free()` |
-| `phpc_arr_str($arr)` | `char**` | **malloc** ⚠ 必须 `phpc_free_str_arr()` |
+| `phpc_arr_int($arr)` | `int32_t*` | **malloc** ✅ **自动注册**，无需 `phpc_free`（循环内避免堆积可手动 `phpc_free`） |
+| `phpc_arr_dbl($arr)` | `double*` | **malloc** ✅ **自动注册**，无需 `phpc_free`（同上） |
+| `phpc_arr_str($arr)` | `char**` | **malloc** ⚠ 不自动注册，用 `defer phpc_free_str_arr()` 释放 |
 | `phpc_obj($obj)` | `void*` | **借用指针** ❌ 不可 `free` |
 | `phpc_fn($cb)` / `phpc_env($cb)` | `void*` | 借用，无所有权 |
 | `phpc_fn_i32/i64/f64($cb)` | 函数指针 | 借用，无所有权 |
+| `C->malloc(...)` / C 库返回的 T* | `T*` | **transfer** — 用 `defer C->free($p)` 或 `defer C->fclose($f)` 释放 |
 
 #### C → PHP（TinyPHP 自动管理）
 
@@ -568,7 +577,9 @@ try {
 | `phpc_env_pin(cb)` | 固定闭包 env 防止 PHP 侧释放（异步回调安全） |
 | `phpc_env_unpin(env)` | 解除固定（C 库不再需要回调时调用） |
 
-> ⚠ **记忆口诀**：`phpc_arr_*`（提取）→ malloc → **你必须 phpc_free**。`phpc_new_*`（创建）→ TinyPHP GC → **你别管**。`c_str` / `phpc_obj` → 借用 → **别 free**。C 库要 free 借用指针 → **先 `phpc_obj_steal`**。异步回调 → **先 `phpc_env_pin`**。
+> ⚠ **记忆口诀**：`phpc_arr_int`/`phpc_arr_dbl` → **自动注册**，你别管。`phpc_arr_str` → malloc 不自动注册 → **`defer phpc_free_str_arr`**。`phpc_new_*`（创建）→ TinyPHP GC → **你别管**。`c_str` / `phpc_obj` → 借用 → **别 free**。C 库返回的 `T*` (malloc/new) → **`defer C->free` / `defer C->fclose`**。C 库要 free 借用指针 → **先 `phpc_obj_steal`**。异步回调 → **先 `phpc_env_pin`**。
+>
+> 💡 **defer 是首选清理方式**：`defer C->free($p);` / `defer C->fclose($f);` / `defer phpc_free_str_arr($a, $n);` — 编译期展开到所有退出路径，零运行时开销，自动避免遗漏。详见 [GRAMMAR.md §7.1](GRAMMAR.md#71-defer-语句)。
 
 ## 性能
 

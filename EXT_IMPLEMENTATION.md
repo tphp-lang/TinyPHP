@@ -26,12 +26,12 @@
 | #  | 扩展                           | 复杂度   | 依赖             | 函数数 |
 | -- | ---------------------------- | ----- | -------------- | --- |
 | 2  | filter\_var ✅ 已完成 | ⭐⭐    | 无              | 2   |
-| 3  | [calendar](#3-calendar)      | ⭐⭐⭐   | 无              | 18  |
+| 3  | calendar ✅ 已完成 | ⭐⭐⭐   | 无              | 16  |
 | 4  | [zlib (gzip)](#4-zlib-gzip)  | ⭐⭐⭐   | zlib           | 6   |
 | 6  | [SQLite](#6-sqlite)          | ⭐⭐⭐⭐  | sqlite3        | 6   |
 | 7  | [cURL](#7-curl)              | ⭐⭐⭐⭐  | libcurl        | 8   |
 | 8  | [OpenSSL](#8-openssl)        | ⭐⭐⭐⭐⭐ | openssl        | 8   |
-| 9  | [fileinfo](#9-fileinfo)      | ⭐⭐⭐   | libmagic       | 4   |
+| 9  | [fileinfo](#9-fileinfo) ✅   | ⭐⭐⭐   | 内置魔数表       | 4   |
 | 10 | [iconv](#10-iconv) ✅ 已完成 | ⭐⭐⭐   | libiconv/系统    | 8   |
 | 11 | [exif](#11-exif) ✅ 已完成     | ⭐⭐⭐   | 无(纯解析)         | 6   |
 | 12 | [ZIP](#12-zip)               | ⭐⭐⭐⭐  | libzip+zlib    | 8   |
@@ -47,7 +47,15 @@
 
 ***
 
-## 3. calendar
+## 3. calendar ✅ 已完成
+
+> **实现状态**: 已完成纯 tphp 实现于 `ext/calendar/src/calendar.php`，无 C 代码、无外部依赖。
+> 基于 PHP ext/calendar 的 C 算法翻译为 tphp，所有日历转换基于儒略日 (Julian Day Number)。
+> **AOT 错误处理**: 无效日期/超出范围 → `throw Exception`（不静默返回 0 或 "0/0/0"）。
+> JD→日历转换返回 `array ["month","day","year"]`（全 int），不返回 PHP 的 "m/d/y" 字符串。
+> 内部 helper 返回哨兵值 (0/`["year"=>0,...]`)，公共 API 检查后 throw — 异常不吞没。
+> 犹太历 64 位直接算术（无需 C 源码的 32 位拆分溢出保护）。
+> 测试: `test/calendar/test_calendar.php` (162 项检查) 全部通过。
 
 ### 推荐参考库
 
@@ -677,7 +685,12 @@ function openssl_get_md_methods(bool $aliases = false): array;
 
 ***
 
-## 9. fileinfo
+## 9. fileinfo ✅ 已完成
+
+> **实现状态**: 已作为内置库直接集成在 `include/fileinfo.h`（非 ext 按需引入）。
+> 不依赖 libmagic（无需 magic.mgc 数据库文件分发），内置静态魔数表覆盖 60+ 常见文件类型。
+> 使用 Resource 对象包装 finfo 状态（flags），字符串输出走 str_pool_alloc 自动释放。
+> AOT 单返回类型契约: 失败统一 `tp_throw_ex(new_tphp_class_Exception(...))`（不返回 `false`）。
 
 ### 推荐参考库
 
@@ -702,58 +715,62 @@ const FILEINFO_DEVICES = 8;        // 查看设备内容
 const FILEINFO_CONTINUE = 32;      // 返回第一个匹配后继续查找
 const FILEINFO_PRESERVE_ATIME = 128; // 不修改文件的访问时间
 const FILEINFO_RAW = 256;          // 不转换不可打印字符
-const FILEINFO_EXTENSION = 2048;   // 返回文件扩展名 (PHP 8.2+)
+const FILEINFO_EXTENSION = 16777216; // 返回文件扩展名 (PHP 8.2+)
 
 // ================================================================
 // 函数
 // ================================================================
 
 /**
- * finfo_open(int $flags = FILEINFO_NONE, string $magic_file = ""): resource|false
+ * finfo_open(int $flags = FILEINFO_NONE, string $magic_file = ""): Resource
  *
- * 创建 fileinfo 资源。
- * $magic_file: 自定义 magic 数据库路径，默认使用系统 magic.mgc。
+ * 创建 fileinfo 资源。$magic_file 参数保留兼容但不使用（内置魔数表）。
+ * 失败抛 Exception（内存不足等）。
  */
-function finfo_open(int $flags = FILEINFO_NONE, string $magic_file = ""): resource|false;
+function finfo_open(int $flags = FILEINFO_NONE, string $magic_file = ""): Resource;
 
 /**
- * finfo_file(resource $finfo, string $filename, int $flags = FILEINFO_NONE): string|false
+ * finfo_file(Resource $finfo, string $filename, int $flags = FILEINFO_NONE): string
  *
- * 通过文件名检测文件类型（读取文件内容识别）。
+ * 通过文件名检测文件类型（读取文件前 512 字节识别）。
+ * 失败抛 Exception（空文件名、文件不存在、无效资源）。
  */
-function finfo_file(resource $finfo, string $filename, int $flags = FILEINFO_NONE): string|false;
+function finfo_file(Resource $finfo, string $filename, int $flags = FILEINFO_NONE): string;
 
 /**
- * finfo_buffer(resource $finfo, string $data, int $flags = FILEINFO_NONE): string|false
+ * finfo_buffer(Resource $finfo, string $data, int $flags = FILEINFO_NONE): string
  *
  * 通过内存数据检测文件类型（不读磁盘）。
+ * 失败抛 Exception（无效资源）。
  */
-function finfo_buffer(resource $finfo, string $data, int $flags = FILEINFO_NONE): string|false;
+function finfo_buffer(Resource $finfo, string $data, int $flags = FILEINFO_NONE): string;
 
 /**
- * finfo_close(resource $finfo): bool
+ * finfo_close(Resource $finfo): void
  *
  * 关闭 fileinfo 资源。
  */
-function finfo_close(resource $finfo): bool;
+function finfo_close(Resource $finfo): void;
 
 /**
- * finfo_set_flags(resource $finfo, int $flags): bool
+ * finfo_set_flags(Resource $finfo, int $flags): bool
  *
- * 设置 libmagic 选项。PHP 8.3 新增。
+ * 设置 fileinfo 资源的默认 flags。始终返回 true。
+ * 失败抛 Exception（无效资源）。
  */
-function finfo_set_flags(resource $finfo, int $flags): bool;
+function finfo_set_flags(Resource $finfo, int $flags): bool;
 
 /**
- * mime_content_type(string $filename): string|false
+ * mime_content_type(string $filename): string
  *
  * 便捷函数，等价于:
  *   $fi = finfo_open(FILEINFO_MIME_TYPE);
  *   $r = finfo_file($fi, $filename);
  *   finfo_close($fi);
  *   return $r;
+ * 失败抛 Exception（空文件名、文件不存在）。
  */
-function mime_content_type(string $filename): string|false;
+function mime_content_type(string $filename): string;
 ```
 
 ***
@@ -869,6 +886,7 @@ function iconv_mime_decode(string $str, int $mode = 0, string $charset = "UTF-8"
 > 仅通过 C 标准库函数 (fopen/fgetc/fseek/ftell/fwrite/fclose) 实现二进制 JPEG/TIFF EXIF 格式解析。
 > **所有函数参数/返回值使用 tphp 类型**(int/string/array)，C 类型转换封装在函数内部:
 > FILE* 指针通过 `phpc_ptr_to_int()` 转为 `t_int` 在 PHP 层流转，函数内部用 `phpc_int_to_ptr()` 转回 void* 调用 C 库。
+> `defer C->fclose($f)` 确保文件句柄在所有退出路径（含异常）都正确关闭。
 > 测试: `test/exif/test_exif.php` (34 项检查) 全部通过。
 
 ### 推荐参考库
@@ -2170,13 +2188,13 @@ void tphp_fn_imagejpeg(gdImagePtr im, t_string path, t_int quality) {
 | -- | -------------- | ------ | ---------- | -------------- | --- | ----- |
 | 1  | bcrypt         | \~350  | ⭐⭐ ✅ 已完成   | 无              | 2   | ✅ 已完成 |
 | 2  | filter\_var    | \~400  | ⭐⭐ ✅ 已完成   | 无              | 4   | ✅ 已完成 |
-| 3  | calendar       | \~1000 | ⭐⭐⭐        | 无              | 18  | 2-3 天 |
+| 3  | calendar       | \~1000 | ⭐⭐⭐ ✅ 已完成 | 无              | 16  | ✅ 已完成 |
 | 4  | zlib           | \~200  | ⭐⭐⭐        | zlib           | 6   | 半天    |
 | 5  | PCRE2 preg\_\* | \~1500 | ⭐⭐⭐⭐ ✅ 已完成 | vlang pcre VM  | 8   | ✅ 已完成 |
 | 6  | SQLite         | \~500  | ⭐⭐⭐⭐       | sqlite3        | 8   | 1-2 天 |
 | 7  | cURL           | \~300  | ⭐⭐⭐⭐       | libcurl        | 8   | 2-3 天 |
 | 8  | OpenSSL        | \~500  | ⭐⭐⭐⭐⭐      | openssl        | 8   | 3-5 天 |
-| 9  | fileinfo       | \~200  | ⭐⭐⭐        | libmagic       | 6   | 1 天   |
+| 9  | fileinfo ✅    | \~200  | ⭐⭐⭐        | 内置魔数表       | 6   | 1 天   |
 | 10 | iconv          | \~500  | ⭐⭐⭐ ✅ 已完成 | libiconv/系统    | 8   | ✅ 已完成 |
 | 11 | exif           | \~800  | ⭐⭐⭐ ✅ 已完成 | 无(纯解析)         | 4   | ✅ 已完成 |
 | 12 | ZIP            | \~400  | ⭐⭐⭐⭐       | libzip+zlib    | 12  | 2-3 天 |

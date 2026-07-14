@@ -41,7 +41,9 @@ class Main {
         echo "4. php_float(2.71): " . $pf . "\n";
 
         // 5. c_void_ptr 宏:透传 void*
+        //    用 defer 注册清理，函数退出时自动 free（零运行时开销，编译期展开）
         C.void* $buf = C->malloc(8);
+        defer C->free($buf);
         C.void* $vp = c_void_ptr($buf);
         $nonNull = 0;
         if ($vp != null) { $nonNull = 1; }
@@ -72,7 +74,7 @@ class Main {
         $fold = c_int(50) + c_int(50);
         echo "10. const fold: " . php_int($fold) . "\n";
 
-        C->free($buf);
+        // $buf 由 defer C->free($buf) 在函数退出时自动释放，无需手动 free
 
         echo "\n=== All passed ===\n";
     }

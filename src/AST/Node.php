@@ -549,6 +549,24 @@ class BlockStmtNode extends StmtNode
     }
 }
 
+// defer 语句：注册清理代码，在作用域正常退出时 LIFO 执行
+//   defer EXPR;        — 单表达式清理（如 defer C->free($buf);）
+//   defer { body }     — 块清理
+// 编译期展开到所有 return 点和 fall-through 尾部，零运行时开销。
+// 异常路径（longjmp）不执行 defer（与 C 局部变量析构限制一致）。
+class DeferStmtNode extends StmtNode
+{
+    /** @param StmtNode[] $body */
+    public function __construct(
+        public readonly array $body,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitDeferStmt($this);
+    }
+}
+
 // === 表达式 ===
 
 abstract class ExprNode extends ASTNode
@@ -1101,4 +1119,5 @@ interface ASTVisitor
     public function visitPlaceholderExpr(PlaceholderExpr $node): string;
     public function visitAttributeDecl(AttributeDeclNode $node): string;
     public function visitAttributeUse(AttributeUseNode $node): string;
+    public function visitDeferStmt(DeferStmtNode $node): string;
 }
