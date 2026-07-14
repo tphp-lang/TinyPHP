@@ -32,6 +32,10 @@ php tphp.php main.php -o app -cc gcc
 php tphp.php main.php -os linux            # x86_64 Linux
 php tphp.php main.php -os linux -arch aarch64  # ARM64 Linux
 php tphp.php main.php -os windows          # Windows .exe
+
+# 动态库导出（配合 #[Export] 注解）
+php tphp.php lib.php -shared -o mylib.dll  # Windows
+php tphp.php lib.php -shared -o mylib.so   # Linux
 ```
 
 ### CLI 选项
@@ -42,6 +46,7 @@ php tphp.php main.php -os windows          # Windows .exe
 | `-cc <compiler>` | 指定 C 编译器（默认内置 TCC） |
 | `-os <target>` | 跨编译目标：`windows`、`linux`、`macos` |
 | `-arch <arch>` | 目标架构：`x86_64`、`aarch64`（Windows/Linux 默认 x86_64，macOS 默认 aarch64） |
+| `-shared` | 编译为动态库（`.dll`/`.so`/`.dylib`），配合 `#[Export]` 导出 C 函数 |
 | `--debug` | 打印编译命令，运行二进制并与 `#debug` 预期输出逐行比对 |
 | `-h, --help` | 显示帮助 |
 

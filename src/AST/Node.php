@@ -419,6 +419,7 @@ class CaseBranch
 // break;
 class BreakStmtNode extends StmtNode
 {
+    public function __construct(public readonly int $level = 1) {}
     public function accept(ASTVisitor $visitor): string
     {
         return $visitor->visitBreakStmt($this);
@@ -481,6 +482,7 @@ class LabelStmtNode extends StmtNode
 // continue;
 class ContinueStmtNode extends StmtNode
 {
+    public function __construct(public readonly int $level = 1) {}
     public function accept(ASTVisitor $visitor): string
     {
         return $visitor->visitContinueStmt($this);

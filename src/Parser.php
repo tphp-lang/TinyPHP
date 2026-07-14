@@ -30,7 +30,7 @@ class Parser
 {
     /** 标识符类 token — 可作为变量名/函数名/类名引用（替代 parsePrimary 中的巨型 || 链） */
     private static array $identifierLikeTokens = [
-        TokenType::IDENTIFIER, TokenType::SELF_KW,
+        TokenType::IDENTIFIER, TokenType::SELF_KW, TokenType::PARENT_KW,
         TokenType::VAR_DUMP, TokenType::COUNT, TokenType::EXIT, TokenType::DIE,
         TokenType::ISSET, TokenType::EMPTY_KW, TokenType::UNSET,
         TokenType::ERROR, TokenType::TIME, TokenType::DATE,
@@ -1076,8 +1076,8 @@ class Parser
         if ($this->match(TokenType::GOTO))          return $this->parseGotoStmt();
         if ($this->match(TokenType::TRY_KW))        return $this->parseTryStmt();
         if ($this->match(TokenType::THROW_KW))      return $this->parseThrowStmt();
-        if ($this->match(TokenType::BREAK_KW))      { $this->consume(TokenType::SEMICOLON, 'Expected ;'); return new BreakStmtNode(); }
-        if ($this->match(TokenType::CONTINUE_KW))   { $this->consume(TokenType::SEMICOLON, 'Expected ;'); return new ContinueStmtNode(); }
+        if ($this->match(TokenType::BREAK_KW))      { $lvl = $this->parseBreakLevel(); $this->consume(TokenType::SEMICOLON, 'Expected ;'); return new BreakStmtNode($lvl); }
+        if ($this->match(TokenType::CONTINUE_KW))   { $lvl = $this->parseBreakLevel(); $this->consume(TokenType::SEMICOLON, 'Expected ;'); return new ContinueStmtNode($lvl); }
         // 标签: IDENTIFIER COLON
         if ($this->check(TokenType::IDENTIFIER) && $this->checkNext(TokenType::COLON)) {
             $label = $this->advance()->lexeme;
@@ -1236,6 +1236,19 @@ class Parser
         $this->consume(TokenType::RPAREN, 'Expected )');
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
         return new DoWhileStmtNode($cond, $body);
+    }
+
+    /** 解析 break/continue 的可选层级参数（break 2; / continue 2;） */
+    private function parseBreakLevel(): int
+    {
+        if ($this->check(TokenType::INT_LIT)) {
+            $lvl = (int)$this->advance()->lexeme;
+            if ($lvl < 1) {
+                $this->error("break/continue level must be >= 1, got {$lvl}");
+            }
+            return $lvl;
+        }
+        return 1;
     }
 
     // list($a, $b) = expr;
@@ -1950,7 +1963,6 @@ class Parser
             TokenType::TRUE_KW    => $this->advance() ? $this->setPos(new BoolLiteralExpr(true), $line, $col) : null,
             TokenType::FALSE_KW   => $this->advance() ? $this->setPos(new BoolLiteralExpr(false), $line, $col) : null,
             TokenType::NULL_KW    => $this->advance() ? $this->setPos(new NullLiteralExpr(), $line, $col) : null,
-            TokenType::PARENT_KW  => $this->advance() ? $this->setPos(new VariableExpr('parent'), $line, $col) : null,
             // 魔术常量（需要 token 的 lexeme 和 line）
             TokenType::MAGIC_LINE, TokenType::MAGIC_FILE, TokenType::MAGIC_DIR,
             TokenType::DIR_SEP, TokenType::MAGIC_CLASS, TokenType::MAGIC_METHOD,

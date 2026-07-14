@@ -63,6 +63,11 @@ class CodeGenerator implements ASTVisitor
     /** 变量 → 注解常量名追踪（foreach 遍历注解数组时，记录 $v 来自哪个注解常量） */
     private array $varAnnotSource = [];
 
+    /** 循环/switch end label 栈（支持 break N; / continue N;） */
+    private array $loopEndLabelStack = [];
+    /** 循环 start label 栈（支持 continue N;） */
+    private array $loopStartLabelStack = [];
+
     /** 是否 -shared 共享库模式（生成导出 trampoline + 库自动初始化） */
     public bool $isShared = false;
 
@@ -562,7 +567,7 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->addClass('tphp_class_Exception');
         $this->symbols->addClassName('Exception', 'tphp_class_Exception');
         $this->symbols->getClass('tphp_class_Exception')->methods['getMessage']    = new MethodInfo('t_string');
-        $this->symbols->getClass('tphp_class_Exception')->methods['__construct'] = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Exception')->methods['__construct'] = new MethodInfo('void', ['t_string'], false, 'public', 1, 1);
         $this->symbols->getClass('tphp_class_Exception')->methods['__destruct']  = new MethodInfo('void');
         $this->symbols->addClassProp('tphp_class_Exception', 'message', 't_string');
 
@@ -988,6 +993,21 @@ class CodeGenerator implements ASTVisitor
             : "void {$cn}___construct({$cn}* self" . ($this->ctorParamStr($ctor) ? ', ' . $this->ctorParamStr($ctor) : '') . ") {";
         $o[] = $ctorSig;
         $o[] = $this->ind('if (self == NULL) return;');
+
+        // 自动调用父类构造器（初始化 _parent 部分）— PHP 语义：子类构造器不会自动调用父类，
+        // 但 COS 结构体继承要求 _parent 部分必须被初始化，否则 parent::method() 访问未初始化内存。
+        // 仅当父类有无参构造器时自动调用；若父类构造器有参数（含默认值参数），C 签名仍要求显式传参，
+        // 用户需显式 parent::__construct(args)。
+        // 注意：PHP 默认参数不等于 C 默认参数（C 无默认参数语法），不能用 defaultCount 判断。
+        if ($class->parentName !== null) {
+            $parentCName = self::classRefName($class->parentName);
+            $parentCtor = $this->symbols->getClassMethod($parentCName, '__construct');
+            // Main 类构造器签名不同（argc, argv），不自动调用
+            if ($parentCtor !== null && !$this->isMainClassCName($parentCName)
+                && $parentCtor->totalParams === 0) {
+                $o[] = $this->ind("{$parentCName}___construct(&self->_parent);");
+            }
+        }
 
         // 属性默认值初始化 — 字符串用深拷贝（静态属性已在文件作用域初始化，跳过）
         foreach ($class->properties as $prop) {
@@ -1823,8 +1843,14 @@ class CodeGenerator implements ASTVisitor
                 $ct = $e->castType;
                 $parts[] = $ct === 'string' ? "tphp_fn_echo({$code});"
                          : $this->echoWrap(self::$typeMap[$ct] ?? 't_int', $code);
-            } elseif ($e instanceof CallExpr) {
-                $parts[] = $this->echoWrap('t_int', $code);
+            } elseif ($e instanceof CallExpr || $e instanceof BinaryExpr
+                   || $e instanceof PostfixExpr || $e instanceof CompoundAssignExpr
+                   || $e instanceof UnaryExpr || $e instanceof TernaryExpr
+                   || $e instanceof NullCoalesceExpr || $e instanceof MatchExpr
+                   || $e instanceof ArrayAccessExpr) {
+                // 表达式：通过 inferType 推导实际类型后包装
+                $et = $this->inferType($e);
+                $parts[] = $this->echoWrap($et, $code);
             } else {
                 $parts[] = "tphp_fn_echo({$code});";
             }
@@ -2568,7 +2594,9 @@ class CodeGenerator implements ASTVisitor
                 $objKey = self::varName($expr->callee->name);
                 $objType = ($objKey === '$this' || $objKey === 'self')
                     ? $this->className
-                    : ($this->varTypes[$objKey] ?? '');
+                    : ($objKey === 'parent'
+                        ? (self::classRefName($this->lookupParentClass($this->phpClassName) ?? '') ?: $this->className)
+                        : ($this->varTypes[$objKey] ?? ''));
                 // 枚举静态调用 Color::cases() — callee=VariableExpr(Color)，varTypes 无此键
                 //   但名称是已知枚举 → 用枚举 C 结构体名
                 if ($objType === '' && $this->symbols->resolveEnumCName($expr->callee->name) !== null) {
@@ -3594,8 +3622,9 @@ class CodeGenerator implements ASTVisitor
 
     public function visitVariable(VariableExpr $node): string
     {
-        // 'self' 是关键字，不是常量名
+        // 'self' / 'parent' 是关键字，不是常量名
         if ($node->name === 'self') return 'self';
+        if ($node->name === 'parent') return 'parent';
         // 原始名字判断是否常量
         if (!str_starts_with($node->name, '$')) {
             // 函数内 const 局部常量 → 直接引用变量名（C static const 变量）
@@ -4369,6 +4398,10 @@ class CodeGenerator implements ASTVisitor
         // 方法调用：类名推导
         if ($callee === 'self') {
             $cn = $this->className;
+        } elseif ($callee === 'parent') {
+            // parent::method() → 查找当前类的父类
+            $parentPhp = $this->lookupParentClass($this->phpClassName);
+            $cn = $parentPhp !== null ? self::classRefName($parentPhp) : $this->className;
         } elseif ($node->callee instanceof VariableExpr) {
             $key = self::varName($node->callee->name);
             $raw = $this->varTypes[$key] ?? $key;
@@ -4400,7 +4433,10 @@ class CodeGenerator implements ASTVisitor
             return $this->emitEnumMethodCall($node, $enumCName, $callee, $args);
         }
         $useParent = false;
-        if ($cnClean !== '' && $this->symbols->getClassMethod($cnClean, $node->name) === null) {
+        $isParentCall = ($callee === 'parent');
+        if ($isParentCall) {
+            $useParent = true;  // parent::method() 总是通过 _parent 访问
+        } elseif ($cnClean !== '' && $this->symbols->getClassMethod($cnClean, $node->name) === null) {
             $parentCN = $this->resolveMethodClass($cnClean, $node->name);
             if ($parentCN !== '') { $cnClean = $parentCN; $useParent = true; }
         }
@@ -4418,7 +4454,10 @@ class CodeGenerator implements ASTVisitor
         if ($isStatic) {
             $allArgs = $args;
         } else {
-            $selfArg = $useParent ? ('&' . $callee . '->_parent') : $callee;
+            // parent::method() 用 &self->_parent；继承方法用 &callee->_parent；否则用 callee
+            $selfArg = $useParent
+                ? ($isParentCall ? '&self->_parent' : ('&' . $callee . '->_parent'))
+                : $callee;
             $allArgs = array_merge([$selfArg], $args);
         }
         // 选择重载版本：有默认值参数且实参数量 < 总参数时，使用 fnName_缺失数 重载
@@ -5870,11 +5909,19 @@ class CodeGenerator implements ASTVisitor
     {
         $cond = $node->condition->accept($this);
         $this->scopeDepth++;
+        $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
+        $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $this->loopEndLabelStack[] = $endLabel;
+        $this->loopStartLabelStack[] = $startLabel;
         $lines = [];
+        $lines[] = "{$startLabel}:;";
         $lines[] = "while ({$cond}) {";
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         $lines[] = '}';
+        $lines[] = "{$endLabel}:;";
         $this->scopeDepth--;
+        array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
         return implode("\n", $lines);
     }
 
@@ -5882,11 +5929,19 @@ class CodeGenerator implements ASTVisitor
     {
         $cond = $node->condition->accept($this);
         $this->scopeDepth++;
+        $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
+        $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $this->loopEndLabelStack[] = $endLabel;
+        $this->loopStartLabelStack[] = $startLabel;
         $lines = [];
+        $lines[] = "{$startLabel}:;";
         $lines[] = 'do {';
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         $lines[] = "} while ({$cond});";
+        $lines[] = "{$endLabel}:;";
         $this->scopeDepth--;
+        array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
         return implode("\n", $lines);
     }
 
@@ -5981,11 +6036,19 @@ class CodeGenerator implements ASTVisitor
         $cond = $node->condition ? $node->condition->accept($this) : '';
         $step = $node->step ? $node->step->accept($this) : '';
         $this->scopeDepth++;
+        $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
+        $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $this->loopEndLabelStack[] = $endLabel;
+        $this->loopStartLabelStack[] = $startLabel;
         $lines = [];
+        $lines[] = "{$startLabel}:;";
         $lines[] = "for ({$init}; {$cond}; {$step}) {";
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         $lines[] = '}';
+        $lines[] = "{$endLabel}:;";
         $this->scopeDepth--;
+        array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6080,6 +6143,10 @@ class CodeGenerator implements ASTVisitor
         };
 
         $keyType = $keyVar ? ($this->varTypes[$keyVar] ?? 't_int') : '';
+        $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
+        $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $this->loopEndLabelStack[] = $endLabel;
+        $this->loopStartLabelStack[] = $startLabel;
         $lines = [];
         if ($needKeyDecl) {
             if ($keyType === 't_string') {
@@ -6091,6 +6158,7 @@ class CodeGenerator implements ASTVisitor
         if ($needValDecl) {
             $lines[] = "{$valDecl} {$valVar};";
         }
+        $lines[] = "{$startLabel}:;";
         $lines[] = "for (int {$idx} = 0; {$idx} < tphp_fn_arr_count({$arr}); {$idx}++) {";
         if ($keyVar) {
             $lines[] = $this->ind("if ({$arr} == NULL) break;");
@@ -6111,6 +6179,9 @@ class CodeGenerator implements ASTVisitor
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         $this->scopeDepth--;
         $lines[] = '}';
+        $lines[] = "{$endLabel}:;";
+        array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6159,7 +6230,14 @@ class CodeGenerator implements ASTVisitor
             return $this->generateStringSwitch($condCode, $node->cases);
         }
 
-        // int/bool switch → 直接 C switch
+        // int/bool switch：若含动态 case 值（变量/表达式），退化为 if-goto 链以支持 PHP 语义
+        if ($this->hasDynamicCases($node->cases)) {
+            return $this->generateDynamicSwitch($condCode, $node->cases);
+        }
+
+        // int/bool switch → 直接 C switch（所有 case 均为常量）
+        $endLabel = '_sw_end_' . (++$this->tmpVarCounter);
+        $this->loopEndLabelStack[] = $endLabel;  // switch 也压栈，支持 break N; 跳出
         $lines = [];
         $lines[] = "switch ({$condCode}) {";
         foreach ($node->cases as $case) {
@@ -6174,6 +6252,76 @@ class CodeGenerator implements ASTVisitor
             }
         }
         $lines[] = '}';
+        $lines[] = "{$endLabel}:;";
+        array_pop($this->loopEndLabelStack);
+        return implode("\n", $lines);
+    }
+
+    /**
+     * 检测 int/bool switch 中是否含动态 case 值（非字面量）。
+     * PHP 允许 case $var: / case foo(): 等动态值；C switch 的 case 必须是常量表达式。
+     */
+    private function hasDynamicCases(array $cases): bool
+    {
+        foreach ($cases as $case) {
+            if ($case->value === null) continue;
+            $v = $case->value;
+            // 常量 case：整数/布尔字面量、枚举 case 访问
+            if ($v instanceof IntLiteralExpr
+                || $v instanceof BoolLiteralExpr
+                || $v instanceof EnumAccessExpr) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 将 int/bool switch 转为 if-goto 链，支持动态 case 值并保留 fall-through 语义。
+     * 每个 case 对应一个 label；匹配则跳入，无 break 则顺序执行到下一个 case label。
+     * default 单独处理：无 case 匹配时跳到 default label。
+     */
+    private function generateDynamicSwitch(string $condCode, array $cases): string
+    {
+        $lines = [];
+        $swId = (++$this->tmpVarCounter);
+        $endLabel = '_sw_end_' . $swId;
+        $defaultLabel = '_sw_default_' . $swId;
+        $this->loopEndLabelStack[] = $endLabel;
+
+        $hasDefault = false;
+        // 1. 匹配检测：if ((cond) == (val)) goto case_label;
+        foreach ($cases as $i => $case) {
+            if ($case->value !== null) {
+                $valCode = $case->value->accept($this);
+                $label = '_sw_case_' . $swId . '_' . $i;
+                $lines[] = "if (({$condCode}) == ({$valCode})) goto {$label};";
+            } else {
+                $hasDefault = true;
+            }
+        }
+        // 无匹配 → default 或跳到结尾
+        $lines[] = $hasDefault ? "goto {$defaultLabel};" : "goto {$endLabel};";
+
+        // 2. case body：label + stmts（break → goto end，无 break 则 fall-through 到下一 case）
+        foreach ($cases as $i => $case) {
+            if ($case->value !== null) {
+                $label = '_sw_case_' . $swId . '_' . $i;
+                $lines[] = "{$label}:;";
+            } else {
+                $lines[] = "{$defaultLabel}:;";
+            }
+            foreach ($case->body as $s) {
+                if ($s instanceof BreakStmtNode) {
+                    $lines[] = $this->ind("goto {$endLabel};");
+                } else {
+                    $lines[] = $this->ind($s->accept($this));
+                }
+            }
+        }
+        $lines[] = "{$endLabel}:;";
+        array_pop($this->loopEndLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6188,6 +6336,7 @@ class CodeGenerator implements ASTVisitor
         $swId = (++$this->tmpVarCounter);
         $endLabel = '_sw_end_' . $swId;
         $defaultLabel = '_sw_default_' . $swId;
+        $this->loopEndLabelStack[] = $endLabel;
 
         $hasDefault = false;
         // 1. 匹配检测：if (str_eq(cond, val)) goto case_label;
@@ -6220,11 +6369,31 @@ class CodeGenerator implements ASTVisitor
             }
         }
         $lines[] = "{$endLabel}:;";
+        array_pop($this->loopEndLabelStack);
         return implode("\n", $lines);
     }
 
-    public function visitBreakStmt(BreakStmtNode $node): string { return 'break;'; }
-    public function visitGotoStmt(GotoStmtNode $node): string { return 'goto ' . $node->label . ';'; }
+    public function visitBreakStmt(BreakStmtNode $node): string
+    {
+        if ($node->level <= 1) return 'break;';
+        // break N; → goto 第 N 层外层结构的 end label
+        $idx = count($this->loopEndLabelStack) - $node->level;
+        if ($idx < 0 || !isset($this->loopEndLabelStack[$idx])) {
+            return 'break;';  // 栈不足时退化为 break（防御性）
+        }
+        return 'goto ' . $this->loopEndLabelStack[$idx] . ';';
+    }
+
+    public function visitContinueStmt(ContinueStmtNode $node): string
+    {
+        if ($node->level <= 1) return 'continue;';
+        // continue N; → goto 第 N 层外层循环的 start label
+        $idx = count($this->loopStartLabelStack) - $node->level;
+        if ($idx < 0 || !isset($this->loopStartLabelStack[$idx])) {
+            return 'continue;';  // 栈不足时退化为 continue（防御性）
+        }
+        return 'goto ' . $this->loopStartLabelStack[$idx] . ';';
+    }
 
     public function visitTryStmt(TryStmtNode $node): string
     {
@@ -6375,7 +6544,7 @@ class CodeGenerator implements ASTVisitor
     }
 
     public function visitLabelStmt(LabelStmtNode $node): string { return $node->name . ':;'; }
-    public function visitContinueStmt(ContinueStmtNode $node): string { return 'continue;'; }
+    public function visitGotoStmt(GotoStmtNode $node): string { return 'goto ' . $node->label . ';'; }
 
     // ============================================================
     // 运算符

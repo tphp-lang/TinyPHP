@@ -197,6 +197,12 @@ property_hook:
 visibility:
     'public'    ✅
   | 'private'   ✅
+  | 'protected' ❌ 不做（仅 public/private）
+
+> ⚠️ **方法修饰符**：
+> - `abstract` 方法修饰符：语法上接受（解析时跳过），但**不强制**子类实现（无运行时/编译期检查）
+> - `final` 方法修饰符：**不支持**（Parser 不消费 `final` 关键字，写 `final public function` 会报语法错误）；`final` 仅支持类级别
+> - `protected` 可见性：**不支持**，仅 `public`/`private`
 
 type:
     'int'       ✅ → int64_t
@@ -231,6 +237,7 @@ type:
 method_decl:
     visibility 'function' IDENTIFIER '(' params ')' return_type? body   ✅
   | visibility 'static' 'function' IDENTIFIER '(' params ')' return_type? body  ✅ (部分)
+  | 'abstract'? visibility 'function' IDENTIFIER '(' params ')' return_type? body  ✅ (abstract 修饰符接受但不强制子类实现)
 
 return_type:
     ':' type   ✅
@@ -392,10 +399,18 @@ goto_stmt:
 try_stmt:
     'try' '{' statement* '}' catch* finally?   ✅
 
+catch:
+    'catch' '(' type? '$' IDENTIFIER ')' '{' statement* '}'   ✅
+
 throw_stmt:
     'throw' expr ';'   ✅
 ```
 
+> **catch 类型限制**：
+> - `catch (Exception $e)` / `catch (MyException $e)` — ✅ 支持用户自定义 Exception 子类
+> - `catch (\Throwable $e)` — ❌ 不支持（`Throwable` 是 PHP 接口，TinyPHP 无接口 vtable；用 `catch (Exception $e)` 替代，所有异常都是 Exception 子类）
+> - 无类型 `catch ($e)` — ✅ 兜底捕获（字符串消息，非对象异常）
+>
 > **`error()` 函数**：等价于 `throw new Exception($msg)` 的简写。调用 `error($msg)` 时，编译器生成 `tp_throw(STR_PTR_V($msg))`，抛出可被 try-catch 捕获的异常；未被 catch 时回退到 `exit(1)` + 输出 Fatal error 信息。函数体包含 `error()` 调用时，返回类型必须声明 `|Exception`（同 `throw` 规则）。
 
 ---
@@ -697,8 +712,8 @@ phpc_ptr_bridge:
 | 语法 | 备注 |
 |------|------|
 | `if/elseif/else` `while` `do-while` `for` `foreach` `switch` `match` | 全部控制流 |
-| `break/continue/goto` 标签 | — |
-| `class` `extends` `interface` `implements` `trait+use` `abstract` `final` `readonly` | COS struct 嵌套继承 |
+| `break N/continue N/goto` 标签 | `break 2;` 跳出多层结构（loop label 栈 + goto 实现） |
+| `class` `extends` `interface` `implements` `trait+use` `abstract class` `final class` `readonly` | COS struct 嵌套继承；`abstract`/`final` 仅类级别 |
 | `enum` `enum case` | int/string backing |
 | `try/catch(Exception $e)/finally` `throw` `error()` | COS setjmp/longjmp；`error()` 等价于 `throw new Exception($msg)`，可被 catch |
 | `function` `closure` `fn =>` `fn => {...}` `use($x)` | 全部闭包形态（块体箭头函数为 TinyPHP 扩展） |
@@ -708,13 +723,14 @@ phpc_ptr_bridge:
 | `namespace A\B` `use A\{B,C}` `use function A\{f1,f2}` `use A\{B, function f}` | 分组导入 |
 | `list()/$a[] =` 解构 | 含键名 `"key"=>$v` |
 | `int &$x` 引用传参 | 全类型支持（int/float/bool/string/array/对象） |
-| `self::CONST` `Class::CONST` `self::method()` | — |
+| `self::CONST` `Class::CONST` `self::method()` `parent::method()` `parent::__construct()` | `parent::` 通过 `_parent` 字段访问父类（COS 结构体继承） |
 | `__construct(public $x)` 属性提升 | — |
 | Property Hook `public string $x { get => ...; set => ...; }` | PHP 8.4，编译为 getter/setter 方法 |
 | Pipe Operator `$x \|> f(...)` | PHP 8.4 RFC，纯语法糖 |
 | `__destruct` | 作用域结束自动调用 |
 | `__LINE__` `__FILE__` `__DIR__` `__CLASS__` `__METHOD__` `__FUNCTION__` `__NAMESPACE__` `DIRECTORY_SEPARATOR` | 编译期替换 |
 | `instanceof` | 遍历类链 |
+| `isset()` `empty()` | `isset()` 值类型编译期 `true`，指针运行时 NULL 检测；`empty()` 按类型分发（PHP falsy 语义） |
 | 数字字面量 `0x1F` `0b1010` `0o777` `1_000_000` | 十六/二/八进制 + 下划线分隔 |
 | 浮点字面量 `1e10` `1.5E-3` `3_14.15_92` | 科学计数法 + 下划线分隔 |
 | `<<<EOT ... EOT;` heredoc / `<<<'EOT' ... EOT;` nowdoc | 含 `$var` / `{$var->prop}` 插值 |
@@ -786,6 +802,11 @@ phpc_ptr_bridge:
 | `true`/`false`/`null` 字面量类型 | AOT 零性能收益；编译期验证成本高收益低；与现有 `?T` 不做的哲学冲突；纯文档性特性 |
 | `static` 返回类型 | AOT 无后期绑定，语义与 `self` 完全相同，多此一举 |
 | DNF/intersection 类型 `A&B` `(A&B)\|C` | 实现复杂（需接口 vtable 或 `t_var` 降级），收益有限，破坏类型固定优势 |
+| `??=` 空合并赋值 | 可用 `$a = $a ?? $b` 展开；AOT 下 `??` 仅对指针有意义 |
+| `clone` 关键字 | 需 `__clone` 动态分发；COS 对象无通用深拷贝 |
+| `declare(strict_types=1)` | TinyPHP 已是强类型 AOT，`declare` 无意义 |
+| `\u{XXXX}` Unicode 转义 | C 不支持 `\u{}` 语法；可用 `\xXX` 或直接嵌入 UTF-8 字符 |
+| 返回引用 `function &f()` | AOT 类型固定下无意义；COS 对象按指针传递已是引用 |
 
 > ⚠️ 定参 vs 可变参数的 `func_get_args()`：
 > - **定参函数**（`function f(int $a, string $b)`）：参数编译为独立 C 形参 `t_int a, t_string b`，没有统一容器 → `func_get_args()` **不可行**

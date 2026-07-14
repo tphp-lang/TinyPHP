@@ -41,7 +41,7 @@ PHP 中通过 `C->` 直接调用：
 
 class Main {
     public function main(): void {
-        var_dump(C->my_add(c_int(10), c_int(20));
+        var_dump(C->my_add(c_int(10), c_int(20)));
     }
 }
 ```
@@ -97,7 +97,7 @@ $ptr = C->maybe_returns_null();
 try {
     phpc_assert_ptr($ptr, "ptr_name");
     // 安全使用 $ptr
-} catch (\Throwable $e) {
+} catch (\Exception $e) {
     // 捕获 NULL 指针错误
 }
 
