@@ -12,6 +12,9 @@ declare(strict_types=1);
 //   tphp -f <file.php> [-o <output.exe>]
 // ============================================================
 
+/** TinyPHP 版本号 */
+const TPHP_VERSION = '0.2.0-beta.1';
+
 spl_autoload_register(function (string $class): void {
     $baseDir = __DIR__ . '/src';
     $parts = explode('\\', $class);
@@ -28,7 +31,7 @@ require_once __DIR__ . '/src/CodeGenerator.php';
 require_once __DIR__ . '/src/Compiler.php';
 
 // --- Parse arguments ---
-$options = getopt('f:o:h', ['help', 'os:', 'arch:', 'debug']);
+$options = getopt('f:o:hv', ['help', 'os:', 'arch:', 'debug', 'version']);
 $cc        = null;
 $targetOS  = null; // -os windows|linux|macos
 $targetArch = null; // -arch x86_64|aarch64
@@ -75,6 +78,11 @@ if ($targetOS !== null && $targetArch === null) {
 
 if (isset($options['f'])) {
     $args = array_merge([$options['f']], array_diff($args, [$options['f']]));
+}
+
+if (isset($options['version']) || isset($options['v'])) {
+    echo 'TinyPHP ' . TPHP_VERSION . "\n";
+    exit(0);
 }
 
 if ((empty($args) && !isset($options['f'])) || isset($options['h']) || isset($options['help'])) {
@@ -1153,13 +1161,14 @@ function extractPharDir(string $pharDir, string $destDir): void
 
 function showHelp(): never
 {
+    $ver = TPHP_VERSION;
     echo <<<HELP
   _____ _             ____  _   _ ____  
  |_   _(_)_ __  _   _|  _ \| | | |  _ \ 
    | | | | '_ \| | | | |_) | |_| | |_) |
    | | | | | | | |_| |  __/|  _  |  __/ 
    |_| |_|_| |_|\__, |_|   |_| |_|_|    
-                |___/                   
+                |___/                   v{$ver}
 
 Usage:
   tphp <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>] [-os <target>] [-arch <arch>]
@@ -1173,6 +1182,7 @@ Options:
   -arch <arch>      target architecture: x86_64, aarch64 (default: host)
   -shared           compile as shared library (.dll/.so/.dylib)
   --debug           print full compile command
+  -v, --version     show version and exit
   -h, --help        show help
 
 Examples:
