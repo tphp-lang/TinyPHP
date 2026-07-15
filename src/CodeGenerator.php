@@ -211,8 +211,8 @@ class CodeGenerator implements ASTVisitor
         'phpc_ptr_to_int' => 't_int', 'phpc_int_to_ptr' => 'null',
         // ── phpc 互操作 ──
         'c_int' => 't_int', 'php_int' => 't_int', 'c_float' => 't_float', 'php_float' => 't_float',
-        'c_str' => 't_string', 'php_str' => 't_string', 'php_str_ptr' => 't_string',
-        'c_void_ptr' => 'null',
+        'c_str' => 'const char*', 'php_str' => 't_string', 'php_str_ptr' => 't_string',
+        'c_void_ptr' => 'void*',
     ];
 
     /** 内置函数返回数组的元素类型注册表（替代 visitAssign 中的 switch-case） */
@@ -512,14 +512,8 @@ class CodeGenerator implements ASTVisitor
         $this->sectionLine(self::SEC_HEADER, '');
 
         // ── SEC_INCLUDES ──
-        $this->sectionLine(self::SEC_INCLUDES, '#include "common.h"');
-        if ($needZlib) {
-            $this->sectionLine(self::SEC_INCLUDES, '#include "os/zlib.h"');
-            $this->sectionLine(self::SEC_INCLUDES, '#include "os/zip.h"');
-        }
-        if ($needExtra) {
-            $this->sectionLine(self::SEC_INCLUDES, '#include "builtin_extra.h"');
-        }
+        // 用户 #include 的头文件放在 common.h 之前，以便处理符号冲突
+        // （例如 raylib_compat.h 需要在 windows.h 之前 #define 重命名 GDI 函数）
         foreach ($node->includes as $inc) {
             if (is_array($inc)) {
                 $delim = ($inc['quoted'] ?? true) ? '"' : '<';
@@ -528,6 +522,14 @@ class CodeGenerator implements ASTVisitor
             } else {
                 $this->sectionLine(self::SEC_INCLUDES, '#include "' . $inc . '"');
             }
+        }
+        $this->sectionLine(self::SEC_INCLUDES, '#include "common.h"');
+        if ($needZlib) {
+            $this->sectionLine(self::SEC_INCLUDES, '#include "os/zlib.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "os/zip.h"');
+        }
+        if ($needExtra) {
+            $this->sectionLine(self::SEC_INCLUDES, '#include "builtin_extra.h"');
         }
 
         // ── SEC_CONSTS ──

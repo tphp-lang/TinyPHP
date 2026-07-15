@@ -214,9 +214,11 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $filePath = realpath($files[$fi]);
         $fileDir = dirname($filePath);
         $src = preg_replace_callback(
-            '/^(#include\s+)(.+)$/m',
+            '/^(#include\s+)(?:(Windows|Linux|MacOS|Darwin|GCC|Clang|TCC)\s+)?(.+)$/mi',
             function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
-                $inc = $m[2];
+                $prefix = $m[2] ?? '';
+                $inc = $m[3];
+                $prefixPart = $prefix !== '' ? $m[2] . ' ' : '';
                 // Already quoted or system header → leave as-is
                 if (str_starts_with($inc, '"') || str_starts_with($inc, '<')) {
                     return $m[0];
@@ -233,13 +235,13 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 $inc = preg_replace('/\s*\.\s*"/', '/', $inc);
                 $inc = preg_replace('/"\s*\.\s*/', '', $inc);
                 $inc = trim($inc, '" ');
-                return $m[1] . '"' . $inc . '"';
+                return $m[1] . $prefixPart . '"' . $inc . '"';
             },
             (string)$src
         );
         // Preprocess: expand magic constants in #flag directives
         $src = preg_replace_callback(
-            '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/m',
+            '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/mi',
             function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
                 $prefix = $m[1];
                 $flags = $m[2];
@@ -248,9 +250,10 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 $flags = str_replace('__EXT__', $magicExt, $flags);
                 $flags = str_replace('__INC__', $magicInc, $flags);
                 $flags = str_replace('__CMD__', $magicCmd, $flags);
-                // Handle string concatenation: -I__EXT__ . "/foo/include" → -I__EXT__/foo/include
-                $flags = preg_replace('/\s*\.\s*"/', '', $flags);
-                $flags = preg_replace('/"\s*\.\s*/', '', $flags);
+                // Handle string concatenation: -I__DIR__ . "include" → -I__DIR__/include
+                // Replace . " with / (insert path separator, not empty string)
+                $flags = preg_replace('/\s*\.\s*"/', '/', $flags);
+                $flags = preg_replace('/"\s*\.\s*/', '/', $flags);
                 $flags = str_replace('"', '', $flags);  // remove remaining quotes
                 $flags = str_replace('\\', '/', $flags);
                 return $prefix . $flags;
@@ -313,9 +316,11 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         // Preprocess: expand magic constants in #include directives
         $fileDir = dirname(realpath($file));
         $source = preg_replace_callback(
-            '/^(#include\s+)(.+)$/m',
+            '/^(#include\s+)(?:(Windows|Linux|MacOS|Darwin|GCC|Clang|TCC)\s+)?(.+)$/mi',
             function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
-                $inc = $m[2];
+                $prefix = $m[2] ?? '';
+                $inc = $m[3];
+                $prefixPart = $prefix !== '' ? $m[2] . ' ' : '';
                 if (str_starts_with($inc, '"') || str_starts_with($inc, '<')) {
                     return $m[0];
                 }
@@ -329,13 +334,13 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 $inc = preg_replace('/\s*\.\s*"/', '/', $inc);
                 $inc = preg_replace('/"\s*\.\s*/', '', $inc);
                 $inc = trim($inc, '" ');
-                return $m[1] . '"' . $inc . '"';
+                return $m[1] . $prefixPart . '"' . $inc . '"';
             },
             (string)$source
         );
         // Preprocess: expand magic constants in #flag directives
         $source = preg_replace_callback(
-            '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/m',
+            '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/mi',
             function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
                 $prefix = $m[1];
                 $flags = $m[2];
@@ -343,9 +348,10 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 $flags = str_replace('__EXT__', $magicExt, $flags);
                 $flags = str_replace('__INC__', $magicInc, $flags);
                 $flags = str_replace('__CMD__', $magicCmd, $flags);
-                // Handle string concatenation: -I__EXT__ . "/foo/include" → -I__EXT__/foo/include
-                $flags = preg_replace('/\s*\.\s*"/', '', $flags);
-                $flags = preg_replace('/"\s*\.\s*/', '', $flags);
+                // Handle string concatenation: -I__DIR__ . "include" → -I__DIR__/include
+                // Replace . " with / (insert path separator, not empty string)
+                $flags = preg_replace('/\s*\.\s*"/', '/', $flags);
+                $flags = preg_replace('/"\s*\.\s*/', '/', $flags);
                 $flags = str_replace('"', '', $flags);
                 $flags = str_replace('\\', '/', $flags);
                 return $prefix . $flags;
@@ -425,12 +431,14 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         // Platform/compiler filtering (#include Linux "x.h" / #include Windows "y.h")
         if (is_array($inc) && !empty($inc['ctx'])) {
             $ctx = $inc['ctx'];
-            $platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin'];
+            // Case-insensitive platform matching (accept windows/linux/macos/darwin lowercase)
+            $platformMap = ['windows' => 'Windows', 'linux' => 'Linux', 'darwin' => 'Darwin', 'macos' => 'Darwin'];
+            $ctxLower = strtolower($ctx);
             $currentOS = PHP_OS_FAMILY;
             // OS filter
-            if (isset($platformMap[$ctx]) && $platformMap[$ctx] !== $currentOS) return false;
+            if (isset($platformMap[$ctxLower]) && $platformMap[$ctxLower] !== $currentOS) return false;
             // Compiler filter (TCC/GCC/Clang)
-            if (!isset($platformMap[$ctx])) {
+            if (!isset($platformMap[$ctxLower])) {
                 $ccLower = strtolower($GLOBALS['cc'] ?? 'tcc');
                 $ccClass = 'TCC';
                 if (str_contains($ccLower, 'gcc')) $ccClass = 'GCC';
@@ -463,10 +471,60 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $srcDirs = array_keys($srcDirs);
         $extraFlags = ' -I"' . implode('" -I"', $srcDirs) . '"';
 
+        // Extract -I paths from #flag directives (for #include search + security check)
+        // __DIR__/__EXT__/__INC__/__CMD__ already expanded in prescan/parsing phase
+        $flagIncludeDirs = [];
+        $_platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin'];
+        $_currentOS = PHP_OS_FAMILY;
+        $_ccClass = 'TCC';
+        if ($cc !== null) {
+            $_ccLower = strtolower($cc);
+            if (str_contains($_ccLower, 'gcc')) $_ccClass = 'GCC';
+            elseif (str_contains($_ccLower, 'clang')) $_ccClass = 'Clang';
+        } elseif (PHP_OS_FAMILY === 'Darwin') {
+            $_ccClass = 'Clang';
+        }
+        foreach ($allFlags as $f) {
+            $pf = $f['platform'] ?? '';
+            $cf = $f['compiler'] ?? '';
+            $flagsStr = $f['flags'] ?? '';
+            $platformOk = ($pf === '' || ($_platformMap[$pf] ?? '') === $_currentOS);
+            $compilerOk = ($cf === '' || $cf === $_ccClass);
+            if (!$platformOk || !$compilerOk) continue;
+            // Extract -I paths (flagsStr already has __DIR__ expanded)
+            $_tokens = preg_split('/\s+/', trim($flagsStr));
+            foreach ($_tokens as $tok) {
+                if (str_starts_with($tok, '-I') && strlen($tok) > 2) {
+                    $path = substr($tok, 2);
+                    // Strip surrounding quotes
+                    $path = trim($path, '"');
+                    $resolved = realpath($path);
+                    if ($resolved !== false) {
+                        $flagIncludeDirs[$resolved] = true;
+                    }
+                }
+            }
+        }
+        $flagIncludeDirs = array_keys($flagIncludeDirs);
+
+        // All search directories: srcDirs + -I paths from #flag
+        $allSearchDirs = array_merge($srcDirs, $flagIncludeDirs);
+
         // Find companion .c files for each #include
         $projectRoot = str_replace('\\', '/', __DIR__);
         // PHAR 模式：解压到文件系统的 ext/ 不在 phar:// 路径下，需额外接受 PHAR 外部根
         $fsProjectRoot = $inPhar ? str_replace('\\', '/', $pharDir) : $projectRoot;
+        // Allowed roots for security check:
+        //   - TinyPHP project root (built-in includes)
+        //   - PHAR fs root
+        //   - User source directories (where PHP files are)
+        //   - -I paths declared via #flag (user explicitly opted in)
+        //   - CWD (user's project root)
+        $allowedRoots = [$projectRoot, $fsProjectRoot];
+        foreach ($allSearchDirs as $dir) {
+            $allowedRoots[] = str_replace('\\', '/', $dir);
+        }
+        $allowedRoots[] = str_replace('\\', '/', realpath($cwd) ?: $cwd);
         foreach ($allIncludes as $inc) {
             $fileName = is_array($inc) ? $inc['file'] : $inc;
             $isQuoted = is_array($inc) ? ($inc['quoted'] ?? true) : true;
@@ -505,24 +563,31 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 }
                 continue;
             }
-            // Security: resolve via realpath, verify within project root (or PHAR fs root)
+            // Security: resolve via realpath, verify within allowed roots
             $resolvedInclude = null;
+            // Helper: check if a candidate path is within any allowed root
+            $isAllowed = function (string $candidate) use ($allowedRoots): bool {
+                foreach ($allowedRoots as $root) {
+                    if (str_starts_with($candidate, $root)) return true;
+                }
+                return false;
+            };
             // Absolute path (from __INC__/__EXT__/__CMD__ expansion): resolve directly
             if (str_starts_with($fileName, '/') || preg_match('/^[A-Za-z]:/', $fileName)) {
                 $raw = realpath($fileName);
                 if ($raw !== false) {
                     $candidate = str_replace('\\', '/', $raw);
-                    if (str_starts_with($candidate, $projectRoot) || str_starts_with($candidate, $fsProjectRoot)) {
+                    if ($isAllowed($candidate)) {
                         $resolvedInclude = $candidate;
                     }
                 }
             } else {
-                // Relative path: resolve against source directories
-                foreach ($srcDirs as $dir) {
+                // Relative path: resolve against source dirs + -I paths from #flag
+                foreach ($allSearchDirs as $dir) {
                     $raw = realpath($dir . DIRECTORY_SEPARATOR . $fileName);
                     if ($raw === false) continue;
                     $candidate = str_replace('\\', '/', $raw);
-                    if (str_starts_with($candidate, $projectRoot) || str_starts_with($candidate, $fsProjectRoot)) {
+                    if ($isAllowed($candidate)) {
                         $resolvedInclude = $candidate;
                         break;
                     }
@@ -530,10 +595,12 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             }
             if ($resolvedInclude === null) {
                 die("Error: #include '{$fileName}' resolves outside the project or does not exist\n"
-                  . "  Project root: {$projectRoot}\n");
+                  . "  Project root: {$projectRoot}\n"
+                  . "  Search dirs: " . implode(', ', $allSearchDirs) . "\n"
+                  . "  Hint: use #flag -I__DIR__. \"your/include/path\" to add include search paths\n");
             }
             $baseName = basename($resolvedInclude, '.h');
-            foreach ($srcDirs as $dir) {
+            foreach ($allSearchDirs as $dir) {
                 $cSrc = $dir . DIRECTORY_SEPARATOR . $baseName . '.c';
                 if (file_exists($cSrc)) {
                     $extraCFiles[] = $cSrc;
@@ -563,9 +630,10 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $allowedFlagPrefixes = [
             '-I', '-L', '-l', '-D', '-U',
             '-O0', '-O1', '-O2', '-O3', '-Os', '-Og', '-Ofast',
-            '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-W',
+            '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-W', '-w',
             '-std', '-m', '-f', '-g', '-pthread', '-static', '-shared',
             '-B',  // TCC library path
+            '-include',  // force-include header before other processing (GCC/Clang/TCC)
         ];
         foreach ($allFlags as $f) {
             $pf = $f['platform'] ?? '';
@@ -595,6 +663,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 if ($tok === '' || $tok === '-') continue;
                 // Non-flag values (file paths, raw numbers) — always allowed
                 if (!str_starts_with($tok, '-')) {
+                    $extraFlags .= ' ' . $tok;
                     continue;
                 }
                 // Check against whitelist
@@ -830,6 +899,23 @@ if (PHP_OS_FAMILY !== 'Windows' && ($targetOS === null || $targetOS !== 'windows
 if ($targetOS === 'darwin' || ($targetOS === null && PHP_OS_FAMILY === 'Darwin')) {
     $linkFlags .= ' -liconv';
 }
+
+// Windows 命令行长度限制（cmd.exe 8191, CreateProcess 32767）
+// 当源文件众多（如内置 zlib 15 个 .c + 扩展 .c + 用户 .c）时，命令行会超限。
+// 使用 response file (@file) 机制：把源文件列表写入临时文件，用 @file 引用。
+// TCC/GCC/Clang 均支持 @file 语法。
+$responseFile = '';
+if (PHP_OS_FAMILY === 'Windows' && strlen($extraSrcs) > 4000) {
+    $respDir = $outDir;
+    if (!is_dir($respDir)) @mkdir($respDir, 0777, true);
+    $responseFile = $respDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '_rsp.txt';
+    $respLines = [];
+    foreach ($allCFiles as $cf) {
+        $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cf) . '"';
+    }
+    file_put_contents($responseFile, implode("\n", $respLines));
+    $extraSrcs = ' @"' . $responseFile . '"';
+}
 // zlib/zip: 检测生成的 C 代码是否使用了 zlib（CodeGenerator 条件引入 os/zlib.h）
 // 策略：统一使用内置 zlib 源码（include/os/zlib_src/）静态编译，无需外部 -lz 或 zlib1.dll。
 // 这确保所有平台/编译器组合（包括纯 TCC 环境）都能使用 zlib/zip 扩展，零运行时依赖。
@@ -939,7 +1025,24 @@ if ($retval !== 0 || !file_exists($outExe) || filesize($outExe) < 64) {
                     if ($tok === '' || str_starts_with($tok, '-l') || str_starts_with($tok, '-L')) continue;
                     $newLateLink .= ' ' . $tok;
                 }
+                // 构建新的源文件列表（原 extraSrcs + .obj 文件）
+                // 注意：如果原 extraSrcs 已是 @responseFile，则保持不变，只追加 .obj
                 $newExtraSrcs = $extraSrcs . ' "' . implode('" "', $allObjs) . '"';
+                // Windows 命令行长度限制：fallback 路径同样可能超限，使用 response file
+                $fallbackRespFile = '';
+                if (PHP_OS_FAMILY === 'Windows' && strlen($newExtraSrcs) > 4000) {
+                    $fallbackRespFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '_rsp2.txt';
+                    $respLines = [];
+                    // 写入所有源文件（allCFiles + allObjs）
+                    foreach ($allCFiles as $cf) {
+                        $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cf) . '"';
+                    }
+                    foreach ($allObjs as $obj) {
+                        $respLines[] = '"' . $obj . '"';
+                    }
+                    file_put_contents($fallbackRespFile, implode("\n", $respLines));
+                    $newExtraSrcs = ' @"' . $fallbackRespFile . '"';
+                }
                 $cmd2 = sprintf(
                     '"%s" %s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
                     $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $newExtraSrcs, $newLateLink
