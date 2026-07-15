@@ -459,7 +459,17 @@ typedef uLong FAR uLongf;
 
 #if defined(STDC) || defined(Z_HAVE_STDARG_H)
 #  ifndef Z_SOLO
-#    include <stdarg.h>         /* for va_list */
+/* [TinyPHP 适配] TCC macOS 包缺失 <stdarg.h>, 用编译器内置替代。
+   Windows/Linux 的 TCC 发行版自带 stdarg.h, 走原路径。 */
+#    if defined(__TINYC__) && defined(__APPLE__)
+       typedef __builtin_va_list va_list;
+#      define va_start(ap, last) __builtin_va_start(ap, last)
+#      define va_arg(ap, type)   __builtin_va_arg(ap, type)
+#      define va_end(ap)         __builtin_va_end(ap)
+#      define va_copy(ap1, ap2)  __builtin_va_copy(ap1, ap2)
+#    else
+#      include <stdarg.h>         /* for va_list */
+#    endif
 #  endif
 #endif
 
