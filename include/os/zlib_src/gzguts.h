@@ -49,6 +49,11 @@
 #if defined(__TURBOC__) || defined(_MSC_VER) || defined(_WIN32)
 #  include <io.h>
 #  include <sys/stat.h>
+#else
+/* [TinyPHP 适配] POSIX 平台显式包含 unistd.h, 避免在 TCC 严格模式下
+   read/write/close/lseek 被隐式声明 */
+#  include <unistd.h>
+#  include <sys/stat.h>
 #endif
 
 #if defined(_WIN32) && !defined(WIDECHAR)

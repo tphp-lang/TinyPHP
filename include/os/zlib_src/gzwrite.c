@@ -397,7 +397,10 @@ local int gz_vacate(gz_statep state) {
 #endif
 
 #if defined(STDC) || defined(Z_HAVE_STDARG_H)
-#include <stdarg.h>
+/* [TinyPHP 适配] TCC macOS 缺失 stdarg.h, zconf.h 已用 __builtin_va_* 替代 */
+#  if !(defined(__TINYC__) && defined(__APPLE__))
+#    include <stdarg.h>
+#  endif
 
 /* -- see zlib.h -- */
 int ZEXPORTVA gzvprintf(gzFile file, const char *format, va_list va) {
