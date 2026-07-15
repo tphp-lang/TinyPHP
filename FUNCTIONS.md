@@ -974,6 +974,267 @@ static inline t_string tphp_fn_finfo_file(tphp_class_Resource* finfo, t_string f
 
 ---
 
+## zlib — 压缩/解压（gzip/zlib/deflate）
+
+> 文件: `include/os/zlib.h`。依赖系统 zlib 库。编译器自动检测使用并链接（Linux/macOS: `-lz`，Windows+TCC: 直接链接 `zlib1.dll`，Windows+GCC/Clang: `-lz`）。
+>
+> 对标 PHP `ext/zlib`。错误统一抛 `Exception`（可 try-catch），不返回 `false`，符合 AOT 单返回类型契约。
+
+### 常量
+
+#### 编码格式
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZLIB_ENCODING_RAW` | -15 | 原始 DEFLATE（无头无校验，RFC 1951）|
+| `ZLIB_ENCODING_GZIP` | 31 | gzip 格式（RFC 1952）|
+| `ZLIB_ENCODING_DEFLATE` | 15 | zlib 格式（RFC 1950）|
+| `FORCE_GZIP` | 31 | `ZLIB_ENCODING_GZIP` 别名 |
+| `FORCE_DEFLATE` | 15 | `ZLIB_ENCODING_DEFLATE` 别名 |
+
+#### 压缩级别
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZLIB_NO_COMPRESSION` | 0 | 不压缩 |
+| `ZLIB_BEST_SPEED` | 1 | 最快速度 |
+| `ZLIB_BEST_COMPRESSION` | 9 | 最小体积 |
+| `ZLIB_DEFAULT_COMPRESSION` | -1 | 默认（zlib 默认级别=6）|
+
+#### flush 模式（增量上下文）
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZLIB_NO_FLUSH` | 0 | 不刷新 |
+| `ZLIB_PARTIAL_FLUSH` | 1 | 部分刷新 |
+| `ZLIB_SYNC_FLUSH` | 2 | 同步刷新（`deflate_add`/`inflate_add` 默认）|
+| `ZLIB_FULL_FLUSH` | 3 | 完全刷新 |
+| `ZLIB_FINISH` | 4 | 结束输入（`ZLIB_FINISH` = 4）|
+| `ZLIB_BLOCK` | 5 | 块模式 |
+
+#### 压缩策略
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZLIB_FILTERED` | 1 | 过滤策略 |
+| `ZLIB_HUFFMAN_ONLY` | 2 | 仅 Huffman |
+| `ZLIB_RLE` | 3 | RLE 策略 |
+| `ZLIB_FIXED` | 4 | 固定 Huffman |
+| `ZLIB_DEFAULT_STRATEGY` | 0 | 默认策略 |
+
+#### 状态码
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZLIB_OK` | 0 | 成功 |
+| `ZLIB_STREAM_END` | 1 | 流结束 |
+| `ZLIB_NEED_DICT` | 2 | 需要字典 |
+| `ZLIB_ERRNO` | -1 | 系统错误 |
+| `ZLIB_STREAM_ERROR` | -2 | 流错误 |
+| `ZLIB_DATA_ERROR` | -3 | 数据错误 |
+| `ZLIB_MEM_ERROR` | -4 | 内存错误 |
+| `ZLIB_BUF_ERROR` | -5 | 缓冲区错误 |
+| `ZLIB_VERSION_ERROR` | -6 | 版本不兼容 |
+
+#### 其他
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZLIB_VERSION` | "1.3.2" | zlib 版本字符串 |
+| `ZLIB_VERNUM` | 0x1320 | zlib 版本号 |
+
+### 函数
+
+#### 基础压缩/解压
+
+| 函数 | 默认格式 | 说明 |
+|------|---------|------|
+| `gzcompress(string $data, int $level = -1, int $encoding = ZLIB_ENCODING_DEFLATE): string` | zlib | 压缩字符串 |
+| `gzuncompress(string $data, int $max_length = 0, int $encoding = ZLIB_ENCODING_DEFLATE): string` | zlib | 解压 gzcompress 输出 |
+| `gzencode(string $data, int $level = -1, int $encoding = ZLIB_ENCODING_GZIP): string` | gzip | 创建 gzip 压缩数据 |
+| `gzdecode(string $data, int $max_length = 0): string` | auto | 解码 gzip 数据（自动检测格式）|
+| `gzdeflate(string $data, int $level = -1, int $encoding = ZLIB_ENCODING_RAW): string` | raw | 原始 DEFLATE 压缩 |
+| `gzinflate(string $data, int $max_length = 0): string` | raw | 解压原始 DEFLATE 数据 |
+| `zlib_encode(string $data, int $encoding, int $level = -1): string` | 由 $encoding 指定 | 通用编码（与 `gzdeflate`/`gzcompress`/`gzencode` 等价的统一接口）|
+| `zlib_decode(string $data, int $max_length = 0): string` | auto | 通用解码（自动检测 zlib/gzip 格式，不支持 raw）|
+
+> `$level`: -1（默认）~ 9。`$max_length`: 0=无限制，>0=限制最大输出。失败时抛 `Exception`（可 try-catch），不返回 false。
+
+#### gz 文件流 API
+
+> gzFile 封装为 `Resource`，通过 `tphp_rt_register_resource_type` 注册析构回调，作用域结束自动 `gzclose`。
+
+| 函数 | 返回 | 说明 |
+|------|------|------|
+| `gzopen(string $filename, string $mode): Resource` | Resource | 打开 gz 文件（mode 同 fopen，可附加压缩级别如 "wb9"）|
+| `gzclose(Resource $stream): bool` | bool | 关闭 gz 文件 |
+| `gzread(Resource $stream, int $length): string` | string | 读取指定长度（最多 length 字节）|
+| `gzwrite(Resource $stream, string $data, int $length = 0): int` | int | 写入数据（0=写入全部），返回写入字节数 |
+| `gzputs(Resource $stream, string $data, int $length = 0): int` | int | `gzwrite` 别名 |
+| `gzeof(Resource $stream): bool` | bool | 是否到达文件尾（注意：仅在读取超出末尾后才返回 true）|
+| `gzgets(Resource $stream, int $length = 0): string` | string | 读取一行（0=缓冲区大小）|
+| `gzgetc(Resource $stream): string` | string | 读取单个字符 |
+| `gzrewind(Resource $stream): bool` | bool | 重置到文件开头 |
+| `gzseek(Resource $stream, int $offset, int $whence = SEEK_SET): int` | int | 定位（whence: 0=SEEK_SET, 1=SEEK_CUR），返回新位置 |
+| `gztell(Resource $stream): int` | int | 返回当前位置 |
+| `gzpassthru(Resource $stream): int` | int | 读取剩余数据并输出到 stdout，返回输出字节数 |
+| `gzflush(Resource $stream, int $flush = ZLIB_SYNC_FLUSH): bool` | bool | 刷新输出缓冲区 |
+| `gzfile(string $filename): array` | array<string> | 读取整个 gz 文件到数组（每行一个元素）|
+| `readgzfile(string $filename): int` | int | 读取整个 gz 文件并输出到 stdout，返回输出字节数 |
+
+#### 增量上下文 API（流式压缩/解压）
+
+> 上下文封装为 `Resource`，支持分块输入。`ZLIB_FINISH` 表示输入结束。
+
+| 函数 | 返回 | 说明 |
+|------|------|------|
+| `deflate_init(int $encoding, int $level = -1): Resource` | Resource | 创建压缩上下文（encoding: RAW/DEFLATE/GZIP）|
+| `deflate_add(Resource $context, string $data, int $flush_mode = ZLIB_SYNC_FLUSH): string` | string | 增量压缩数据块 |
+| `inflate_init(int $encoding): Resource` | Resource | 创建解压上下文（encoding: RAW/DEFLATE/GZIP/0=自动检测）|
+| `inflate_add(Resource $context, string $data, int $flush_mode = ZLIB_SYNC_FLUSH): string` | string | 增量解压数据块 |
+| `inflate_get_status(Resource $context): int` | int | 返回 zlib 状态码（如 `ZLIB_STREAM_END`=1 表示流结束）|
+| `inflate_get_read_len(Resource $context): int` | int | 返回已解压的总字节数 |
+
+### 用法
+
+```php
+$data = str_repeat("hello world ", 100);
+
+// 基础压缩/解压
+$compressed = gzcompress($data);         // zlib 格式
+$restored = gzuncompress($compressed);   // 解压
+var_dump(strlen($compressed) < strlen($data));  // true
+
+$gz = gzencode($data);                   // gzip 格式
+var_dump(gzdecode($gz) === $data);       // true
+
+// zlib_encode / zlib_decode 通用接口
+$enc = zlib_encode($data, ZLIB_ENCODING_GZIP);
+$dec = zlib_decode($enc);
+var_dump($dec === $data);                // true
+
+// gz 文件流
+$fp = gzopen("file.gz", "wb");
+gzwrite($fp, $data);
+gzclose($fp);
+
+$fp = gzopen("file.gz", "rb");
+$content = gzread($fp, 1024);
+gzclose($fp);
+
+// 增量上下文
+$ctx = deflate_init(ZLIB_ENCODING_GZIP);
+$c1 = deflate_add($ctx, "hello ", ZLIB_NO_FLUSH);
+$c2 = deflate_add($ctx, "world", ZLIB_FINISH);
+
+$ictx = inflate_init(ZLIB_ENCODING_GZIP);
+$d1 = inflate_add($ictx, $c1, ZLIB_NO_FLUSH);
+$d2 = inflate_add($ictx, $c2, ZLIB_FINISH);
+echo $d1 . $d2;  // "hello world"
+```
+
+> 测试: `test/zlib/basic.php`（9 项：三种格式往返 + 压缩级别 + gz 文件读写 + seek/tell/rewind + gzpassthru + gzfile/readgzfile + 增量上下文 + 错误处理）全部通过。
+
+---
+
+## zip — ZIP 归档读写
+
+> 文件: `include/os/zip.h`。依赖系统 zlib 库。手写 ZIP 容器格式（本地文件头/中央目录/EOCD），DEFLATE 压缩复用 zlib。ZipArchive 作为 `Resource` 子类。
+>
+> 对标 PHP `ext/zip`。错误统一抛 `Exception`（可 try-catch），不返回 `false`，符合 AOT 单返回类型契约。
+>
+> **限制**：不支持修改已有归档（`zip_delete`/`zip_rename` 会抛异常，建议创建新归档替代）。
+
+### 常量
+
+#### 打开模式
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZIP_CREATE` | 1 | 创建新文件（不存在时创建）|
+| `ZIP_EXCL` | 2 | 排他创建（存在则失败）|
+| `ZIP_CHECKCONS` | 4 | 检查一致性 |
+| `ZIP_TRUNCATE` | 8 | 截断（若存在则覆盖）|
+| `ZIP_RDONLY` | 16 | 只读 |
+
+#### 标志位
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZIP_FL_OVERWRITE` | 1 | 覆盖现有文件 |
+| `ZIP_FL_NOCASE` | 2 | 不区分大小写 |
+| `ZIP_FL_NODIR` | 4 | 不为目录创建条目 |
+| `ZIP_FL_COMPRESSED` | 8 | 读取压缩数据 |
+| `ZIP_FL_UNCHANGED` | 16 | 使用原始数据 |
+
+#### 压缩方法
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `ZIP_CM_DEFAULT` | -1 | 默认压缩方法 |
+| `ZIP_CM_STORE` | 0 | 不压缩（Stored）|
+| `ZIP_CM_DEFLATE` | 8 | DEFLATE 压缩 |
+
+### 函数
+
+#### 归档操作
+
+| 函数 | 返回 | 说明 |
+|------|------|------|
+| `zip_open(string $filename, int $flags = 0): Resource` | Resource | 打开/创建 ZIP（返回 Resource）|
+| `zip_close(Resource $zip): bool` | bool | 关闭归档（写入模式刷盘）|
+| `zip_num_files(Resource $zip): int` | int | 返回文件总数 |
+| `zip_get_error_string(Resource $zip): string` | string | 返回最后错误描述 |
+| `zip_locate(Resource $zip, string $name): int` | int | 按名查找条目索引（未找到返回 -1）|
+
+#### 条目信息查询
+
+| 函数 | 返回 | 说明 |
+|------|------|------|
+| `zip_read(Resource $zip): array` | array | 返回所有条目列表（每项含 name/index/size/comp_size/comp_method/mtime）|
+| `zip_stat(Resource $zip, int $index): array` | array | 获取单个条目信息（同 zip_read 单项结构）|
+| `zip_entry_name(Resource $zip, int $index): string` | string | 返回条目名 |
+| `zip_entry_filesize(Resource $zip, int $index): int` | int | 返回条目原始大小 |
+| `zip_entry_compressedsize(Resource $zip, int $index): int` | int | 返回条目压缩后大小 |
+| `zip_entry_compressionmethod(Resource $zip, int $index): string` | string | 返回压缩方法名（"Stored"/"Deflated"）|
+
+#### 条目读写
+
+| 函数 | 返回 | 说明 |
+|------|------|------|
+| `zip_entry_open(Resource $zip, int $index): bool` | bool | 打开条目准备读取 |
+| `zip_entry_read(Resource $zip, int $index, int $length = 0): string` | string | 读取条目内容（0=全部）|
+| `zip_entry_close(Resource $zip): bool` | bool | 关闭当前条目 |
+| `zip_add_file(Resource $zip, string $name, string $data, int $flags = 0, int $comp_method = ZIP_CM_DEFLATE): bool` | bool | 添加文件 |
+| `zip_add_dir(Resource $zip, string $dirname, int $flags = 0): bool` | bool | 添加目录（以 / 结尾）|
+| `zip_delete(Resource $zip, int $index): bool` | bool | 删除条目（**不支持修改已有归档，抛异常**）|
+| `zip_rename(Resource $zip, int $index, string $new_name): bool` | bool | 重命名条目（**不支持修改已有归档，抛异常**）|
+
+### 用法
+
+```php
+// 创建 ZIP
+$zip = zip_open("archive.zip", ZIP_CREATE);
+zip_add_file($zip, "hello.txt", "hello world");
+zip_add_file($zip, "data/config.json", '{"key":"value"}');
+zip_add_dir($zip, "logs/");
+zip_close($zip);
+
+// 读取 ZIP
+$zip2 = zip_open("archive.zip");
+echo zip_num_files($zip2);           // 3
+echo zip_entry_name($zip2, 0);       // "hello.txt"
+echo zip_entry_filesize($zip2, 0);   // 11
+echo zip_entry_compressionmethod($zip2, 0);  // "Deflated"
+$idx = zip_locate($zip2, "hello.txt");  // 0
+$content = zip_entry_read($zip2, 0); // "hello world"
+zip_close($zip2);
+```
+
+> 测试: `test/zip/basic.php`（9 项：创建 ZIP + 条目名 + 条目大小 + 压缩方法 + 压缩后大小 + zip_locate + zip_entry_read + zip_stat + 错误处理）全部通过。
+
+---
+
 ## 异常
 
 > 文件: `object/try.h`

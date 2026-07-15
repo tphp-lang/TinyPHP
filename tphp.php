@@ -830,6 +830,27 @@ if (PHP_OS_FAMILY !== 'Windows' && ($targetOS === null || $targetOS !== 'windows
 if ($targetOS === 'darwin' || ($targetOS === null && PHP_OS_FAMILY === 'Darwin')) {
     $linkFlags .= ' -liconv';
 }
+// zlib/zip: 检测生成的 C 代码是否使用了 zlib（CodeGenerator 条件引入 os/zlib.h）
+// 策略：统一使用内置 zlib 源码（include/os/zlib_src/）静态编译，无需外部 -lz 或 zlib1.dll。
+// 这确保所有平台/编译器组合（包括纯 TCC 环境）都能使用 zlib/zip 扩展，零运行时依赖。
+$zlibSrcDir = $includeDir . DIRECTORY_SEPARATOR . 'os' . DIRECTORY_SEPARATOR . 'zlib_src';
+if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "os/zlib.h"') !== false
+    && is_dir($zlibSrcDir)) {
+    // 将 zlib 源码 .c 文件加入编译列表（静态链接）
+    $zlibSrcFiles = [
+        'adler32.c', 'compress.c', 'crc32.c', 'deflate.c', 'gzclose.c',
+        'gzlib.c', 'gzread.c', 'gzwrite.c', 'infback.c', 'inffast.c',
+        'inflate.c', 'inftrees.c', 'trees.c', 'uncompr.c', 'zutil.c',
+    ];
+    foreach ($zlibSrcFiles as $src) {
+        $srcPath = $zlibSrcDir . DIRECTORY_SEPARATOR . $src;
+        if (is_file($srcPath)) {
+            $allCFiles[] = $srcPath;
+        }
+    }
+    // 重建 extraSrcs（包含新增的 zlib 源码）
+    $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
+}
 // -shared 模式：生成动态库
 $sharedFlag = $isShared ? ' -shared' : '';
 $cmd = sprintf(

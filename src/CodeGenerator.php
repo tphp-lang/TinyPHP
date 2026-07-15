@@ -108,6 +108,13 @@ class CodeGenerator implements ASTVisitor
         'array_key_first' => 't_int', 'array_key_last' => 't_int', 'strtotime' => 't_int', 'mktime' => 't_int',
         'substr_count' => 't_int', 'crc32' => 't_int', 'preg_last_error' => 't_int',
         'iconv_strlen' => 't_int', 'iconv_strpos' => 't_int',
+        'zip_num_files' => 't_int',
+        // ── zlib gz/增量 API int 返回 ──
+        'gzwrite' => 't_int', 'gzputs' => 't_int', 'gzseek' => 't_int',
+        'gztell' => 't_int', 'gzpassthru' => 't_int', 'readgzfile' => 't_int',
+        'inflate_get_status' => 't_int', 'inflate_get_read_len' => 't_int',
+        // ── zip 新增 int 返回 ──
+        'zip_entry_filesize' => 't_int', 'zip_entry_compressedsize' => 't_int', 'zip_locate' => 't_int',
         // ── t_string ──
         'date' => 't_string', 'implode' => 't_string', 'join' => 't_string', 'json_encode' => 't_string',
         'htmlspecialchars' => 't_string', 'nl2br' => 't_string', 'base64_encode' => 't_string',
@@ -130,6 +137,17 @@ class CodeGenerator implements ASTVisitor
         // ── fileinfo (内置) ──
         'finfo_file' => 't_string', 'finfo_buffer' => 't_string',
         'mime_content_type' => 't_string',
+        // ── zlib (gzip) 压缩/解压 ──
+        'gzcompress' => 't_string', 'gzuncompress' => 't_string',
+        'gzencode' => 't_string', 'gzdecode' => 't_string',
+        'gzdeflate' => 't_string', 'gzinflate' => 't_string',
+        // ── zlib encode/decode 别名 + gz 文件流 + 增量上下文 string 返回 ──
+        'zlib_encode' => 't_string', 'zlib_decode' => 't_string',
+        'gzread' => 't_string', 'gzgets' => 't_string', 'gzgetc' => 't_string',
+        'deflate_add' => 't_string', 'inflate_add' => 't_string',
+        // ── zip 字符串返回 ──
+        'zip_entry_read' => 't_string', 'zip_get_error_string' => 't_string',
+        'zip_entry_name' => 't_string', 'zip_entry_compressionmethod' => 't_string',
         // ── t_bool ──
         'shuffle' => 't_bool', 'json_validate' => 't_bool', 'password_verify' => 't_bool',
         'in_array' => 't_bool', 'array_key_exists' => 't_bool', 'str_contains' => 't_bool',
@@ -137,6 +155,13 @@ class CodeGenerator implements ASTVisitor
         'array_is_list' => 't_bool', 'file_put_contents' => 't_bool', 'unlink' => 't_bool',
         'iconv_set_encoding' => 't_bool',
         'finfo_set_flags' => 't_bool',
+        // ── zip bool 返回 ──
+        'zip_close' => 't_bool', 'zip_entry_open' => 't_bool', 'zip_entry_close' => 't_bool',
+        'zip_add_file' => 't_bool', 'zip_add_dir' => 't_bool',
+        'zip_delete' => 't_bool', 'zip_rename' => 't_bool',
+        // ── zlib gz bool 返回 ──
+        'gzclose' => 't_bool', 'gzeof' => 't_bool',
+        'gzrewind' => 't_bool', 'gzflush' => 't_bool',
         // ── t_float ──
         'sin' => 't_float', 'cos' => 't_float', 'tan' => 't_float', 'asin' => 't_float', 'acos' => 't_float',
         'atan' => 't_float', 'exp' => 't_float', 'log' => 't_float', 'log10' => 't_float', 'fmod' => 't_float',
@@ -153,6 +178,10 @@ class CodeGenerator implements ASTVisitor
         'parse_str' => 't_array*', 'preg_match' => 't_array*', 'preg_match_all' => 't_array*',
         'preg_split' => 't_array*', 'preg_grep' => 't_array*',
         'iconv_get_encoding' => 't_array*',
+        // ── zip 数组返回 ──
+        'zip_read' => 't_array*', 'zip_stat' => 't_array*',
+        // ── zlib gz 数组返回 ──
+        'gzfile' => 't_array*',
         'phpc_new_arr_int' => 't_array*', 'phpc_new_arr_dbl' => 't_array*',
         'phpc_new_arr_str' => 't_array*', 'phpc_new_arr' => 't_array*',
         // ── t_var ──
@@ -169,6 +198,10 @@ class CodeGenerator implements ASTVisitor
         // ── t_object / t_callback / null (指针/无返回) ──
         'phpc_new_obj' => 't_object',
         'finfo_open' => 'tphp_class_Resource*',
+        'zip_open' => 'tphp_class_Resource*',
+        // ── zlib Resource 返回（gz 文件流 + 增量上下文）──
+        'gzopen' => 'tphp_class_Resource*',
+        'deflate_init' => 'tphp_class_Resource*', 'inflate_init' => 'tphp_class_Resource*',
         'phpc_new_fn' => 't_callback', 'phpc_new_fn_env' => 't_callback',
         'phpc_arr_int' => 'null', 'phpc_arr_dbl' => 'null', 'phpc_arr_str' => 'null', 'phpc_obj' => 'null',
         'phpc_fn' => 'null', 'phpc_env' => 'null', 'phpc_fn_i32' => 'null', 'phpc_fn_i64' => 'null', 'phpc_fn_f64' => 'null',
@@ -187,6 +220,7 @@ class CodeGenerator implements ASTVisitor
         'array_keys' => 't_int', 'array_values' => 't_int', 'array_merge' => 't_int',
         'explode' => 't_string', 'preg_match' => 't_string', 'preg_split' => 't_string',
         'preg_grep' => 't_string', 'filter_list' => 't_string',
+        'gzfile' => 't_string',
     ];
 
     /**
@@ -302,6 +336,59 @@ class CodeGenerator implements ASTVisitor
         'iconv_mime_decode'  => ['cName' => 'tphp_fn_iconv_mime_decode', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '0', 2 => 'STR_LIT("UTF-8")']],
         // ── 六参 direct（固定）──
         'mktime'             => ['cName' => 'tphp_fn_mktime', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct', 'direct']],
+        // ── zlib (gzip) 压缩/解压（依赖系统 zlib -lz）──
+        'gzcompress'         => ['cName' => 'tphp_fn_gzcompress', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '15']],
+        'gzuncompress'       => ['cName' => 'tphp_fn_gzuncompress', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '0', 2 => '15']],
+        'gzencode'           => ['cName' => 'tphp_fn_gzencode', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '31']],
+        'gzdecode'           => ['cName' => 'tphp_fn_gzdecode', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '0']],
+        'gzdeflate'          => ['cName' => 'tphp_fn_gzdeflate', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '-15']],
+        'gzinflate'          => ['cName' => 'tphp_fn_gzinflate', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '0']],
+        // ── zlib encode/decode 别名 ──
+        'zlib_encode'        => ['cName' => 'tphp_fn_zlib_encode', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '-1']],
+        'zlib_decode'        => ['cName' => 'tphp_fn_zlib_decode', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '0']],
+        // ── gz 文件流 API（gzFile 封装为 Resource）──
+        'gzopen'             => ['cName' => 'tphp_fn_gzopen', 'modes' => ['direct', 'direct']],
+        'gzclose'            => ['cName' => 'tphp_fn_gzclose', 'modes' => ['direct']],
+        'gzread'             => ['cName' => 'tphp_fn_gzread', 'modes' => ['direct', 'direct']],
+        'gzwrite'            => ['cName' => 'tphp_fn_gzwrite', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'gzputs'             => ['cName' => 'tphp_fn_gzputs', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'gzeof'              => ['cName' => 'tphp_fn_gzeof', 'modes' => ['direct']],
+        'gzgets'             => ['cName' => 'tphp_fn_gzgets', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '0']],
+        'gzgetc'             => ['cName' => 'tphp_fn_gzgetc', 'modes' => ['direct']],
+        'gzrewind'           => ['cName' => 'tphp_fn_gzrewind', 'modes' => ['direct']],
+        'gzseek'             => ['cName' => 'tphp_fn_gzseek', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'gztell'             => ['cName' => 'tphp_fn_gztell', 'modes' => ['direct']],
+        'gzpassthru'         => ['cName' => 'tphp_fn_gzpassthru', 'modes' => ['direct']],
+        'gzflush'            => ['cName' => 'tphp_fn_gzflush', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '2']],
+        'gzfile'             => ['cName' => 'tphp_fn_gzfile', 'modes' => ['direct']],
+        'readgzfile'         => ['cName' => 'tphp_fn_readgzfile', 'modes' => ['direct']],
+        // ── zlib 增量上下文 API（deflate/inflate init + add）──
+        'deflate_init'       => ['cName' => 'tphp_fn_deflate_init', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '-1']],
+        'deflate_add'        => ['cName' => 'tphp_fn_deflate_add', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '2']],
+        'inflate_init'       => ['cName' => 'tphp_fn_inflate_init', 'modes' => ['direct']],
+        'inflate_add'        => ['cName' => 'tphp_fn_inflate_add', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '2']],
+        'inflate_get_status' => ['cName' => 'tphp_fn_inflate_get_status', 'modes' => ['direct']],
+        'inflate_get_read_len' => ['cName' => 'tphp_fn_inflate_get_read_len', 'modes' => ['direct']],
+        // ── ZIP 归档读写（依赖系统 zlib -lz）──
+        'zip_open'           => ['cName' => 'tphp_fn_zip_open', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '0']],
+        'zip_close'          => ['cName' => 'tphp_fn_zip_close', 'modes' => ['direct']],
+        'zip_read'           => ['cName' => 'tphp_fn_zip_read', 'modes' => ['direct']],
+        'zip_entry_open'     => ['cName' => 'tphp_fn_zip_entry_open', 'modes' => ['direct', 'direct']],
+        'zip_entry_read'     => ['cName' => 'tphp_fn_zip_entry_read', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'zip_entry_close'    => ['cName' => 'tphp_fn_zip_entry_close', 'modes' => ['direct']],
+        'zip_add_file'       => ['cName' => 'tphp_fn_zip_add_file', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct'], 'defaults' => [3 => '0', 4 => '8']],
+        'zip_add_dir'        => ['cName' => 'tphp_fn_zip_add_dir', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'zip_delete'         => ['cName' => 'tphp_fn_zip_delete', 'modes' => ['direct', 'direct']],
+        'zip_rename'         => ['cName' => 'tphp_fn_zip_rename', 'modes' => ['direct', 'direct', 'direct']],
+        'zip_stat'           => ['cName' => 'tphp_fn_zip_stat', 'modes' => ['direct', 'direct']],
+        'zip_num_files'      => ['cName' => 'tphp_fn_zip_num_files', 'modes' => ['direct']],
+        'zip_get_error_string' => ['cName' => 'tphp_fn_zip_get_error_string', 'modes' => ['direct']],
+        // ── zip 新增条目信息查询 ──
+        'zip_entry_name'             => ['cName' => 'tphp_fn_zip_entry_name', 'modes' => ['direct', 'direct']],
+        'zip_entry_filesize'         => ['cName' => 'tphp_fn_zip_entry_filesize', 'modes' => ['direct', 'direct']],
+        'zip_entry_compressedsize'   => ['cName' => 'tphp_fn_zip_entry_compressedsize', 'modes' => ['direct', 'direct']],
+        'zip_entry_compressionmethod' => ['cName' => 'tphp_fn_zip_entry_compressionmethod', 'modes' => ['direct', 'direct']],
+        'zip_locate'                 => ['cName' => 'tphp_fn_zip_locate', 'modes' => ['direct', 'direct']],
     ];
 
     /** 临时变量计数器，用于数组字面量的复合表达式 */
@@ -402,12 +489,34 @@ class CodeGenerator implements ASTVisitor
         // 检测是否使用了 bcrypt (password_hash/verify)
         $needBcrypt = ($src !== false) && (str_contains($src, 'password_hash(') || str_contains($src, 'password_verify('));
 
+        // 检测是否使用了 zlib/zip 函数（需要条件引入 zlib.h/zip.h + 链接 -lz）
+        $zlibFns = ['gzcompress(', 'gzuncompress(', 'gzencode(', 'gzdecode(', 'gzdeflate(', 'gzinflate(',
+                    'zlib_encode(', 'zlib_decode(',
+                    'gzopen(', 'gzclose(', 'gzread(', 'gzwrite(', 'gzputs(', 'gzeof(', 'gzgets(', 'gzgetc(',
+                    'gzrewind(', 'gzseek(', 'gztell(', 'gzpassthru(', 'gzflush(', 'gzfile(', 'readgzfile(',
+                    'deflate_init(', 'deflate_add(', 'inflate_init(', 'inflate_add(',
+                    'inflate_get_status(', 'inflate_get_read_len(',
+                    'zip_open(', 'zip_close(', 'zip_read(', 'zip_entry_open(', 'zip_entry_read(', 'zip_entry_close(',
+                    'zip_add_file(', 'zip_add_dir(', 'zip_delete(', 'zip_rename(', 'zip_stat(', 'zip_num_files(',
+                    'zip_get_error_string(', 'zip_entry_name(', 'zip_entry_filesize(',
+                    'zip_entry_compressedsize(', 'zip_entry_compressionmethod(', 'zip_locate('];
+        $needZlib = false;
+        if ($src !== false) {
+            foreach ($zlibFns as $fn) {
+                if (str_contains($src, $fn)) { $needZlib = true; break; }
+            }
+        }
+
         // ── SEC_HEADER ──
         $this->sectionLine(self::SEC_HEADER, "/* Generated by TinyPHP — PHP → C (TCC) */");
         $this->sectionLine(self::SEC_HEADER, '');
 
         // ── SEC_INCLUDES ──
         $this->sectionLine(self::SEC_INCLUDES, '#include "common.h"');
+        if ($needZlib) {
+            $this->sectionLine(self::SEC_INCLUDES, '#include "os/zlib.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "os/zip.h"');
+        }
         if ($needExtra) {
             $this->sectionLine(self::SEC_INCLUDES, '#include "builtin_extra.h"');
         }

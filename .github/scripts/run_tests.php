@@ -49,9 +49,10 @@ if (!is_dir($logDir)) mkdir($logDir, 0777, true);
 
 foreach ($testFiles as $i => $f) {
     $rel    = str_replace('\\', '/', substr($f, strlen($testDir) + 1));
-    $base   = basename($f, '.php');
-    $out    = $logDir . DIRECTORY_SEPARATOR . 'test_' . $base . (PHP_OS_FAMILY === 'Windows' ? '.exe' : '');
-    $log    = $logDir . DIRECTORY_SEPARATOR . 'test_' . $base . '.log';
+    // 使用相对路径生成唯一名称，避免不同目录下同名文件（如 zip/basic.php 和 zlib/basic.php）冲突
+    $safeName = str_replace(['/', '\\'], '_', preg_replace('/\.php$/', '', $rel));
+    $out    = $logDir . DIRECTORY_SEPARATOR . 'test_' . $safeName . (PHP_OS_FAMILY === 'Windows' ? '.exe' : '');
+    $log    = $logDir . DIRECTORY_SEPARATOR . 'test_' . $safeName . '.log';
 
     // 解析 @multi @with 注解，收集辅助文件
     $fileArgs = escapeshellarg($f);
