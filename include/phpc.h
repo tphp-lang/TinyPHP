@@ -2,8 +2,8 @@
 // ============================================================
 // phpc.h — PHP ↔ C 互操作（原名 p2c，已统一命名为 phpc）
 //
-//   基础类型：tphp_fn_c_int / tphp_fn_c_float / tphp_fn_c_str
-//             tphp_fn_php_int / tphp_fn_php_float / tphp_fn_php_str / tphp_fn_php_str_clone
+//   基础类型：tphp_fn_c_int / tphp_fn_c_str
+//             tphp_fn_php_int / tphp_fn_php_str / tphp_fn_php_str_clone
 //   数组：    tphp_fn_phpc_arr_*   — 严格 C 风格，类型不匹配抛 tp_throw 异常
 //   对象：    tphp_fn_phpc_obj / tphp_fn_phpc_new_obj / tphp_fn_phpc_unregister_obj
 //   回调：    tphp_fn_phpc_fn / tphp_fn_phpc_new_fn
@@ -24,15 +24,14 @@
 // ── 1. 基础类型：PHP → C ──────────────────────────────────
 //   纯透传函数用宏实现（参考 vlang:简单表达式用 #define,零开销 + 常量折叠）
 //   c_str 涉及 STR_PTR(多次求值),保持 static inline 确保单次求值
+//   注：c_float/php_float 已移除（t_float 就是 double，转换无意义）
 
 #define tphp_fn_c_int(v)      ((int32_t)(v))
-#define tphp_fn_c_float(v)    ((double)(v))
 static inline const char* tphp_fn_c_str(t_string v) { return STR_PTR(v); }
 
 // ── 2. 基础类型：C → PHP ──────────────────────────────────
 
 #define tphp_fn_php_int(v)    ((t_int)(v))
-#define tphp_fn_php_float(v)  ((t_float)(v))
 
 // php_str: 复用 C 内存（深拷贝到 arena，C 端原指针仍由 C 管理）
 //   适用：C 函数返回的栈字符串/静态字符串/调用方不持有所有权的字符串

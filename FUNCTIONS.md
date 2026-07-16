@@ -1476,13 +1476,15 @@ $tid = Thread::id();
 
 | 函数 | 方向 | 说明 |
 |------|------|------|
-| `c_int($x)` / `c_float($x)` | PHP → C | → `int32_t` / `double` (宏,零开销) |
+| `c_int($x)` | PHP → C | → `int32_t` (宏,零开销,有截断 t_int→int32) |
 | `c_str($s)` | PHP → C | → `const char*` (static inline,STR_PTR 单次求值) |
 | `c_void_ptr($p)` | PHP → C | → `void*` 透传 (宏,显式类型标记) |
-| `php_int($x)` / `php_float($x)` | C → PHP | → `t_int` / `t_float` (宏,零开销) |
+| `php_int($x)` | C → PHP | → `t_int` (宏,零开销,有提升 int32→t_int) |
 | `php_str($s)` | C → PHP | → `t_string` (深拷贝,参数 const char*;static inline,有 strlen+dup 逻辑) |
 | `php_str_ptr($ptr)` | C → PHP | → `t_string` (接受 void*,内部 cast 为 const char*;宏展开为 php_str 单次调用) |
 | `php_str_clone($s)` | C → PHP | → `t_string` (深拷贝,明确克隆语义;宏展开为 php_str) |
+
+> **已移除**：`c_float` / `php_float` — t_float 就是 double，转换无意义。float 类型直接传递即可。
 
 ### C 调用与类型注解
 

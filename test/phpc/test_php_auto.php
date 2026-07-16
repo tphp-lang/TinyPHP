@@ -37,7 +37,7 @@ class Main {
 
         // 3. phpc_arr_dbl 同样自动注册
         C.double* $dbl = phpc_arr_dbl([1.0, 2.0, 3.0]);
-        $sum3 = php_float(C->sum_dbls($dbl, 3));
+        $sum3 = C->sum_dbls($dbl, 3);
         echo "3. arr_dbl no-free: " . (int)$sum3 . "\n";
 
         // 4. 仍可手动 phpc_free(会先注销注册,防 double-free)

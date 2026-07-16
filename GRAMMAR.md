@@ -636,7 +636,7 @@ __TRAIT__             ❌
 #directive:
     '#include' '"' file '"'   ✅ (生成 #include "file" 到 C 代码)
   | '#include' '<' file '>'   ✅ (系统头文件)
-  | '#flag' compiler? platform? flags   ✅ (编译器/平台过滤标志)
+  | '#flag' compiler? platform? flags   ✅ (编译器/平台过滤标志,flags 中 .c 文件自动加入编译列表)
   | '#callback' type IDENTIFIER '(' params ')'   ✅ (声明 C 回调签名)
   | '#import' name   ✅ (按需引入 ext/name/src/*.php + *.c)
   | '#cstruct' IDENTIFIER '{' fields '}'   ✅ (声明 C 结构体字段布局,支持 $p->field 原生访问)
@@ -670,12 +670,10 @@ c_struct:                           ✅ (#cstruct 声明,原生字段访问)
   // $p->x → ((Point*)$p)->x (编译期展开,无需 C getter/setter)
 
 c_type_bridge:
-    'c_int(' expr ')'       ✅ → int32_t (宏,零开销)
-  | 'c_float(' expr ')'     ✅ → double (宏,零开销)
+    'c_int(' expr ')'       ✅ → int32_t (宏,零开销,有截断)
   | 'c_str(' expr ')'       ✅ → const char* (static inline,STR_PTR 单次求值)
   | 'c_void_ptr(' expr ')'  ✅ → void* 透传 (宏,显式类型标记)
-  | 'php_int(' expr ')'     ✅ → t_int (宏,零开销)
-  | 'php_float(' expr ')'   ✅ → t_float (宏,零开销)
+  | 'php_int(' expr ')'     ✅ → t_int (宏,零开销,有提升)
   | 'php_str(' expr ')'     ✅ → t_string (深拷贝,参数 const char*;static inline)
   | 'php_str_ptr(' expr ')' ✅ → t_string (接受 void*,宏展开为 php_str)
   | 'php_str_clone(' expr ')' ✅ → t_string (深拷贝,宏展开为 php_str)
@@ -758,7 +756,7 @@ phpc_ptr_bridge:
 | `fn(): type => { stmts }` | 块体箭头函数（PHP 原生仅支持单表达式 `fn() => expr`），须以 `return` 结尾（void 除外） |
 | `#include "file.h"` | 嵌入 C 头文件 |
 | `#include <sys.h>` | 系统头文件 |
-| `#flag [CC] [OS] flags` | 编译器/平台过滤链接标志 |
+| `#flag [CC] [OS] flags` | 编译器/平台过滤链接标志；flags 中的 `.c` 文件自动加入编译列表（不混入 extraFlags） |
 | `#callback type name(params)` | 声明 C 回调签名 |
 | `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,`$p->field` 原生访问 |
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
@@ -767,8 +765,8 @@ phpc_ptr_bridge:
 | `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
 | `C.Type` | C 类型注解（函数参数/返回值。值类型 `C.int`→`int`/`C.double`→`double`/`C.char`→`char`；定宽 `C.int32`→`int32_t`/`C.uint64`→`uint64_t`；指针 `C.void*`→`void*`/`C.Point*`→`Point*`，用 `*` 后缀） |
 | `(C.XXX) expr` | C 类型 cast（值类型 `(C.int)`/`(C.double)`/`(C.char)`/`(C.bool)`；定宽 `(C.int32)`/`(C.uint64)`；指针 `(C.void*)`/`(C.char*)`/`(C.Point*)`） |
-| `c_int/c_float/c_str/c_void_ptr` | PHP → C 类型桥接(前 3 个宏零开销,c_str 保持 inline) |
-| `php_int/php_float/php_str/php_str_ptr/php_str_clone` | C → PHP 类型桥接(前 2 个宏零开销,php_str 保持 inline) |
+| `c_int/c_str/c_void_ptr` | PHP → C 类型桥接(c_int/c_void_ptr 宏零开销,c_str 保持 inline) |
+| `php_int/php_str/php_str_ptr/php_str_clone` | C → PHP 类型桥接(php_int 宏零开销,php_str 保持 inline) |
 | `phpc_arr_*` `phpc_obj` `phpc_new_obj` `phpc_unregister_obj` `phpc_obj_steal` `phpc_fn_*` `phpc_thunk` `phpc_env_pin` `phpc_env_unpin` | 数组/对象/回调互操作 |
 | `phpc_auto` `phpc_free` `phpc_free_str_arr` `phpc_assert_ptr` | C 内存自动管理/释放/安全断言 |
 | `defer EXPR;` / `defer { ... }` | Zig 风格作用域清理：编译期展开到 return/fall-through 路径，LIFO 执行，零运行时开销 |

@@ -2078,7 +2078,7 @@ class Parser
                 $globalFns = ['var_dump','count','exit','die','isset','empty','unset',
                     'error','time','date','sleep','usleep','hrtime',
                     // phpc 互操作（全部全局，不解析命名空间）
-                    'c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone',
+                    'c_int','c_str','php_int','php_str','php_str_clone',
                     'phpc_arr_int','phpc_arr_dbl','phpc_arr_str',
                     'phpc_new_arr_int','phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
                     'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_obj_steal',

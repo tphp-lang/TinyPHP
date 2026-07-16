@@ -661,6 +661,15 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             $tokens = preg_split('/\s+/', trim($flagsStr));
             foreach ($tokens as $tok) {
                 if ($tok === '' || $tok === '-') continue;
+                // .c 文件：加入 extraCFiles（由编译器编译），不混入 extraFlags
+                if (str_ends_with($tok, '.c')) {
+                    $cPath = realpath($tok);
+                    if ($cPath === false) {
+                        die("Error: #flag '.c' file not found: {$tok}\n");
+                    }
+                    $extraCFiles[] = $cPath;
+                    continue;
+                }
                 // Non-flag values (file paths, raw numbers) — always allowed
                 if (!str_starts_with($tok, '-')) {
                     $extraFlags .= ' ' . $tok;
@@ -1203,8 +1212,8 @@ function collectFiles(array $args): array
     foreach ($args as $arg) {
         if ($arg === '.') {
             $baseDir = getcwd();
+            // 点指令只收集 .php 文件，.c 文件需通过 #flag 显式声明
             $files = array_merge($files, scanPhpFiles($baseDir));
-            $cFiles = array_merge($cFiles, scanCFiles($baseDir));
         } elseif (is_file($arg)) {
             $real = realpath($arg) ?: $arg;
             if (isInBuildDir($real)) {
@@ -1222,23 +1231,6 @@ function collectFiles(array $args): array
         }
     }
     return [array_unique($files), array_unique($cFiles)];
-}
-
-/** 递归扫描目录下所有 .c 文件，排除 build/ */
-function scanCFiles(string $dir): array
-{
-    $files = [];
-    $items = glob($dir . DIRECTORY_SEPARATOR . '*') ?: [];
-    foreach ($items as $item) {
-        $base = basename($item);
-        if ($base === 'build' && is_dir($item)) continue;
-        if (is_dir($item)) {
-            $files = array_merge($files, scanCFiles($item));
-        } elseif (str_ends_with($base, '.c')) {
-            $files[] = $item;
-        }
-    }
-    return $files;
 }
 
 /** 递归扫描目录下所有 .php 文件，排除 build/ */

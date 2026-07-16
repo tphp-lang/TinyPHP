@@ -27,15 +27,19 @@
 - **AOT 异常契约统一**：zlib/zip 全部 API 失败时抛 `Exception`（可 try-catch），不返回 `false`
 - `include/os/zlib.h` 简化为直接包含内置 `zlib_src/zlib.h`，移除 TCC 手动声明块
 - zip 不支持修改已有归档：`zip_delete`/`zip_rename` 抛异常
+- **移除 `c_float` / `php_float` 桥接函数**：`t_float` 就是 `double`，转换是无意义的空操作。float 类型直接传递即可。保留 `c_int`/`php_int`（有截断/提升意义）。
+- **`.` 点指令只收集 .php 文件**：不再递归扫描 `.c` 文件，避免误收集不需要的源文件。`.c` 文件改由 `#flag` 显式声明（`#flag my_helper.c`），自动加入编译列表。
 
 ### 修复
 
-- `gzfile()` 返回数组元素类型推断：在 `CodeGenerator.php` 的 `$builtinArrElemTypes` 注册表添加 `'gzfile' => 't_string'`，否则 `$lines[0]` 错误推断为 `t_int`
-- `gzeof()` 行为说明：仅在读取超出末尾后才返回 `true`（与 PHP 原生一致），修正测试预期
-- `zlib_decode()` 不支持自动检测 RAW DEFLATE 格式，改用 `gzinflate()` 解码
-- 测试运行器文件名冲突：不同目录下同名 `basic.php` 生成相同 `test_basic.exe`，改用相对路径生成唯一名称（如 `test_zip_basic.exe`/`test_zlib_basic.exe`）
-- Windows + TCC 编译 zlib 源码时 `EWOULDBLOCK` 未定义：在 `zlib_src/zlib.h` 顶部 `#define EWOULDBLOCK EAGAIN`
-- `tphp.php` 中 `$extraSrcs` 重建时机：追加 zlib 源码后必须重建 `$extraSrcs`，否则编译命令不包含这些 `.c` 文件
+- `gzfile()` 返回数组元素类型推断（`$builtinArrElemTypes` 注册为 `t_string`）
+- `gzeof()` 行为说明：仅在读取超出末尾后返回 true（与 PHP 原生一致）
+- `zlib_decode()` 不支持 RAW DEFLATE 自动检测，需用 `gzinflate()` 解码
+- 测试运行器文件名冲突：用相对路径生成唯一可执行文件名（`test_zip_basic.exe`/`test_zlib_basic.exe`）
+- Windows+TCC 的 `EWOULDBLOCK` 未定义：`zlib_src/zlib.h` 顶部 `#define EWOULDBLOCK EAGAIN`
+- `$extraSrcs` 重建时机：追加 zlib 源码后必须重建，否则编译命令缺少这些 `.c` 文件
+- TCC macOS `stdarg.h` 缺失：`zconf.h` 用 `__builtin_va_*` 替代，`gzwrite.c` 跳过 `#include <stdarg.h>`，`gzguts.h` POSIX 分支添加 `#include <unistd.h>`
+- `CodeGenerator.php` 中 `c_str` 条目重复（清理）
 
 ### 文档
 

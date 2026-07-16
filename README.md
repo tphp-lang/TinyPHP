@@ -359,11 +359,12 @@ class Main {
 
 ```
 PHP → C:                   C → PHP:
-c_int($x)   → int32_t      php_int(v)      → t_int
-c_float($x) → double       php_float(v)    → t_float
-c_str($s)   → const char*  php_str(s)      → t_string (深拷贝，复用 C 内存)
-                            php_str_clone(s) → t_string (深拷贝，明确克隆语义)
+c_int($x)   → int32_t      php_int(v)       → t_int
+c_str($s)   → const char*  php_str(s)       → t_string (深拷贝，复用 C 内存)
+c_void_ptr  → void*        php_str_clone(s) → t_string (深拷贝，明确克隆语义)
 ```
+
+> `c_float`/`php_float` 已移除 — t_float 就是 double，转换无意义，float 类型直接传递即可。
 
 ### C 类型注解
 
@@ -465,7 +466,7 @@ class MyPoint { public float $x; public float $y; }
 
 function obj_read_x(MyPoint $p): float {
     $ptr = phpc_obj($p);                 // → void* (即 tphp_class_MyPoint*)
-    return php_float(C->read_field($ptr, c_int(16))); // offsetof(x)
+    return C->read_field($ptr, c_int(16)); // offsetof(x)
 }
 ```
 
@@ -533,7 +534,6 @@ try {
 | 函数 | 返回类型 | 所有权 |
 |------|---------|--------|
 | `c_int($x)` | `int32_t` | 值拷贝，无所有权 |
-| `c_float($x)` | `double` | 值拷贝，无所有权 |
 | `c_str($s)` | `const char*` | **借用指针** ❌ 不可 `free` |
 | `phpc_arr_int($arr)` | `int32_t*` | **malloc** ✅ **自动注册**，无需 `phpc_free`（循环内避免堆积可手动 `phpc_free`） |
 | `phpc_arr_dbl($arr)` | `double*` | **malloc** ✅ **自动注册**，无需 `phpc_free`（同上） |
@@ -548,7 +548,6 @@ try {
 | 函数 | 返回类型 | 所有权 |
 |------|---------|--------|
 | `php_int(v)` | `t_int` | 值拷贝 |
-| `php_float(v)` | `t_float` | 值拷贝 |
 | `php_str(s)` | `t_string` | **深拷贝**，字符串池自动释放 |
 | `php_str_clone(s)` | `t_string` | **深拷贝**，明确克隆语义（与 `c_str` 对照） |
 | `phpc_new_arr_*(src, n)` | `t_array*` | 引用计数，自动 GC |

@@ -210,7 +210,7 @@ class CodeGenerator implements ASTVisitor
         'phpc_auto' => 'null',
         'phpc_ptr_to_int' => 't_int', 'phpc_int_to_ptr' => 'null',
         // ── phpc 互操作 ──
-        'c_int' => 't_int', 'php_int' => 't_int', 'c_float' => 't_float', 'php_float' => 't_float',
+        'c_int' => 't_int', 'php_int' => 't_int',
         'c_str' => 'const char*', 'php_str' => 't_string', 'php_str_ptr' => 't_string',
         'c_void_ptr' => 'void*',
     ];
@@ -3276,7 +3276,7 @@ class CodeGenerator implements ASTVisitor
      * 判断表达式是否返回 transfer 所有权指针（需用户手动 defer/free）。
      *   - C->func() 返回 T*：默认 transfer（保守，可能泄漏）
      *   - phpc_arr_int/phpc_arr_dbl/phpc_arr_str：transfer（malloc 返回）
-     *   - c_str/c_int/c_float/c_void_ptr/php_str/php_int/php_float：borrow/值类型（不追踪）
+     *   - c_str/c_int/c_void_ptr/php_str/php_int：borrow/值类型（不追踪）
      *   - phpc_new_obj/phpc_auto：已托管（不需要 defer）
      */
     private function isCTransferPtr(ExprNode $expr, string $cType): bool
@@ -3287,7 +3287,7 @@ class CodeGenerator implements ASTVisitor
         if (str_contains($cType, 'tphp_') || $cType === 't_string' || $cType === 't_array*') return false;
 
         // 借用函数（不追踪）— 透传指针，不转移所有权
-        static $borrowFns = ['c_str', 'c_int', 'c_float', 'c_void_ptr', 'phpc_obj',
+        static $borrowFns = ['c_str', 'c_int', 'c_void_ptr', 'phpc_obj',
             'phpc_int_to_ptr',  // t_int → void*，仅还原指针值，不转移所有权
         ];
         // 已托管函数（不需要 defer，内部 tphp_rt_register 自动释放）
@@ -4344,7 +4344,7 @@ class CodeGenerator implements ASTVisitor
         }
 
         // PHPC 互操作函数名集合（B 段、C 段共享，避免重复定义）
-        static $phpcFns = ['c_int','c_float','c_str','php_int','php_float','php_str','php_str_clone','php_str_ptr','c_void_ptr',
+        static $phpcFns = ['c_int','c_str','php_int','php_str','php_str_clone','php_str_ptr','c_void_ptr',
             'phpc_arr_int','phpc_arr_dbl','phpc_arr_str','phpc_new_arr_int',
             'phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
             'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_free','phpc_free_str_arr',

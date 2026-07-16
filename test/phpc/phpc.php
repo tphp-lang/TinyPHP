@@ -27,7 +27,7 @@ namespace Phpc;
 
 function calc_distance(float $x1, float $y1, float $x2, float $y2): float
 {
-    return php_float(C->calc_distance(c_float($x1), c_float($y1), c_float($x2), c_float($y2)));
+    return C->calc_distance($x1, $y1, $x2, $y2);
 }
 
 function calc_factorial(int $n): int
@@ -50,7 +50,7 @@ function sum_array_dbl(array $arr): float
     // phpc_arr_dbl 自动注册到 tphp_rt_register，无需手动 phpc_free
     C.double* $data = phpc_arr_dbl($arr);
     $result = C->sum_dbls($data, c_int(count($arr)));
-    return php_float($result);
+    return $result;
 }
 
 function double_each_value(array $arr): array
@@ -74,13 +74,13 @@ function obj_is_valid(MyPoint $p): int
 function obj_read_x(MyPoint $p): float
 {
     C.void* $ptr = phpc_obj($p);
-    return php_float(C->obj_read_x($ptr, c_int(16)));
+    return C->obj_read_x($ptr, c_int(16));
 }
 
 function obj_read_y(MyPoint $p): float
 {
     C.void* $ptr = phpc_obj($p);
-    return php_float(C->obj_read_y($ptr, c_int(24)));
+    return C->obj_read_y($ptr, c_int(24));
 }
 
 // ── 回调互操作 ──
@@ -125,7 +125,7 @@ function fold_double(array $arr, callable $fn): float
     // phpc_arr_dbl 自动注册，无需手动 phpc_free
     C.double* $data = phpc_arr_dbl($arr);
     $result = C->fold_dbl($data, c_int($len), phpc_thunk('fold_dbl_cb', $fn));
-    return php_float($result);
+    return $result;
 }
 
 // ── C 类型参数/返回值测试 ──
@@ -178,7 +178,7 @@ function join_string_array(array $arr): string
 // phpc_unregister_obj 测试：C 库自行释放对象
 function create_and_free_point(float $x, float $y): int
 {
-    C.Point* $p = C->point_create(c_float($x), c_float($y));
+    C.Point* $p = C->point_create($x, $y);
     if (!$p) {
         return 0;
     }
@@ -193,7 +193,7 @@ function create_and_free_point(float $x, float $y): int
 // phpc_obj_steal 测试：标记对象分离后 C 库 free，防 double-free
 function steal_and_free_point(float $x, float $y): int
 {
-    C.Point* $p = C->point_create(c_float($x), c_float($y));
+    C.Point* $p = C->point_create($x, $y);
     if (!$p) {
         return 0;
     }
