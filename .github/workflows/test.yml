@@ -143,6 +143,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install deps
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then brew install gcc; fi
+
       - name: Add TCC
         run: |
           curl -fsSL -o tcc.zip "$TCC_URL"

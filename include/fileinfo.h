@@ -128,7 +128,7 @@ static const _finfo_magic_entry _finfo_magic_table[] = {
     { "application/vnd.sqlite3", "SQLite 3 database", 0, 15, "SQLite format 3\x00", -1, 0, NULL, NULL, "sqlite" },
 
     // ── XML / 脚本 ──
-    { "text/xml",         "XML document text",       0, 5, "<?xml", "utf-8", 0, NULL, NULL,  "xml"  },
+    { "text/xml",         "XML document text",       0, 5, "<?xml", -1, 0, NULL, "utf-8",  "xml"  },
     { "text/x-php",       "PHP script text",         0, 5, "<?php", -1, 0, NULL, "utf-8",    "php"  },
     { "text/x-php",       "PHP script text",         0, 3, "<?=",  -1, 0, NULL, "utf-8",     "php"  },
 

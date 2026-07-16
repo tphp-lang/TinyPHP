@@ -210,6 +210,33 @@ class Lexer
                 $this->advance(strlen($m[0]));
                 return;
             }
+            // #if <condition> — 条件编译（解析期求值，非命中分支跳过词法/语法）
+            //   支持 #if/#elseif/#else/#endif，可出现在顶层和函数体内
+            //   条件表达式: Windows, Linux, MacOS, Darwin, TCC, GCC, Clang, x86_64, aarch64, arm64, debug, prod
+            //   支持 ! && || () 组合
+            if (preg_match('/^#if\s+(.+?)(?=\n|$)/', $rest, $m)) {
+                $this->addToken(TokenType::HASH_IF, trim($m[1]));
+                $this->advance(strlen($m[0]));
+                return;
+            }
+            // #elseif <condition> (别名 #elif)
+            if (preg_match('/^#(?:elseif|elif)\s+(.+?)(?=\n|$)/', $rest, $m)) {
+                $this->addToken(TokenType::HASH_ELSEIF, trim($m[1]));
+                $this->advance(strlen($m[0]));
+                return;
+            }
+            // #else
+            if (preg_match('/^#else(?=\s|$)/', $rest, $m)) {
+                $this->addToken(TokenType::HASH_ELSE, '');
+                $this->advance(strlen($m[0]));
+                return;
+            }
+            // #endif
+            if (preg_match('/^#endif(?=\s|$)/', $rest, $m)) {
+                $this->addToken(TokenType::HASH_ENDIF, '');
+                $this->advance(strlen($m[0]));
+                return;
+            }
             // #flag [GCC|Clang|TCC] [Windows|Linux|MacOS] [-D...] [-l...]
             // 最多两个前缀：编译器 + 平台，顺序不限
             // 注意：无前缀时 \s* 而非 \s+ — 允许 #flag -DNDEBUG 形式

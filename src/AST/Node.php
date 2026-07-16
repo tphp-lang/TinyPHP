@@ -502,6 +502,16 @@ class ExprStmtNode extends StmtNode
     }
 }
 
+// 空语句 — 条件编译指令（#if/#elseif/#else/#endif）在函数体内的占位
+//   不生成任何 C 代码
+class NopStmtNode extends StmtNode
+{
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitNopStmt($this);
+    }
+}
+
 // static $var = expr;  或  static type $var = expr;
 //   函数内静态变量，跨调用保持值（等价于 C 函数内 static 变量）
 class StaticStmtNode extends StmtNode
@@ -1071,6 +1081,7 @@ interface ASTVisitor
     public function visitAssignArrayStmt(AssignArrayStmtNode $node): string;
     public function visitAssignArrayPushStmt(AssignArrayPushStmtNode $node): string;
     public function visitExprStmt(ExprStmtNode $node): string;
+    public function visitNopStmt(NopStmtNode $node): string;
     public function visitStaticStmt(StaticStmtNode $node): string;
     public function visitConstStmt(ConstStmtNode $node): string;
     public function visitBlockStmt(BlockStmtNode $node): string;

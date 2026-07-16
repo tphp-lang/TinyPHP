@@ -182,6 +182,29 @@ class CodeGenerator implements ASTVisitor
         'zip_read' => 't_array*', 'zip_stat' => 't_array*',
         // ── zlib gz 数组返回 ──
         'gzfile' => 't_array*',
+        // ── stream (内置 ext) ──
+        'stream_last_error' => 't_int', 'stream_set_read_buffer' => 't_int',
+        'stream_select' => 't_int', 'stream_socket_server' => 't_int',
+        'stream_socket_accept' => 't_int', 'stream_socket_client' => 't_int',
+        'stream_socket_sendto' => 't_int', 'stream_socket_enable_crypto' => 't_int',
+        'stream_strerror' => 't_string', 'stream_socket_recvfrom' => 't_string',
+        'stream_socket_get_name' => 't_string',
+        'stream_set_blocking' => 't_bool', 'stream_isatty' => 't_bool',
+        'stream_socket_shutdown' => 't_bool',
+        'stream_close' => 'void',
+        // ── openssl (内置 ext, TLS/加密) ──
+        'openssl_ctx_new' => 't_int', 'openssl_ctx_set_options' => 't_int',
+        'openssl_ssl_new' => 't_int', 'openssl_ssl_connect' => 't_int',
+        'openssl_ssl_accept' => 't_int', 'openssl_ssl_write' => 't_int',
+        'openssl_error_string' => 't_string', 'openssl_ssl_get_cipher_name' => 't_string',
+        'openssl_ssl_get_version' => 't_string', 'openssl_encrypt' => 't_string',
+        'openssl_decrypt' => 't_string', 'openssl_random_pseudo_bytes' => 't_string',
+        'openssl_digest' => 't_string',
+        'openssl_ctx_use_certificate_file' => 't_bool',
+        'openssl_ctx_use_private_key_file' => 't_bool',
+        'openssl_ssl_set_fd' => 't_bool', 'openssl_ssl_shutdown' => 't_bool',
+        'openssl_ctx_free' => 'void', 'openssl_ssl_free' => 'void',
+        'openssl_ctx_set_verify' => 'void',
         'phpc_new_arr_int' => 't_array*', 'phpc_new_arr_dbl' => 't_array*',
         'phpc_new_arr_str' => 't_array*', 'phpc_new_arr' => 't_array*',
         // ── t_var ──
@@ -389,6 +412,44 @@ class CodeGenerator implements ASTVisitor
         'zip_entry_compressedsize'   => ['cName' => 'tphp_fn_zip_entry_compressedsize', 'modes' => ['direct', 'direct']],
         'zip_entry_compressionmethod' => ['cName' => 'tphp_fn_zip_entry_compressionmethod', 'modes' => ['direct', 'direct']],
         'zip_locate'                 => ['cName' => 'tphp_fn_zip_locate', 'modes' => ['direct', 'direct']],
+        // ── stream (内置 ext, 跨平台 socket) ──
+        'stream_close'                => ['cName' => 'tphp_fn_stream_close', 'modes' => ['direct']],
+        'stream_last_error'           => ['cName' => 'tphp_fn_stream_last_error'],
+        'stream_strerror'             => ['cName' => 'tphp_fn_stream_strerror', 'modes' => ['direct']],
+        'stream_set_blocking'         => ['cName' => 'tphp_fn_stream_set_blocking', 'modes' => ['direct', 'direct']],
+        'stream_set_read_buffer'      => ['cName' => 'tphp_fn_stream_set_read_buffer', 'modes' => ['direct', 'direct']],
+        'stream_isatty'               => ['cName' => 'tphp_fn_stream_isatty', 'modes' => ['direct']],
+        'stream_select'               => ['cName' => 'tphp_fn_stream_select', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct'], 'defaults' => [4 => '0']],
+        'stream_socket_server'        => ['cName' => 'tphp_fn_stream_socket_server', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '12', 2 => '(t_array*)NULL']],
+        'stream_socket_accept'        => ['cName' => 'tphp_fn_stream_socket_accept', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '-1']],
+        'stream_socket_client'        => ['cName' => 'tphp_fn_stream_socket_client', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '2', 3 => '(t_array*)NULL']],
+        'stream_socket_recvfrom'      => ['cName' => 'tphp_fn_stream_socket_recvfrom', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'stream_socket_sendto'        => ['cName' => 'tphp_fn_stream_socket_sendto', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [2 => '0', 3 => '(t_string){0}']],
+        'stream_socket_get_name'      => ['cName' => 'tphp_fn_stream_socket_get_name', 'modes' => ['direct', 'direct']],
+        'stream_socket_shutdown'      => ['cName' => 'tphp_fn_stream_socket_shutdown', 'modes' => ['direct', 'direct']],
+        'stream_socket_enable_crypto' => ['cName' => 'tphp_fn_stream_socket_enable_crypto', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        // ── openssl (内置 ext, TLS/加密) ──
+        'openssl_ctx_new'                 => ['cName' => 'tphp_fn_openssl_ctx_new', 'modes' => ['direct']],
+        'openssl_ctx_free'                => ['cName' => 'tphp_fn_openssl_ctx_free', 'modes' => ['direct']],
+        'openssl_ctx_use_certificate_file' => ['cName' => 'tphp_fn_openssl_ctx_use_certificate_file', 'modes' => ['direct', 'direct', 'direct']],
+        'openssl_ctx_use_private_key_file' => ['cName' => 'tphp_fn_openssl_ctx_use_private_key_file', 'modes' => ['direct', 'direct', 'direct']],
+        'openssl_ctx_set_verify'          => ['cName' => 'tphp_fn_openssl_ctx_set_verify', 'modes' => ['direct', 'direct']],
+        'openssl_ctx_set_options'         => ['cName' => 'tphp_fn_openssl_ctx_set_options', 'modes' => ['direct', 'direct']],
+        'openssl_ssl_new'                 => ['cName' => 'tphp_fn_openssl_ssl_new', 'modes' => ['direct']],
+        'openssl_ssl_free'                => ['cName' => 'tphp_fn_openssl_ssl_free', 'modes' => ['direct']],
+        'openssl_ssl_set_fd'              => ['cName' => 'tphp_fn_openssl_ssl_set_fd', 'modes' => ['direct', 'direct']],
+        'openssl_ssl_connect'             => ['cName' => 'tphp_fn_openssl_ssl_connect', 'modes' => ['direct']],
+        'openssl_ssl_accept'              => ['cName' => 'tphp_fn_openssl_ssl_accept', 'modes' => ['direct']],
+        'openssl_ssl_read'                => ['cName' => 'tphp_fn_openssl_ssl_read', 'modes' => ['direct', 'direct']],
+        'openssl_ssl_write'               => ['cName' => 'tphp_fn_openssl_ssl_write', 'modes' => ['direct', 'direct']],
+        'openssl_ssl_shutdown'            => ['cName' => 'tphp_fn_openssl_ssl_shutdown', 'modes' => ['direct']],
+        'openssl_ssl_get_cipher_name'     => ['cName' => 'tphp_fn_openssl_ssl_get_cipher_name', 'modes' => ['direct']],
+        'openssl_ssl_get_version'         => ['cName' => 'tphp_fn_openssl_ssl_get_version', 'modes' => ['direct']],
+        'openssl_error_string'            => ['cName' => 'tphp_fn_openssl_error_string'],
+        'openssl_encrypt'                 => ['cName' => 'tphp_fn_openssl_encrypt', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct'], 'defaults' => [4 => '0']],
+        'openssl_decrypt'                 => ['cName' => 'tphp_fn_openssl_decrypt', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct'], 'defaults' => [4 => '0']],
+        'openssl_random_pseudo_bytes'     => ['cName' => 'tphp_fn_openssl_random_pseudo_bytes', 'modes' => ['direct']],
+        'openssl_digest'                  => ['cName' => 'tphp_fn_openssl_digest', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => 'false']],
     ];
 
     /** 临时变量计数器，用于数组字面量的复合表达式 */
@@ -507,6 +568,36 @@ class CodeGenerator implements ASTVisitor
             }
         }
 
+        // 检测是否使用了 stream 函数（需要条件引入 stream.h + Windows 链接 ws2_32）
+        $streamFns = ['stream_close(', 'stream_last_error(', 'stream_strerror(',
+                      'stream_set_blocking(', 'stream_set_read_buffer(', 'stream_isatty(',
+                      'stream_select(', 'stream_socket_server(', 'stream_socket_accept(',
+                      'stream_socket_client(', 'stream_socket_recvfrom(', 'stream_socket_sendto(',
+                      'stream_socket_get_name(', 'stream_socket_shutdown(',
+                      'stream_socket_enable_crypto('];
+        $needStream = false;
+        if ($src !== false) {
+            foreach ($streamFns as $fn) {
+                if (str_contains($src, $fn)) { $needStream = true; break; }
+            }
+        }
+
+        // 检测是否使用了 openssl 函数（需要条件引入 openssl.h + 链接 libssl/libcrypto）
+        $opensslFns = ['openssl_ctx_new(', 'openssl_ctx_free(', 'openssl_ctx_use_certificate_file(',
+                       'openssl_ctx_use_private_key_file(', 'openssl_ctx_set_verify(', 'openssl_ctx_set_options(',
+                       'openssl_ssl_new(', 'openssl_ssl_free(', 'openssl_ssl_set_fd(',
+                       'openssl_ssl_connect(', 'openssl_ssl_accept(', 'openssl_ssl_read(',
+                       'openssl_ssl_write(', 'openssl_ssl_shutdown(',
+                       'openssl_ssl_get_cipher_name(', 'openssl_ssl_get_version(',
+                       'openssl_error_string(', 'openssl_encrypt(', 'openssl_decrypt(',
+                       'openssl_random_pseudo_bytes(', 'openssl_digest('];
+        $needOpenssl = false;
+        if ($src !== false) {
+            foreach ($opensslFns as $fn) {
+                if (str_contains($src, $fn)) { $needOpenssl = true; break; }
+            }
+        }
+
         // ── SEC_HEADER ──
         $this->sectionLine(self::SEC_HEADER, "/* Generated by TinyPHP — PHP → C (TCC) */");
         $this->sectionLine(self::SEC_HEADER, '');
@@ -528,6 +619,15 @@ class CodeGenerator implements ASTVisitor
             $this->sectionLine(self::SEC_INCLUDES, '#include "os/zlib.h"');
             $this->sectionLine(self::SEC_INCLUDES, '#include "os/zip.h"');
         }
+        // openssl.h 必须在 stream.h 之前 include：
+        //   openssl.h 定义 TPHP_STREAM_TLS_IMPLEMENTED，使 stream.h 中的
+        //   stream_socket_enable_crypto stub 被跳过，使用 openssl.h 的真实实现
+        if ($needOpenssl) {
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/openssl/src/openssl.h"');
+        }
+        if ($needStream) {
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/stream/src/stream.h"');
+        }
         if ($needExtra) {
             $this->sectionLine(self::SEC_INCLUDES, '#include "builtin_extra.h"');
         }
@@ -536,6 +636,10 @@ class CodeGenerator implements ASTVisitor
         if ($needBcrypt) {
             $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PASSWORD_BCRYPT 1');
             $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PASSWORD_BCRYPT_DEFAULT_COST 10');
+        }
+        if ($needOpenssl) {
+            // OpenSSL 常量已在 openssl.h 中以 TPHP_CONST_OPENSSL_* 定义
+            // 此处添加 OpenSSL 初始化代码（仅在编译期引用，确保链接器保留符号）
         }
         foreach ($node->constants as $c) {
             $this->sectionLine(self::SEC_CONSTS, $c->accept($this));
@@ -3152,6 +3256,12 @@ class CodeGenerator implements ASTVisitor
     public function visitExprStmt(ExprStmtNode $node): string
     {
         return $node->expr->accept($this) . ';';
+    }
+
+    /** 空语句 — 条件编译指令占位，不生成任何 C 代码 */
+    public function visitNopStmt(NopStmtNode $node): string
+    {
+        return '';
     }
 
     /**

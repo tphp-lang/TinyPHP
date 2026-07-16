@@ -28,9 +28,10 @@
 | 2  | filter\_var ✅ 已完成 | ⭐⭐    | 无              | 2   |
 | 3  | calendar ✅ 已完成 | ⭐⭐⭐   | 无              | 16  |
 | 4  | [zlib (gzip)](#4-zlib-gzip) ✅ 已完成(内置) | ⭐⭐⭐   | 内置 zlib 1.3.2 源码 | 29  |
+| 5  | [stream](#5-stream) ✅ 已完成 | ⭐⭐⭐⭐  | winsock2(Windows)/libc(POSIX) | 15  |
 | 6  | [SQLite](#6-sqlite)          | ⭐⭐⭐⭐  | sqlite3        | 6   |
 | 7  | [cURL](#7-curl)              | ⭐⭐⭐⭐  | libcurl        | 8   |
-| 8  | [OpenSSL](#8-openssl)        | ⭐⭐⭐⭐⭐ | openssl        | 8   |
+| 8  | [OpenSSL](#8-openssl) ⏸️ 暂停 | ⭐⭐⭐⭐⭐ | OpenSSL 3.0.21（TCC 链接不兼容，待定） | 21  |
 | 9  | [fileinfo](#9-fileinfo) ✅   | ⭐⭐⭐   | 内置魔数表       | 4   |
 | 10 | [iconv](#10-iconv) ✅ 已完成 | ⭐⭐⭐   | libiconv/系统    | 8   |
 | 11 | [exif](#11-exif) ✅ 已完成     | ⭐⭐⭐   | 无(纯解析)         | 6   |
@@ -516,6 +517,117 @@ function inflate_get_read_len(Resource $context): int;
 
 ***
 
+## 5. stream ✅ 已完成
+
+> **实现状态**: 已实现于 `ext/stream/src/stream.h` + `ext/stream/src/stream.php`（phpc 桥接 + `static inline` C 实现）。
+> 跨平台 socket stream：Windows winsock2 / POSIX sys/socket.h。
+> **AOT 错误处理**: 所有失败统一 `tp_throw_ex(new_tphp_class_Exception(...))`（可 try-catch，不返回 `false`）。
+> socket fd 以 `t_int` 流转（与 exif 的 `FILE* → t_int` 模式一致），SSL/TLS 指针同样以 `t_int` 流转。
+> Winsock 懒初始化（首次 socket 操作自动 `WSAStartup`），`FD_SETSIZE` 提升到 1024（Windows 默认 64 太少）。
+> TLS 支持由 `ext/openssl` 扩展提供（`TPHP_STREAM_TLS_IMPLEMENTED` 守卫，openssl.h 必须在 stream.h 之前 include）。
+> **当前 TLS 状态**: OpenSSL 扩展暂停（见 §8），`stream_socket_enable_crypto` 使用 `stream.h` 中的 stub，
+> 调用时抛 "TLS not supported (OpenSSL extension not loaded)" 异常。非 TLS 流功能完全可用。
+>
+> **跨平台/编译器兼容**:
+> - Windows: `_WIN32_WINNT 0x0600`（inet_pton 需要 Vista+）；`SHUT_RD/WR/RDWR` 映射到 `SD_RECEIVE/SEND/BOTH`；TCC 的 ws2tcpip.h 缺少 `inet_pton`/`inet_ntop` 声明，手动补充
+> - TCC Windows: `-L` 指向 `tcc/win32/lib`（`-B` 不加入 `library_paths`），让 `-lws2_32` 找到 `ws2_32.def`
+> - 不使用 `#pragma comment(lib, "ws2_32.lib")` — TCC 会将完整名传给 `tcc_add_library()`，搜索 `ws2_32.lib.def` 等不存在的文件
+>
+> 测试: `test/ext/stream_basic.php`（strerror 非空验证 + TCP echo 本地回环 + set_blocking + shutdown）全部通过。
+
+### 推荐参考库
+
+| 库                                   | 说明                             | 链接                                                     |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------ |
+| **PHP 源码** **`ext/sockets/`** + **`main/streams/`** | socket 封层 + stream 抽象层 | `sockets.c` + `main/streams/xp_socket.c`               |
+| **POSIX** **`sys/socket.h`**         | 标准 socket API                  | opengroup.org/interface/v2.3bd2/xbd_6.html            |
+| **Winsock2** **`winsock2.h`**        | Windows socket API               | learn.microsoft.com/en-us/windows/win32/api/winsock2/ |
+
+### 完整 API
+
+```php
+// ================================================================
+// 常量
+// ================================================================
+const STREAM_CLIENT_CONNECT          = 2;
+const STREAM_CLIENT_ASYNC_CONNECT    = 4;
+const STREAM_CLIENT_PERSISTENT       = 1;
+const STREAM_SERVER_BIND             = 4;
+const STREAM_SERVER_LISTEN           = 8;
+const STREAM_SHUT_RD                 = 0;
+const STREAM_SHUT_WR                 = 1;
+const STREAM_SHUT_RDWR               = 2;
+const STREAM_SOCK_STREAM             = 1;
+const STREAM_SOCK_DGRAM              = 2;
+const STREAM_SOCK_RDM                = 4;
+const STREAM_SOCK_SEQPACKET          = 5;
+const STREAM_PF_INET                 = 2;
+const STREAM_PF_INET6                = 10;
+const STREAM_PF_UNIX                 = 1;
+const STREAM_IPPROTO_TCP             = 6;
+const STREAM_IPPROTO_UDP             = 17;
+const STREAM_IPPROTO_ICMP            = 1;
+const STREAM_IPPROTO_RAW             = 255;
+const STREAM_OOB                     = 1;
+const STREAM_PEEK                    = 2;
+const STREAM_AWAIT_READ              = 1;
+const STREAM_AWAIT_WRITE             = 2;
+const STREAM_AWAIT_READ_WRITE        = 3;
+const STREAM_CRYPTO_METHOD_SSLv2     = 0;
+const STREAM_CRYPTO_METHOD_SSLv3     = 1;
+const STREAM_CRYPTO_METHOD_SSLv23    = 2;
+const STREAM_CRYPTO_METHOD_TLS       = 3;
+const STREAM_CRYPTO_METHOD_TLSv1_0   = 4;
+const STREAM_CRYPTO_METHOD_TLSv1_1   = 5;
+const STREAM_CRYPTO_METHOD_TLSv1_2   = 6;
+const STREAM_CRYPTO_METHOD_TLSv1_3   = 7;
+const STREAM_CRYPTO_ENABLE           = 1;
+const STREAM_CRYPTO_DISABLE          = 0;
+const STREAM_OPTION_BLOCKING         = 1;
+const STREAM_OPTION_READ_BUFFER      = 3;
+const STREAM_OPTION_READ_TIMEOUT     = 4;
+const STREAM_OPTION_WRITE_TIMEOUT    = 5;
+const STREAM_OPTION_CHUNK_SIZE       = 6;
+const STREAM_FILTER_READ             = 1;
+const STREAM_FILTER_WRITE            = 2;
+const STREAM_FILTER_ALL              = 3;
+const STREAM_NOTIFY_CONNECT          = 2;
+const STREAM_NOTIFY_AUTH_REQUIRED    = 3;
+const STREAM_NOTIFY_AUTH_RESULT      = 4;
+const STREAM_NOTIFY_MIME_TYPE_IS     = 5;
+const STREAM_NOTIFY_FILE_SIZE_IS     = 6;
+const STREAM_NOTIFY_REDIRECTED       = 7;
+const STREAM_NOTIFY_PROGRESS         = 8;
+const STREAM_NOTIFY_FAILURE          = 9;
+const STREAM_NOTIFY_COMPLETED        = 10;
+const STREAM_NOTIFY_RESOLVE          = 11;
+const STREAM_NOTIFY_SEVERITY_ERR     = 1;
+const STREAM_NOTIFY_SEVERITY_WARN    = 2;
+const STREAM_NOTIFY_SEVERITY_INFO    = 3;
+
+// ================================================================
+// 函数 (15个)
+// ================================================================
+
+function stream_close(int $fd): void;
+function stream_last_error(): int;
+function stream_strerror(int $err): string;
+function stream_set_blocking(int $fd, bool $enable): bool;
+function stream_set_read_buffer(int $fd, int $buffer): int;
+function stream_isatty(int $fd): bool;
+function stream_select(array $read, array $write, array $except, int $tv_sec, int $tv_usec = 0): int|Exception;
+function stream_socket_server(string $address, int $flags = STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, array $context = []): int|Exception;
+function stream_socket_accept(int $server_fd, int $timeout_ms = -1): int|Exception;
+function stream_socket_client(string $address, int $timeout_ms = -1, int $flags = STREAM_CLIENT_CONNECT, array $context = []): int|Exception;
+function stream_socket_recvfrom(int $fd, int $length, int $flags = 0): string|Exception;
+function stream_socket_sendto(int $fd, string $data, int $flags = 0, string $address = ""): int|Exception;
+function stream_socket_get_name(int $fd, bool $want_peer): string|Exception;
+function stream_socket_shutdown(int $fd, int $how): bool|Exception;
+function stream_socket_enable_crypto(int $fd, bool $enable, int $crypto_type = 0): int|Exception;
+```
+
+***
+
 ## 6. SQLite
 
 ### 推荐参考库
@@ -760,7 +872,37 @@ function curl_version(): array;
 
 ***
 
-## 8. OpenSSL
+## 8. OpenSSL ⏸️ 暂停
+
+> **实现状态**: 代码已实现于 `ext/openssl/src/openssl.h` + `ext/openssl/src/openssl.php`（phpc 桥接 + `static inline` C 实现），但**暂时停用**。
+>
+> **停用原因**: TCC 无法链接 MinGW GCC 生成的 COFF 静态库（对象格式不兼容）。
+> 尝试用 TCC 重编译 OpenSSL 源码（`build/build_openssl_tcc.sh`）虽可编译大部分源文件，
+> 但部分源文件依赖 TCC 缺失的头文件（如 `wspiapi.h`）且整体构建耗时过长，暂不可行。
+> 待后续找到可行的 TCC 构建方案再启用。
+>
+> **当前状态**:
+> - `ext/openssl/src/openssl.{h,php}` 代码保留（含 `#if TCC` 条件 `#flag` 区分 `lib-tcc/` 与 `lib/`/`lib64/`）
+> - `test/ext/openssl_basic.php` 标记为 `@skip`（全平台跳过）
+> - CI workflows（`build.yml`/`test.yml`）已移除 OpenSSL 构建步骤
+> - `ext/stream` 的 TLS 入口 `stream_socket_enable_crypto` 使用 `stream.h` 中的 stub，调用时抛 "TLS not supported" 异常
+> - 非 TLS 流功能（TCP/UDP socket、select、shutdown 等）不受影响
+>
+> **AOT 错误处理**（代码保留）: 所有失败统一 `tp_throw_ex(new_tphp_class_Exception(...))`（可 try-catch，不返回 `false`）。
+> SSL*/SSL_CTX* 指针以 `t_int` 流转（`phpc_ptr_to_int` / `phpc_int_to_ptr` 模式，与 exif FILE* 一致）。
+>
+> **原预编译静态库策略**（暂停）:
+> - 配置 `no-asm no-shared -DOPENSSL_NO_INLINE_ASM`（TCC 兼容）
+> - 产物存放于 `ext/openssl/prebuilt/<OS>/lib-tcc/`（TCC 编译）或 `lib/`/`lib64/`（GCC/Clang 编译）
+> - `openssl.php` 通过 `#flag` + `#if TCC` 条件编译声明 `-I`/`-L`/`-l`
+> - Windows 额外链接 `-lws2_32 -lcrypt32`（OpenSSL 依赖 winsock + Windows Crypto API）
+>
+> **包含顺序**（代码保留）: `openssl.h` 必须在 `stream.h` 之前 include。
+> `openssl.h` 定义 `TPHP_STREAM_TLS_IMPLEMENTED` 宏，使 `stream.h` 中的 `stream_socket_enable_crypto` stub 被跳过，
+> 使用 `openssl.h` 中的真实 TLS 实现。
+>
+> 测试: `test/ext/openssl_basic.php`（`@skip` 标记，暂停运行）。
+> 覆盖内容（代码保留）: random_pseudo_bytes + digest + encrypt/decrypt 往返 + error_string。
 
 ### 推荐参考库
 
@@ -776,91 +918,91 @@ function curl_version(): array;
 
 ```php
 // ================================================================
-// 加密方法名称 (openssl_get_cipher_methods 返回的子集)
-// ================================================================
-// 通过 OpenSSL 的 EVP_get_cipherbyname() 动态查询
-// 常用方法: "aes-128-cbc","aes-256-cbc","aes-128-gcm","aes-256-gcm"
-//          "aes-128-ctr","aes-256-ctr","aes-128-ecb","aes-256-ecb"
-//          "des-ede3-cbc","bf-cbc","rc4","rc2","camellia-256-cbc"
-
-// ================================================================
 // 常量
 // ================================================================
-const OPENSSL_RAW_DATA = 1;        // 返回原始二进制，不 base64 编码
-const OPENSSL_ZERO_PADDING = 2;    // 不用 PKCS#7 填充 (仅用于特殊场景)
-const OPENSSL_DONT_ZERO_PAD_KEY = 4;
+const SSL_OP_NO_COMPRESSION              = 0x00020000;
+const SSL_OP_NO_SSLv2                    = 0x01000000;
+const SSL_OP_NO_SSLv3                    = 0x02000000;
+const SSL_OP_NO_TLSv1                    = 0x04000000;
+const SSL_OP_NO_TLSv1_1                  = 0x10000000;
+const SSL_OP_NO_TLSv1_2                  = 0x08000000;
+const SSL_OP_NO_TLSv1_3                  = 0x20000000;
+const SSL_OP_NO_RENEGOTIATION            = 0x40000000;
+const SSL_VERIFY_NONE                    = 0;
+const SSL_VERIFY_PEER                    = 1;
+const SSL_VERIFY_FAIL_IF_NO_PEER_CERT    = 2;
+const SSL_FILETYPE_PEM                   = 1;
+const SSL_FILETYPE_ASN1                  = 2;
+const X509_FILETYPE_PEM                  = 1;
+const X509_FILETYPE_ASN1                 = 2;
+const OPENSSL_KEYTYPE_RSA                = 0;
+const OPENSSL_KEYTYPE_DSA                = 1;
+const OPENSSL_KEYTYPE_DH                 = 2;
+const OPENSSL_KEYTYPE_EC                 = 3;
+const OPENSSL_ALGO_MD5                   = 2;
+const OPENSSL_ALGO_SHA1                  = 1;
+const OPENSSL_ALGO_SHA256                = 7;
+const OPENSSL_ALGO_SHA384                = 8;
+const OPENSSL_ALGO_SHA512                = 9;
+const OPENSSL_CIPHER_AES_128_CBC         = 5;
+const OPENSSL_CIPHER_AES_192_CBC         = 6;
+const OPENSSL_CIPHER_AES_256_CBC         = 7;
+const OPENSSL_RAW_DATA                   = 1;
+const OPENSSL_ZERO_PADDING               = 2;
+const OPENSSL_DONT_ZERO_PAD_KEY          = 4;
+const OPENSSL_NO_PADDING                 = 3;
+const OPENSSL_PKCS1_PADDING              = 1;
+const OPENSSL_PKCS1_OAEP_PADDING         = 4;
+const OPENSSL_SSLV23_PADDING             = 2;
+const OPENSSL_DEFAULT_STREAM_CIPHERS     = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256";
+const OPENSSL_PURPOSE_ANY                = 0;
+const OPENSSL_PURPOSE_SSL_SERVER         = 1;
+const OPENSSL_PURPOSE_SSL_CLIENT         = 2;
 
 // ================================================================
-// 函数
+// SSL Context API (5个)
 // ================================================================
+function openssl_ctx_new(int $method): int|Exception;
+function openssl_ctx_free(int $ctx): void;
+function openssl_ctx_use_certificate_file(int $ctx, string $file, int $type): bool|Exception;
+function openssl_ctx_use_private_key_file(int $ctx, string $file, int $type): bool|Exception;
+function openssl_ctx_set_verify(int $ctx, int $mode): void;
+function openssl_ctx_set_options(int $ctx, int $options): int;
 
-/**
- * openssl_encrypt(string $data, string $method, string $key,
- *                 int $options = 0, string $iv = ""): string|false
- *
- * 加密数据。支持 AES-128/256-CBC/GCM/CTR 等。
- *
- * @param string $data 明文
- * @param string $method 加密方法名, 如 "aes-256-cbc"
- * @param string $key 密钥, 长度取决于算法 (AES-256=32字节)
- * @param int $options OPENSSL_RAW_DATA: 返回原始二进制, 否则 base64 编码
- * @param string $iv 初始化向量, CBC/CTR 需要 16 字节
- * @return string|false 密文, 失败返回 false
- */
-function openssl_encrypt(string $data, string $method, string $key,
-                        int $options = 0, string $iv = ""): string|false;
+// ================================================================
+// SSL Connection API (10个)
+// ================================================================
+function openssl_ssl_new(int $ctx): int|Exception;
+function openssl_ssl_free(int $ssl): void;
+function openssl_ssl_set_fd(int $ssl, int $fd): bool|Exception;
+function openssl_ssl_connect(int $ssl): int|Exception;
+function openssl_ssl_accept(int $ssl): int|Exception;
+function openssl_ssl_read(int $ssl, int $length): string|Exception;
+function openssl_ssl_write(int $ssl, string $data): int|Exception;
+function openssl_ssl_shutdown(int $ssl): bool;
+function openssl_ssl_get_cipher_name(int $ssl): string;
+function openssl_ssl_get_version(int $ssl): string;
 
-/**
- * openssl_decrypt(string $data, string $method, string $key,
- *                 int $options = 0, string $iv = ""): string|false
- *
- * 解密数据。参数与 encrypt 对称。
- */
-function openssl_decrypt(string $data, string $method, string $key,
-                        int $options = 0, string $iv = ""): string|false;
+// ================================================================
+// Error API (1个)
+// ================================================================
+function openssl_error_string(): string;
 
-/**
- * openssl_random_pseudo_bytes(int $length): string|false
- *
- * 生成加密安全的随机字节。使用 OpenSSL 的 CSPRNG。
- */
-function openssl_random_pseudo_bytes(int $length): string|false;
+// ================================================================
+// 对称加密 API (2个)
+// ================================================================
+function openssl_encrypt(string $cipher, string $key, string $iv, string $data, int $options = 0): string|Exception;
+function openssl_decrypt(string $cipher, string $key, string $iv, string $data, int $options = 0): string|Exception;
 
-/**
- * openssl_get_cipher_methods(bool $aliases = false): array
- *
- * 返回支持的加密方法列表。
- */
-function openssl_get_cipher_methods(bool $aliases = false): array;
+// ================================================================
+// 随机数 API (1个)
+// ================================================================
+function openssl_random_pseudo_bytes(int $length): string|Exception;
 
-/**
- * openssl_cipher_iv_length(string $method): int|false
- *
- * 返回指定加密方法的 IV 长度。
- */
-function openssl_cipher_iv_length(string $method): int|false;
-
-/**
- * openssl_cipher_key_length(string $method): int|false
- *
- * 返回指定加密方法的密钥长度。
- */
-function openssl_cipher_key_length(string $method): int|false;
-
-/**
- * openssl_digest(string $data, string $method, bool $raw = false): string|false
- *
- * 计算消息摘要 (哈希)。$method: "sha256", "sha512", "md5", etc.
- * 可用 openssl_get_md_methods() 获取支持的算法列表。
- */
-function openssl_digest(string $data, string $method, bool $raw = false): string|false;
-
-/**
- * openssl_get_md_methods(bool $aliases = false): array
- *
- * 返回支持的摘要算法列表。
- */
-function openssl_get_md_methods(bool $aliases = false): array;
+// ================================================================
+// 哈希 API (1个)
+// ================================================================
+function openssl_digest(string $method, string $data, bool $raw_output = false): string|Exception;
 ```
 
 ***

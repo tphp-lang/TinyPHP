@@ -63,11 +63,28 @@ class Parser
 
     private bool $debugMode;
 
+    /** 编译上下文（条件编译求值用） */
+    private string $targetOS  = '';
+    private string $targetArch = '';
+    private string $ccClass   = 'TCC';
+
+    /** @var array<array{active: bool, matched: bool, parentActive: bool}> 条件编译状态栈 */
+    private array $ctStack = [];
+
     /** @param Token[] $tokens */
-    public function __construct(array $tokens, bool $debugMode = false)
-    {
+    public function __construct(
+        array $tokens,
+        bool $debugMode = false,
+        string $targetOS = '',
+        string $targetArch = '',
+        string $ccClass = 'TCC'
+    ) {
         $this->tokens = $tokens;
         $this->debugMode = $debugMode;
+        // 空值回退到宿主环境（与 tphp.php 交叉编译参数处理一致）
+        $this->targetOS   = $targetOS   !== '' ? $targetOS   : PHP_OS_FAMILY;
+        $this->targetArch = $targetArch !== '' ? $targetArch : php_uname('m');
+        $this->ccClass    = $ccClass;
     }
 
     /** 注入其他文件已声明的枚举名（完全限定名 → true），用于跨文件枚举引用 */
@@ -110,12 +127,25 @@ class Parser
         }
 
         // 预处理指令（任意顺序：include/flag/callback/cstruct/debug 可混合出现）
+        // 支持 #if/#elseif/#else/#endif 条件编译包裹
         $includes = [];
         $ccFlags = [];
         $callbacks = [];
         $cstructs = [];
         $debugs  = [];
-        while ($this->check(TokenType::HASH_INCLUDE) || $this->check(TokenType::HASH_IMPORT) || $this->check(TokenType::CC_FLAG) || $this->check(TokenType::HASH_CALLBACK) || $this->check(TokenType::HASH_CSTRUCT) || $this->check(TokenType::HASH_DEBUG)) {
+        while (true) {
+            // 条件编译指令优先处理
+            if ($this->tryCtDirective()) continue;
+            if (!$this->check(TokenType::HASH_INCLUDE) && !$this->check(TokenType::HASH_IMPORT)
+                && !$this->check(TokenType::CC_FLAG) && !$this->check(TokenType::HASH_CALLBACK)
+                && !$this->check(TokenType::HASH_CSTRUCT) && !$this->check(TokenType::HASH_DEBUG)) {
+                break;
+            }
+            // 非命中分支内：消费指令但不收集
+            if (!$this->ctActive()) {
+                $this->advance();
+                continue;
+            }
             if ($this->match(TokenType::HASH_INCLUDE)) {
                 $includes[] = $this->previous()->literal;
             } elseif ($this->match(TokenType::HASH_IMPORT)) {
@@ -159,6 +189,8 @@ class Parser
         $functions = [];
 
         while (!$this->check(TokenType::EOF)) {
+            // 条件编译指令优先处理（#if/#elseif/#else/#endif）
+            if ($this->tryCtDirective()) continue;
             // 解析 #[...] 属性前缀（注解使用）
             $prefixAttrs = $this->parseAttributeUses();
             if (!empty($prefixAttrs)) {
@@ -193,6 +225,9 @@ class Parser
                 // 允许 enum 在主声明循环中（与 class/interface 交错声明）
                 $this->advance();
                 $enums[] = $this->parseEnumDecl();
+            } elseif ($this->check(TokenType::CONST_KW)) {
+                // const 可在主循环中（被 #if 条件编译包裹时）
+                $constants[] = $this->parseConstDecl();
             } elseif ($this->check(TokenType::FUNCTION)) {
                 $functions[] = $this->parseFunction($prefixAttrs);
             } elseif ($this->check(TokenType::ECHO_KW) || $this->check(TokenType::IDENTIFIER) || $this->check(TokenType::VAR_DUMP)) {
@@ -1048,6 +1083,17 @@ class Parser
 
     private function parseStmt(): StmtNode
     {
+        // 条件编译指令在函数体内也可出现（#if/#elseif/#else/#endif）
+        //   非命中分支已由 skipCtBranch() 跳过，不会到达此处
+        //   到达此处的 #if 必为命中分支的边界，消费后继续解析下一条语句
+        if ($this->tryCtDirective()) {
+            // 条件编译指令本身不产生 AST 节点
+            //   返回一个空表达式语句占位（实际上 parseBlock 会继续循环）
+            //   但 parseStmt 要求返回 StmtNode — 用空的 echo 占位
+            //   更好的做法：让 parseBlock 跳过条件编译指令
+            //   为保持简单，这里返回一个 NopStmtNode
+            return new NopStmtNode();
+        }
         if ($this->match(TokenType::ECHO_KW))       return $this->parseEchoStmt();
         if ($this->match(TokenType::RETURN_KW))     return $this->parseReturnStmt();
         if ($this->match(TokenType::IF_KW))         return $this->parseIfStmt();
@@ -2645,5 +2691,275 @@ class Parser
         throw new RuntimeException(
             sprintf("Parser error [%d:%d]: %s", $tok->line, $tok->column, $msg)
         );
+    }
+
+    // ============================================================
+    // 条件编译 #if / #elseif / #else / #endif
+    //   解析期求值：非命中分支的 token 直接跳过（不解析、不类型检查、不生成 C 代码）
+    //   可出现在顶层（包裹 #include/#flag/#callback/#cstruct/class/function/const/enum）
+    //   和函数体内（包裹任意语句）
+    // ============================================================
+
+    /** 当前是否在命中分支内（栈为空或栈顶 active=true） */
+    private function ctActive(): bool
+    {
+        return empty($this->ctStack) || $this->ctStack[count($this->ctStack) - 1]['active'];
+    }
+
+    /**
+     * 求值条件表达式: 支持 ! && || () 和标识符
+     *   标识符: Windows/Linux/MacOS/Darwin/TCC/GCC/Clang/x86_64/aarch64/arm64/debug/prod
+     *   未知标识符 → false（前向兼容）
+     */
+    private function evalCtCond(string $expr): bool
+    {
+        $tokens = $this->tokenizeCtExpr($expr);
+        $pos = 0;
+        return $this->parseCtOr($tokens, $pos);
+    }
+
+    /** 简单词法切分: 识别 ! && || ( ) 和标识符 */
+    private function tokenizeCtExpr(string $expr): array
+    {
+        $tokens = [];
+        $len = strlen($expr);
+        $i = 0;
+        while ($i < $len) {
+            $c = $expr[$i];
+            if (ctype_space($c)) { $i++; continue; }
+            if ($c === '!') {
+                if ($i + 1 < $len && $expr[$i + 1] === '=') {
+                    // != 不支持（条件编译只接受布尔组合）
+                    $this->error("条件编译不支持 '!=' 运算符，请用 !(a == b) 形式");
+                }
+                $tokens[] = ['!', 'op'];
+                $i++;
+                continue;
+            }
+            if ($c === '&' && $i + 1 < $len && $expr[$i + 1] === '&') {
+                $tokens[] = ['&&', 'op'];
+                $i += 2;
+                continue;
+            }
+            if ($c === '|' && $i + 1 < $len && $expr[$i + 1] === '|') {
+                $tokens[] = ['||', 'op'];
+                $i += 2;
+                continue;
+            }
+            if ($c === '(') { $tokens[] = ['(', 'lparen']; $i++; continue; }
+            if ($c === ')') { $tokens[] = [')', 'rparen']; $i++; continue; }
+            // 标识符
+            $j = $i;
+            while ($j < $len && (ctype_alnum($expr[$j]) || $expr[$j] === '_')) $j++;
+            if ($j === $i) {
+                $this->error("条件表达式含非法字符 '{$c}': {$expr}");
+            }
+            $tokens[] = [substr($expr, $i, $j - $i), 'ident'];
+            $i = $j;
+        }
+        return $tokens;
+    }
+
+    /** || 优先级最低 */
+    private function parseCtOr(array $tokens, int &$pos): bool
+    {
+        $result = $this->parseCtAnd($tokens, $pos);
+        while (isset($tokens[$pos]) && $tokens[$pos][1] === 'op' && $tokens[$pos][0] === '||') {
+            $pos++;
+            $rhs = $this->parseCtAnd($tokens, $pos);
+            $result = $result || $rhs;
+        }
+        return $result;
+    }
+
+    private function parseCtAnd(array $tokens, int &$pos): bool
+    {
+        $result = $this->parseCtNot($tokens, $pos);
+        while (isset($tokens[$pos]) && $tokens[$pos][1] === 'op' && $tokens[$pos][0] === '&&') {
+            $pos++;
+            $rhs = $this->parseCtNot($tokens, $pos);
+            $result = $result && $rhs;
+        }
+        return $result;
+    }
+
+    private function parseCtNot(array $tokens, int &$pos): bool
+    {
+        if (isset($tokens[$pos]) && $tokens[$pos][1] === 'op' && $tokens[$pos][0] === '!') {
+            $pos++;
+            return !$this->parseCtNot($tokens, $pos);
+        }
+        return $this->parseCtPrimary($tokens, $pos);
+    }
+
+    private function parseCtPrimary(array $tokens, int &$pos): bool
+    {
+        if (!isset($tokens[$pos])) {
+            $this->error('条件表达式不完整');
+        }
+        $tok = $tokens[$pos];
+        if ($tok[1] === 'lparen') {
+            $pos++; // (
+            $result = $this->parseCtOr($tokens, $pos);
+            if (!isset($tokens[$pos]) || $tokens[$pos][1] !== 'rparen') {
+                $this->error('条件表达式缺少右括号 )');
+            }
+            $pos++; // )
+            return $result;
+        }
+        if ($tok[1] === 'ident') {
+            $pos++;
+            return $this->evalCtIdent($tok[0]);
+        }
+        $this->error("条件表达式非法 token: {$tok[0]}");
+    }
+
+    /** 标识符求值 */
+    private function evalCtIdent(string $name): bool
+    {
+        // 大小写不敏感规范化
+        $lower = strtolower($name);
+        // OS — 全部用小写比较
+        $osMap = [
+            'windows' => 'windows', 'win' => 'windows',
+            'linux' => 'linux',
+            'macos' => 'darwin', 'darwin' => 'darwin', 'mac' => 'darwin',
+        ];
+        if (isset($osMap[$lower])) {
+            return strtolower($this->targetOS) === $osMap[$lower];
+        }
+        // 编译器
+        $ccMap = ['tcc' => 'TCC', 'tinyc' => 'TCC',
+                  'gcc' => 'GCC', 'clang' => 'Clang'];
+        if (isset($ccMap[$lower])) {
+            return $this->ccClass === $ccMap[$lower];
+        }
+        // 架构
+        $archMap = [
+            'x86_64' => 'x86_64', 'amd64' => 'x86_64', 'x64' => 'x86_64',
+            'aarch64' => 'aarch64', 'arm64' => 'aarch64',
+        ];
+        if (isset($archMap[$lower])) {
+            $expected = $archMap[$lower];
+            $current = strtolower($this->targetArch);
+            return $current === $expected
+                || $current === ($expected === 'x86_64' ? 'amd64' : 'aarch64');
+        }
+        // 模式
+        if ($lower === 'debug') return $this->debugMode;
+        if ($lower === 'prod') return !$this->debugMode;
+        // 未知标识符 → false（前向兼容，不报错）
+        return false;
+    }
+
+    /**
+     * 跳过到同层下一个 #elseif/#else/#endif
+     *   处理嵌套 #if: 深度计数，内层 #endif 不结束外层跳过
+     */
+    private function skipCtBranch(): void
+    {
+        $depth = 1;
+        while (!$this->isAtEnd()) {
+            if ($this->check(TokenType::HASH_IF)) {
+                $depth++;
+                $this->advance();
+            } elseif ($this->check(TokenType::HASH_ENDIF)) {
+                $depth--;
+                $this->advance();
+                if ($depth === 0) {
+                    // 消费了配对的 #endif，弹出栈顶
+                    array_pop($this->ctStack);
+                    return;
+                }
+            } elseif ($depth === 1 && ($this->check(TokenType::HASH_ELSEIF) || $this->check(TokenType::HASH_ELSE))) {
+                // 同层分支边界，交给调用者处理
+                return;
+            } else {
+                $this->advance();
+            }
+        }
+        $this->error('未闭合的 #if 指令');
+    }
+
+    private function isAtEnd(): bool
+    {
+        return $this->peek()->type === TokenType::EOF;
+    }
+
+    /**
+     * 处理 #if 指令（顶层和函数体内共用）
+     *   返回 true 表示已处理（调用方应 continue 循环）
+     */
+    private function handleCtIf(): bool
+    {
+        if (!$this->match(TokenType::HASH_IF)) return false;
+        $cond = $this->previous()->lexeme;
+        $parentActive = $this->ctActive();
+        $result = $parentActive ? $this->evalCtCond($cond) : false;
+        $this->ctStack[] = ['active' => $result, 'matched' => $result, 'parentActive' => $parentActive];
+        if (!$result) $this->skipCtBranch();
+        return true;
+    }
+
+    /** 处理 #elseif */
+    private function handleCtElseif(): bool
+    {
+        if (!$this->match(TokenType::HASH_ELSEIF)) return false;
+        if (empty($this->ctStack)) $this->error('#elseif 缺少对应的 #if');
+        $cond = $this->previous()->lexeme;
+        $top = &$this->ctStack[count($this->ctStack) - 1];
+        if (!$top['parentActive']) {
+            // 父分支未命中，本分支也必不命中
+            $top['active'] = false;
+            $this->skipCtBranch();
+            return true;
+        }
+        if ($top['matched']) {
+            // 前面分支已命中，本分支跳过
+            $top['active'] = false;
+            $this->skipCtBranch();
+            return true;
+        }
+        $result = $this->evalCtCond($cond);
+        $top['active'] = $result;
+        $top['matched'] = $result;
+        if (!$result) $this->skipCtBranch();
+        return true;
+    }
+
+    /** 处理 #else */
+    private function handleCtElse(): bool
+    {
+        if (!$this->match(TokenType::HASH_ELSE)) return false;
+        if (empty($this->ctStack)) $this->error('#else 缺少对应的 #if');
+        $top = &$this->ctStack[count($this->ctStack) - 1];
+        if (!$top['parentActive']) {
+            $top['active'] = false;
+            $this->skipCtBranch();
+            return true;
+        }
+        $top['active'] = !$top['matched'];
+        $top['matched'] = true;
+        if (!$top['active']) $this->skipCtBranch();
+        return true;
+    }
+
+    /** 处理 #endif */
+    private function handleCtEndif(): bool
+    {
+        if (!$this->match(TokenType::HASH_ENDIF)) return false;
+        if (empty($this->ctStack)) $this->error('#endif 缺少对应的 #if');
+        array_pop($this->ctStack);
+        return true;
+    }
+
+    /** 尝试处理任意条件编译指令，返回 true 表示已处理 */
+    private function tryCtDirective(): bool
+    {
+        if ($this->handleCtIf())      return true;
+        if ($this->handleCtElseif())  return true;
+        if ($this->handleCtElse())    return true;
+        if ($this->handleCtEndif())   return true;
+        return false;
     }
 }

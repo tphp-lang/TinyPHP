@@ -45,6 +45,10 @@ enum TokenType: string
     case HASH_CALLBACK = '#callback';
     case HASH_CSTRUCT  = '#cstruct';
     case HASH_DEBUG    = '#debug';
+    case HASH_IF       = '#if';       // 条件编译: #if <condition>
+    case HASH_ELSEIF   = '#elseif';   //          #elseif <condition>  (别名 #elif)
+    case HASH_ELSE     = '#else';     //          #else
+    case HASH_ENDIF    = '#endif';    //          #endif
     case HASH_ATTRIBUTE = '#[';  // PHP 8 attribute syntax #[...]
     case TRY_KW       = 'try';
     case CATCH_KW     = 'catch';

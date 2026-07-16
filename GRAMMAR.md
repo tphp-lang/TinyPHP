@@ -111,6 +111,7 @@ statement_top:
   | #flag 指令                  ✅ TinyPHP 扩展
   | #callback 指令              ✅ TinyPHP 扩展
   | #import 指令                ✅ TinyPHP 扩展
+  | #if/#elseif/#else/#endif    ✅ TinyPHP 扩展（条件编译，可包裹任意顶层声明）
   | interface_decl             ✅
   | trait_decl                 ✅
   | abstract_class_decl        ✅
@@ -347,6 +348,7 @@ statement:
   | block                      ✅
   | 'static' type? '$' IDENTIFIER '=' expr? ';'  ✅ (静态局部变量，类型/初始值可选)
   | 'const' type? IDENTIFIER '=' expr ';'        ✅ (函数内常量，PHP 8.3+，类型可选)
+  | #if/#elseif/#else/#endif   ✅ TinyPHP 扩展（条件编译，函数体内可用）
 ```
 
 ### 7.1 具体语法
@@ -640,6 +642,66 @@ __TRAIT__             ❌
   | '#callback' type IDENTIFIER '(' params ')'   ✅ (声明 C 回调签名)
   | '#import' name   ✅ (按需引入 ext/name/src/*.php + *.c)
   | '#cstruct' IDENTIFIER '{' fields '}'   ✅ (声明 C 结构体字段布局,支持 $p->field 原生访问)
+  | '#if' condition          ✅ (条件编译开始)
+  | '#elseif' condition      ✅ (别名 #elif)
+  | '#else'                  ✅
+  | '#endif'                 ✅ (条件编译结束)
+```
+
+### 11.1 条件编译 `#if`/`#elseif`/`#else`/`#endif`
+
+**解析期求值**：非命中分支的 token 直接跳过（不解析、不类型检查、不生成 C 代码），与 V 语言 `$if` 默认行为一致。可出现在**顶层**（包裹 `#include`/`#flag`/`#callback`/`#cstruct`/`class`/`function`/`const`/`enum`）和**函数体内**（包裹任意语句）。
+
+**条件表达式**支持 `!`、`&&`、`||`、`()` 组合和标识符。标识符大小写不敏感。
+
+| 类别 | 标识符 | 判定依据 |
+|------|--------|----------|
+| OS | `Windows` / `Win` | 目标 OS = Windows |
+| | `Linux` | 目标 OS = Linux |
+| | `MacOS` / `Darwin` / `Mac` | 目标 OS = Darwin |
+| 编译器 | `TCC` / `TinyC` | 当前编译器类 = TCC |
+| | `GCC` | 当前编译器类 = GCC |
+| | `Clang` | 当前编译器类 = Clang |
+| 架构 | `x86_64` / `amd64` / `x64` | 目标架构 = x86_64 |
+| | `aarch64` / `arm64` | 目标架构 = aarch64 |
+| 模式 | `debug` | `--debug` 模式 |
+| | `prod` | 非 `--debug` 模式 |
+
+> 未知标识符视为 `false`（前向兼容，不报错）。
+> 目标 OS/架构优先取 `-os`/`-arch` 参数，未指定时取宿主环境。
+
+**示例**：
+
+```php
+// 条件引入头文件和链接库
+#if Windows
+    #include <windows.h>
+    #flag -luser32
+#elseif Linux
+    #include <unistd.h>
+    #flag -lrt
+#elseif Darwin
+    #include <unistd.h>
+    #flag -liconv
+#endif
+
+// 条件函数声明
+#if Windows
+    function get_console_title(): string { /* Windows 实现 */ }
+#else
+    function get_console_title(): string { return ""; }
+#endif
+
+// 函数体内条件代码块
+function init(): void {
+    #if Windows && TCC
+        // TCC+Windows 特定 workaround
+    #endif
+
+    #if !Windows
+        throw new Exception("Unsupported platform");
+    #endif
+}
 ```
 
 ---
@@ -761,6 +823,7 @@ phpc_ptr_bridge:
 | `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,`$p->field` 原生访问 |
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
 | `#import name` | 按需引入扩展（自动加载 ext/name/src/） |
+| `#if`/`#elseif`/`#else`/`#endif` | 条件编译：解析期求值，非命中分支跳过不生成代码。支持顶层和函数体内，条件表达式含 `Windows`/`Linux`/`Darwin`/`TCC`/`GCC`/`Clang`/`x86_64`/`aarch64`/`debug`/`prod` 标识符 + `!`/`&&`/`\|\|`/`()` 组合（详见 §11.1） |
 | `C->func(args)` | 直接 C 函数调用 |
 | `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
 | `C.Type` | C 类型注解（函数参数/返回值。值类型 `C.int`→`int`/`C.double`→`double`/`C.char`→`char`；定宽 `C.int32`→`int32_t`/`C.uint64`→`uint64_t`；指针 `C.void*`→`void*`/`C.Point*`→`Point*`，用 `*` 后缀） |

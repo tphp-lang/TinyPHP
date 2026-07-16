@@ -173,6 +173,20 @@ if ($cc !== null) {
 
 if (!is_dir($includeDir))    die("Error: include directory not found: {$includeDir}\n");
 
+// Detect compiler class early — used by Parser for #if 条件编译
+//   TCC (built-in), GCC, or Clang
+$ccClass = 'TCC';
+if ($cc !== null) {
+    $ccLower = strtolower($cc);
+    if (str_contains($ccLower, 'gcc')) $ccClass = 'GCC';
+    elseif (str_contains($ccLower, 'clang')) $ccClass = 'Clang';
+} elseif (PHP_OS_FAMILY === 'Darwin') {
+    $ccClass = 'Clang';
+}
+// 目标 OS/Arch（条件编译求值用）：未指定时回退到宿主环境
+$ctTargetOS   = $targetOS ?? strtolower(PHP_OS_FAMILY);
+$ctTargetArch = $targetArch ?? strtolower(php_uname('m'));
+
 // --- Phase 1: Transpile all PHP → C ---
 $allFilesStr = implode(', ', array_map(fn($f) => basename($f), $files));
 echo "[1/2] Transpiling {$allFilesStr} => C...\n";
@@ -361,7 +375,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
 
         $lexer  = new Lexer($source, $debugMode);
         $tokens = $lexer->tokenize();
-        $parser = new Parser($tokens, $debugMode);
+        $parser = new Parser($tokens, $debugMode, $ctTargetOS, $ctTargetArch, $ccClass);
         // Inject enum names declared in other files (for cross-file enum references)
         $parser->setKnownEnums($knownEnumNames);
         $ast    = $parser->parse();
@@ -615,17 +629,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     if (!empty($allFlags)) {
         $platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin'];
         $currentOS = PHP_OS_FAMILY;
-        // Detect which compiler class: 'TCC' (built-in), 'GCC', 'Clang'
-        $ccClass = 'TCC';  // default built-in
-        if ($cc !== null) {
-            $ccLower = strtolower($cc);
-            if (str_contains($ccLower, 'gcc')) $ccClass = 'GCC';
-            elseif (str_contains($ccLower, 'clang')) $ccClass = 'Clang';
-            // else keep 'TCC' for unknown compilers
-        } elseif (PHP_OS_FAMILY === 'Darwin') {
-            // macOS fallback to cc (which is Clang)
-            $ccClass = 'Clang';
-        }
+        // $ccClass 已在编译器选择阶段计算（条件编译共用）
         // Allowed #flag prefixes (whitelist — blocks arbitrary flag injection)
         $allowedFlagPrefixes = [
             '-I', '-L', '-l', '-D', '-U',
@@ -706,7 +710,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     }
     // MinGW GCC workaround: math.h functions may not be declared
     if (PHP_OS_FAMILY === 'Windows' && str_contains($ccLower, 'gcc')) {
-        $extraFlags .= ' -Wno-implicit-function-declaration';
+        $extraFlags .= ' -Wno-implicit-function-declaration -Wno-int-conversion -Wno-discarded-qualifiers';
     }
 
     // 分离 -L/-l 到 linkFlags：链接器单遍扫描，库必须在 .c 文件之后
@@ -905,6 +909,14 @@ if ($isTCC && $inPhar) {
                 }
             }
         }
+        // Windows: -B 设置 tcc_lib_path（用于 libtcc1.a 等），但 -l 库搜索走 library_paths
+        // 必须额外 -L 指向 win32/lib，否则 -lws2_32 找不到 ws2_32.def
+        if (PHP_OS_FAMILY === 'Windows' && isset($bFlag)) {
+            $winLibDir = $tccBase . '/lib';
+            if (is_dir($winLibDir)) {
+                $bFlag .= ' -L"' . realpath($winLibDir) . '"';
+            }
+        }
     }
 }
 if (PHP_OS_FAMILY === 'Darwin' && $isTCC) {
@@ -964,11 +976,22 @@ if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "os/zlib.h"')
     // 重建 extraSrcs（包含新增的 zlib 源码）
     $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
 }
+// stream: 检测生成的 C 代码是否使用了 stream 扩展（CodeGenerator 条件引入 ext/stream/src/stream.h）
+// Windows 需要链接 ws2_32.lib（winsock2）；POSIX socket API 在 libc 中无需额外链接
+if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "ext/stream/src/stream.h"') !== false
+    && PHP_OS_FAMILY === 'Windows') {
+    $lateLinkFlags .= ' -lws2_32';
+}
+// openssl: 链接 flags 现由 ext/openssl/src/openssl.php 通过 #flag + #if TCC 条件编译处理
+// （TCC 用 lib-tcc/，GCC/Clang 用 lib/ 或 lib64/；-I/-L/-l 全部在 openssl.php 中声明）
+// tphp.php 不再自动检测和添加 OpenSSL flags，避免重复
 // -shared 模式：生成动态库
 $sharedFlag = $isShared ? ' -shared' : '';
+// 项目根目录作为额外 -I 路径，让 ext/ 下的扩展头文件（如 ext/stream/src/stream.h）可被 #include 查找到
+$projectRoot = dirname($includeDir);
 $cmd = sprintf(
-    '"%s" %s%s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
-    $ccExe, $bFlag, $extraFlags, $linkFlags, $sharedFlag, $includeDir, $outExe, $cFile, $extraSrcs, $lateLinkFlags
+    '"%s" %s%s%s%s -I"%s" -I"%s" -o "%s" "%s"%s%s 2>&1',
+    $ccExe, $bFlag, $extraFlags, $linkFlags, $sharedFlag, $includeDir, $projectRoot, $outExe, $cFile, $extraSrcs, $lateLinkFlags
 );
 
 $tccOutput = [];
@@ -1071,8 +1094,8 @@ if ($retval !== 0 || !file_exists($outExe) || filesize($outExe) < 64) {
                     $newExtraSrcs = ' @"' . $fallbackRespFile . '"';
                 }
                 $cmd2 = sprintf(
-                    '"%s" %s%s%s -I"%s" -o "%s" "%s"%s%s 2>&1',
-                    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $outExe, $cFile, $newExtraSrcs, $newLateLink
+                    '"%s" %s%s%s -I"%s" -I"%s" -o "%s" "%s"%s%s 2>&1',
+                    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $projectRoot, $outExe, $cFile, $newExtraSrcs, $newLateLink
                 );
                 if ($debugMode) echo "[DEBUG] TCC .a fallback, extracting .obj files...\n";
                 $tccOutput2 = [];

@@ -28,11 +28,13 @@
 | `ext/exif` (纯 phpc) | `ext/exif/src/exif.php` | 8 |
 | `ext/calendar` (纯 tphp) | `ext/calendar/src/calendar.php` | 16 |
 | `include/fileinfo` (MIME 检测) | `fileinfo.h` | 6 |
+| `ext/stream` (socket stream) | `ext/stream/src/stream.h` | 15 |
+| `ext/openssl` (TLS/加密) | `ext/openssl/src/openssl.h` | 21 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **303+** |
+| **合计** | | **339+** |
 
 ---
 
@@ -1232,6 +1234,224 @@ zip_close($zip2);
 ```
 
 > 测试: `test/zip/basic.php`（9 项：创建 ZIP + 条目名 + 条目大小 + 压缩方法 + 压缩后大小 + zip_locate + zip_entry_read + zip_stat + 错误处理）全部通过。
+
+---
+
+## stream — Socket Stream
+
+> 文件: `ext/stream/src/stream.h`。按需引入 `#import stream`。
+>
+> 跨平台 socket stream：Windows winsock2 / POSIX sys/socket.h。socket fd 以 `t_int` 流转。
+> Winsock 懒初始化（首次 socket 操作自动 `WSAStartup`），`FD_SETSIZE` 提升到 1024。
+> AOT 单返回类型: 所有失败统一 `tp_throw_ex`（可 try-catch，不返回 `false`）。
+> TLS 支持由 `ext/openssl` 扩展提供。**OpenSSL 扩展当前暂停**，`stream_socket_enable_crypto` 使用 stub，
+> 调用时抛 "TLS not supported (OpenSSL extension not loaded)" 异常。非 TLS 流功能完全可用。
+
+### 常量
+
+#### Socket 类型 / 协议
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `STREAM_SOCK_STREAM` | 1 | TCP 流 socket |
+| `STREAM_SOCK_DGRAM` | 2 | UDP 数据报 socket |
+| `STREAM_SOCK_RDM` | 4 | 可靠数据报 |
+| `STREAM_SOCK_SEQPACKET` | 5 | 顺序包 socket |
+| `STREAM_PF_INET` | 2 | IPv4 |
+| `STREAM_PF_INET6` | 10 | IPv6 |
+| `STREAM_PF_UNIX` | 1 | Unix 域 socket |
+| `STREAM_IPPROTO_TCP` | 6 | TCP |
+| `STREAM_IPPROTO_UDP` | 17 | UDP |
+| `STREAM_IPPROTO_ICMP` | 1 | ICMP |
+| `STREAM_IPPROTO_RAW` | 255 | 原始 IP |
+
+#### 客户端 / 服务端标志
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `STREAM_CLIENT_CONNECT` | 2 | 默认连接 |
+| `STREAM_CLIENT_ASYNC_CONNECT` | 4 | 异步连接 |
+| `STREAM_CLIENT_PERSISTENT` | 1 | 持久连接（保留参数） |
+| `STREAM_SERVER_BIND` | 4 | 绑定地址 |
+| `STREAM_SERVER_LISTEN` | 8 | 监听连接 |
+
+#### Shutdown / 选项
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `STREAM_SHUT_RD` | 0 | 关闭读方向 |
+| `STREAM_SHUT_WR` | 1 | 关闭写方向 |
+| `STREAM_SHUT_RDWR` | 2 | 关闭双向 |
+| `STREAM_OOB` | 1 | 带外数据 |
+| `STREAM_PEEK` | 2 | 窥视（不消费数据） |
+| `STREAM_OPTION_BLOCKING` | 1 | 阻塞模式 |
+| `STREAM_OPTION_READ_BUFFER` | 3 | 读缓冲大小 |
+| `STREAM_OPTION_READ_TIMEOUT` | 4 | 读超时 |
+| `STREAM_OPTION_WRITE_TIMEOUT` | 5 | 写超时 |
+| `STREAM_OPTION_CHUNK_SIZE` | 6 | 块大小 |
+
+#### Crypto (TLS)
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `STREAM_CRYPTO_METHOD_SSLv2` | 0 | SSLv2（已废弃） |
+| `STREAM_CRYPTO_METHOD_SSLv3` | 1 | SSLv3 |
+| `STREAM_CRYPTO_METHOD_SSLv23` | 2 | SSLv2.3/TLS（通用） |
+| `STREAM_CRYPTO_METHOD_TLS` | 3 | TLS |
+| `STREAM_CRYPTO_METHOD_TLSv1_0` | 4 | TLS 1.0 |
+| `STREAM_CRYPTO_METHOD_TLSv1_1` | 5 | TLS 1.1 |
+| `STREAM_CRYPTO_METHOD_TLSv1_2` | 6 | TLS 1.2 |
+| `STREAM_CRYPTO_METHOD_TLSv1_3` | 7 | TLS 1.3 |
+| `STREAM_CRYPTO_ENABLE` | 1 | 启用 TLS |
+| `STREAM_CRYPTO_DISABLE` | 0 | 禁用 TLS |
+
+### 函数
+
+| TinyPHP 签名 | PHP 原生签名 | 实现差异 |
+|--------------|-------------|---------|
+| `stream_close(int $fd): void` | `stream_close($stream): void` | fd 直接为 int（非 Resource 对象） |
+| `stream_last_error(): int` | `stream_last_error(): int` | Windows: WSAGetLastError；POSIX: errno |
+| `stream_strerror(int $err): string` | `stream_strerror(int $code): string` | Windows: FormatMessageA；POSIX: strerror。消息语言取决于系统 |
+| `stream_set_blocking(int $fd, bool $enable): bool` | `stream_set_blocking($stream, bool $enable): bool` | Windows: ioctlsocket；POSIX: fcntl |
+| `stream_set_read_buffer(int $fd, int $buffer): int` | `stream_set_read_buffer($stream, int $buffer): int` | socket 无 stdio 缓冲，固定返回 0 |
+| `stream_isatty(int $fd): bool` | `stream_isatty($stream): bool` | Windows: `_isatty`；POSIX: `isatty` |
+| `stream_select(array $read, array $write, array $except, int $tv_sec, int $tv_usec = 0): int\|Exception` | `stream_select(array &$read, array &$write, array &$except, int $tv_sec, int $tv_usec = 0): int\|false` | in-place 过滤就绪 fd；失败抛 Exception（非返回 false） |
+| `stream_socket_server(string $address, int $flags = STREAM_SERVER_BIND \| STREAM_SERVER_LISTEN, array $context = []): int\|Exception` | `stream_socket_server(string $address, int $errno, int $errstr, int $timeout, int $flags, $context): resource\|false` | 无 byRef errno/errstr；失败抛 Exception |
+| `stream_socket_accept(int $server_fd, int $timeout_ms = -1): int\|Exception` | `stream_socket_accept($server, float $timeout, string $peername): resource\|false` | timeout 单位为毫秒（PHP 为秒） |
+| `stream_socket_client(string $address, int $timeout_ms = -1, int $flags = STREAM_CLIENT_CONNECT, array $context = []): int\|Exception` | `stream_socket_client(string $address, int $errno, int $errstr, ..., int $flags, $context): resource\|false` | 无 byRef errno/errstr |
+| `stream_socket_recvfrom(int $fd, int $length, int $flags = 0): string\|Exception` | `stream_socket_recvfrom($socket, int $length, int $flags, string &$address): string\|false` | 不返回对端地址（用 `stream_socket_get_name` 替代） |
+| `stream_socket_sendto(int $fd, string $data, int $flags = 0, string $address = ""): int\|Exception` | `stream_socket_sendto($socket, string $data, int $flags, string $address): int\|false` | 一致 |
+| `stream_socket_get_name(int $fd, bool $want_peer): string\|Exception` | `stream_socket_get_name($socket, bool $want_peer): string\|false` | 失败抛 Exception |
+| `stream_socket_shutdown(int $fd, int $how): bool\|Exception` | `stream_socket_shutdown($stream, int $how): bool` | 失败抛 Exception |
+| `stream_socket_enable_crypto(int $fd, bool $enable, int $crypto_type = 0): int\|Exception` | `stream_socket_enable_crypto($stream, bool $enable, int $crypto_type): int\|bool\|false` | 需 `ext/openssl`；未加载抛 Exception |
+
+### 示例
+
+```php
+// TCP echo 服务端 + 客户端
+$server = stream_socket_server("tcp://127.0.0.1:19999");
+$client = stream_socket_client("tcp://127.0.0.1:19999");
+$accepted = stream_socket_accept($server, 1000);
+stream_socket_sendto($client, "hello", 0, "");
+echo stream_socket_recvfrom($accepted, 100, 0);  // "hello"
+stream_close($server);
+```
+
+> 测试: `test/ext/stream_basic.php`（strerror 非空 + TCP echo + set_blocking + shutdown）全部通过。
+
+---
+
+## openssl — TLS/SSL 加密 ⏸️ 暂停
+
+> 文件: `ext/openssl/src/openssl.h`。按需引入 `#import openssl`。
+>
+> **当前状态**: 暂停。TCC 无法链接 MinGW GCC 生成的 COFF 静态库（对象格式不兼容），
+> 用 TCC 重编译 OpenSSL 源码耗时过长且部分源文件依赖 TCC 缺失的头文件（`wspiapi.h` 等），
+> 暂不可行。代码保留，待后续找到可行的 TCC 构建方案再启用。
+> 启用前 `#import openssl` 会因缺失静态库而链接失败，`test/ext/openssl_basic.php` 标记为 `@skip`。
+>
+> 原依赖 OpenSSL 3.0.21 预编译静态库（`libssl.a` / `libcrypto.a`）。
+> 配置 `no-asm no-shared -DOPENSSL_NO_INLINE_ASM`（TCC 兼容，无内联 ASM）。
+> SSL*/SSL_CTX* 指针以 `t_int` 流转（phpc_ptr_to_int / phpc_int_to_ptr）。
+> AOT 单返回类型: 所有失败统一 `tp_throw_ex`（可 try-catch，不返回 `false`）。
+> 包含顺序: openssl.h 必须在 stream.h 之前（`TPHP_STREAM_TLS_IMPLEMENTED` 守卫）。
+
+### 常量
+
+#### SSL 选项
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `SSL_OP_NO_COMPRESSION` | 0x00020000 | 禁用压缩 |
+| `SSL_OP_NO_SSLv2` | 0x01000000 | 禁用 SSLv2 |
+| `SSL_OP_NO_SSLv3` | 0x02000000 | 禁用 SSLv3 |
+| `SSL_OP_NO_TLSv1` | 0x04000000 | 禁用 TLS 1.0 |
+| `SSL_OP_NO_TLSv1_1` | 0x10000000 | 禁用 TLS 1.1 |
+| `SSL_OP_NO_TLSv1_2` | 0x08000000 | 禁用 TLS 1.2 |
+| `SSL_OP_NO_TLSv1_3` | 0x20000000 | 禁用 TLS 1.3 |
+| `SSL_OP_NO_RENEGOTIATION` | 0x40000000 | 禁用重协商 |
+
+#### 验证模式
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `SSL_VERIFY_NONE` | 0 | 不验证 |
+| `SSL_VERIFY_PEER` | 1 | 验证对端证书 |
+| `SSL_VERIFY_FAIL_IF_NO_PEER_CERT` | 2 | 无证书则失败 |
+
+#### 文件类型 / 密钥类型 / 算法
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `SSL_FILETYPE_PEM` | 1 | PEM 格式 |
+| `SSL_FILETYPE_ASN1` | 2 | ASN1 格式 |
+| `OPENSSL_KEYTYPE_RSA` | 0 | RSA 密钥 |
+| `OPENSSL_KEYTYPE_EC` | 3 | EC 密钥 |
+| `OPENSSL_ALGO_SHA256` | 7 | SHA-256 签名算法 |
+| `OPENSSL_ALGO_SHA512` | 9 | SHA-512 签名算法 |
+
+#### 加密选项
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `OPENSSL_RAW_DATA` | 1 | 返回原始二进制 |
+| `OPENSSL_ZERO_PADDING` | 2 | 不使用 PKCS#7 填充 |
+| `OPENSSL_DONT_ZERO_PAD_KEY` | 4 | 不填充密钥 |
+
+### 函数
+
+#### SSL Context API
+
+| 函数 | 说明 |
+|------|------|
+| `openssl_ctx_new(int $method): int\|Exception` | 创建 SSL/TLS 上下文，返回 ctx 指针值 |
+| `openssl_ctx_free(int $ctx): void` | 释放上下文 |
+| `openssl_ctx_use_certificate_file(int $ctx, string $file, int $type): bool\|Exception` | 加载证书文件 |
+| `openssl_ctx_use_private_key_file(int $ctx, string $file, int $type): bool\|Exception` | 加载私钥文件 |
+| `openssl_ctx_set_verify(int $ctx, int $mode): void` | 设置验证模式 |
+| `openssl_ctx_set_options(int $ctx, int $options): int` | 设置选项（位掩码） |
+
+#### SSL Connection API
+
+| 函数 | 说明 |
+|------|------|
+| `openssl_ssl_new(int $ctx): int\|Exception` | 从上下文创建 SSL 对象 |
+| `openssl_ssl_free(int $ssl): void` | 释放 SSL 对象 |
+| `openssl_ssl_set_fd(int $ssl, int $fd): bool\|Exception` | 关联 socket fd |
+| `openssl_ssl_connect(int $ssl): int\|Exception` | 客户端 TLS 握手 |
+| `openssl_ssl_accept(int $ssl): int\|Exception` | 服务端 TLS 握手 |
+| `openssl_ssl_read(int $ssl, int $length): string\|Exception` | 读取解密数据 |
+| `openssl_ssl_write(int $ssl, string $data): int\|Exception` | 写入数据（加密发送） |
+| `openssl_ssl_shutdown(int $ssl): bool` | 优雅关闭 TLS |
+| `openssl_ssl_get_cipher_name(int $ssl): string` | 获取加密套件名 |
+| `openssl_ssl_get_version(int $ssl): string` | 获取 TLS 协议版本 |
+
+#### Error / 加密 / 随机 / 哈希 API
+
+| 函数 | 说明 |
+|------|------|
+| `openssl_error_string(): string` | 获取并清空错误队列 |
+| `openssl_encrypt(string $cipher, string $key, string $iv, string $data, int $options = 0): string\|Exception` | 对称加密（AES-256-CBC 等） |
+| `openssl_decrypt(string $cipher, string $key, string $iv, string $data, int $options = 0): string\|Exception` | 对称解密 |
+| `openssl_random_pseudo_bytes(int $length): string\|Exception` | 生成 CSPRNG 随机字节 |
+| `openssl_digest(string $method, string $data, bool $raw_output = false): string\|Exception` | 计算哈希（sha256/md5/sha512 等） |
+
+### 示例
+
+```php
+// AES-256-CBC 加解密往返
+$key = str_repeat("k", 32);   // 32 字节密钥
+$iv  = str_repeat("v", 16);   // 16 字节 IV
+$encrypted = openssl_encrypt("AES-256-CBC", $key, $iv, "hello world");
+$decrypted = openssl_decrypt("AES-256-CBC", $key, $iv, $encrypted);
+echo $decrypted;  // "hello world"
+
+// 哈希
+echo openssl_digest("sha256", "hello");  // 2cf24dba5fb0a30e...
+```
+
+> 测试: `test/ext/openssl_basic.php`（random_pseudo_bytes + digest + encrypt/decrypt 往返 + error_string）。
+> 注意: 测试标记为 `@skip`（需预编译 OpenSSL 静态库），CI 环境运行。
 
 ---
 
