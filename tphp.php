@@ -869,6 +869,17 @@ if ($isTCC && $inPhar) {
         $tccIncDir = $tccLibDir . DIRECTORY_SEPARATOR . 'include';
         if (is_dir($tccIncDir)) {
             $bFlag .= ' -nostdinc -I"' . $tccIncDir . '"';
+            // Linux: 追加系统 include 路径作为补充
+            // TCC 自带 glibc 替代头文件优先（-I 顺序在前），系统路径只补充
+            // TCC 没有的开发库头文件（X11/Wayland/OpenGL/GTK 等）。
+            // 这样用户 #include <X11/Xlib.h> 等系统开发库头时可被找到。
+            if (PHP_OS_FAMILY !== 'Windows' && PHP_OS_FAMILY !== 'Darwin') {
+                foreach (['/usr/local/include', '/usr/include'] as $sysInc) {
+                    if (is_dir($sysInc)) {
+                        $bFlag .= ' -I"' . $sysInc . '"';
+                    }
+                }
+            }
         }
     }
 } elseif ($isTCC) {
