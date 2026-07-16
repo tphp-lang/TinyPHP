@@ -879,6 +879,13 @@ if ($isTCC && $inPhar) {
                         $bFlag .= ' -I"' . $sysInc . '"';
                     }
                 }
+                // 多架构子目录（Debian/Ubuntu: /usr/include/x86_64-linux-gnu 等）
+                // 提供 asm/ioctls.h 等内核 ABI 头文件，TCC 自带 bits/ioctls.h 是
+                // 桩文件需 include <asm/ioctls.h>，但 asm/ 在 multiarch 子目录下。
+                // Arch/Fedora 的 asm/ 直接在 /usr/include/asm/，已被上面覆盖。
+                foreach (glob('/usr/include/*/asm') as $asmDir) {
+                    $bFlag .= ' -I"' . dirname($asmDir) . '"';
+                }
             }
         }
     }
