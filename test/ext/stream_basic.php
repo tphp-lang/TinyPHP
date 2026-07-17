@@ -36,7 +36,6 @@
 //   - TCP echo 使用 127.0.0.1 本地回环，跨平台兼容
 //   - stream_socket_pair: POSIX 用 socketpair(AF_UNIX)，Windows 用 TCP 回环模拟
 //   - 端口 19999 选择高位避免冲突
-#import stream
 #debug === 1. stream_strerror ===
 #debug strerror_0_nonempty=true
 #debug strerror_2_nonempty=true
