@@ -1,13 +1,15 @@
 #include "pcntl.h"
 #include <string.h>
-#include <runtime.h>
-#include "object/try.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "ext_str.h"
 
 #define _mk_str(s) ext_mk_str(s)
 
 #ifdef _WIN32
-#define PCNTL_ERR(msg) tp_throw("pcntl extension not available on Windows: " msg)
+// Windows 上 pcntl 不可用：直接 fatal exit（pcntl_test.php 在 Windows 上 @skip）
+// 不使用 tp_throw 以避免引入 common.h（含非 static inline 函数，多 TU 重复定义）
+#define PCNTL_ERR(msg) do { fprintf(stderr, "Fatal: pcntl extension not available on Windows: " msg "\n"); exit(1); } while(0)
 
 t_int tphp_fn_pcntl_fork(void)       { PCNTL_ERR("pcntl_fork()"); return -1; }
 t_int tphp_fn_pcntl_waitpid(t_int pid, t_int *status, t_int options) { (void)pid;(void)status;(void)options; PCNTL_ERR("pcntl_waitpid()"); return -1; }

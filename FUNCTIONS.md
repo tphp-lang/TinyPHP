@@ -1751,7 +1751,7 @@ $tid = Thread::id();
 | `#include "file.h"` | 生成 `#include` |
 | `#flag [CC] [OS] flags` | 平台+编译器过滤 |
 | `#callback type name(params)` | 声明 C 回调签名 |
-| `#import name` | 按需引入 ext/name/src/*.php + *.c |
+| `#import name` | 按需引入 ext/name/src/*.php（C 依赖由 .php 中 #flag 显式声明） |
 | `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,支持 `$p->field` 原生访问(编译期展开为 `((Struct*)$p)->field`) |
 
 ### 数组互操作

@@ -208,6 +208,20 @@ class CodeGenerator implements ASTVisitor
         'openssl_ssl_set_fd' => 't_bool', 'openssl_ssl_shutdown' => 't_bool',
         'openssl_ctx_free' => 'void', 'openssl_ssl_free' => 'void',
         'openssl_ctx_set_verify' => 'void',
+        // ── posix (内置 ext, POSIX 系统函数) ──
+        'posix_getpid' => 't_int', 'posix_getppid' => 't_int',
+        'posix_getuid' => 't_int', 'posix_geteuid' => 't_int',
+        'posix_getgid' => 't_int', 'posix_getegid' => 't_int',
+        'posix_isatty' => 't_int', 'posix_kill' => 't_int',
+        'posix_get_last_error' => 't_int',
+        'posix_getcwd' => 't_string', 'posix_strerror' => 't_string',
+        'posix_ttyname' => 't_string',
+        // ── pcntl (内置 ext, 进程控制, POSIX only) ──
+        'pcntl_fork' => 't_int', 'pcntl_waitpid' => 't_int',
+        'pcntl_wait' => 't_int', 'pcntl_alarm' => 't_int',
+        'pcntl_get_last_error' => 't_int',
+        'pcntl_strerror' => 't_string',
+        'pcntl_exec' => 'void',
         'phpc_new_arr_int' => 't_array*', 'phpc_new_arr_dbl' => 't_array*',
         'phpc_new_arr_str' => 't_array*', 'phpc_new_arr' => 't_array*',
         // ── t_var ──

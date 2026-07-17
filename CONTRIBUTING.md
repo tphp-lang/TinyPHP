@@ -331,7 +331,7 @@ if ($n === 'asort') return "tphp_fn_asort({$c})";  // ❌ 同上
 
 TinyPHP 支持**按需引入扩展**，设计理念对标 PHP 的 extension。不再将平台相关函数（pcntl/posix）硬编入核心，而是通过 `#import` 指令按需加载。
 
-**`#import` 做的事情**：只自动引入 `ext/{name}/src/*.php` + `ext/{name}/src/*.c`。头文件（`.h`）不会被自动包含——需要用 `#include` / `#flag -I` 手动引入。
+**`#import` 做的事情**：只自动引入 `ext/{name}/src/*.php`（C 依赖由 ext 的 `.php` 通过 `#flag` 显式声明，如 `#flag __EXT__ . "name/src/name.c"`）。头文件（`.h`）不会被自动包含——需要用 `#include` / `#flag -I` 手动引入。
 
 **目录结构：**
 
@@ -345,36 +345,40 @@ ext/
 ├── exif/               ← 纯 phpc 实现（零自定义 C 代码）
 │   └── src/
 │       └── exif.php
-├── pcntl/              ← C 直接模式（仅 .c，推荐）
+├── pcntl/              ← C 直接模式（.php stub 声明 C 依赖）
 │   ├── pcntl.h
 │   └── src/
-│       └── pcntl.c
+│       ├── pcntl.c
+│       └── pcntl.php   ← #flag pcntl.c + #include pcntl.h
 └── posix/              ← C 直接模式
     ├── posix.h
     └── src/
-        └── posix.c
+        ├── posix.c
+        └── posix.php   ← #flag posix.c + #include posix.h
 ```
 
 **两种实现方式，可混用：**
 
 | 方式 | 做法 | 适用场景 |
 |------|------|---------|
-| **C 直接**（推荐） | `.c` 中写 `tphp_fn_xxx()`，CodeGen 通用回退自动匹配 | 简单类型转换，函数签名与 PHP 一致 |
+| **C 直接**（推荐） | `.c` 中写 `tphp_fn_xxx()`，`.php` stub 用 `#flag` 声明 `.c` 依赖 + `#include` 引入 `.h` | 简单类型转换，函数签名与 PHP 一致 |
 | **PHPC 包装** | `.php` 中写 PHP wrapper + `.c` 中写原始 C 实现 | 复杂类型桥接、需要 `c->` 直接调用 |
 
-**C 直接方式（pcntl 为例）：**
+**C 直接方式（pcntl 为例）：** `.php` stub 仅声明 C 依赖，无 PHP 代码：
 
-```c
-// ext/pcntl/pcntl.h
-#include "types.h"
-t_int tphp_fn_pcntl_fork(void);
-t_string tphp_fn_pcntl_strerror(t_int no);
+```php
+<?php
+// ext/pcntl/src/pcntl.php — stub
+#flag __EXT__ . "pcntl/src/pcntl.c"
+#include __EXT__ . "pcntl/src/pcntl.h"
 ```
 
 ```c
 // ext/pcntl/src/pcntl.c
-#include "../pcntl.h"
-#include <runtime.h>
+#include "pcntl.h"
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 t_int tphp_fn_pcntl_fork(void) {
 #ifdef _WIN32
@@ -404,9 +408,9 @@ class Main {
 **创建新扩展步骤：**
 
 1. `ext/{name}/` 下创建 `src/` 子目录，`.h` 头文件可选
-2. **C 直接**：`src/{name}.c` 写 `tphp_fn_xxx()` 函数
-3. **PHPC 混写**：额外添加 `src/{name}.php` 做类型桥接
-4. 使用方 `#import {name}` → 自动加载 `src/*.php` + `src/*.c`
+2. **C 直接**：`src/{name}.c` 写 `tphp_fn_xxx()` 函数，`src/{name}.php` stub 用 `#flag` 声明 `.c` 依赖 + `#include` 引入 `.h`
+3. **PHPC 混写**：`src/{name}.php` 中额外写 PHP wrapper 做类型桥接
+4. 使用方 `#import {name}` → 自动加载 `src/*.php`（`.c` 由 `#flag` 显式声明）
 
 **何时用 ext 而非 include/？**
 

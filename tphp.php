@@ -208,10 +208,9 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     // Ensures cross-file enums are known when parsing Main.
     $mainFile  = null;
     $otherFiles = [];
-    // ── #import 预扫描：引入 ext/name/src/*.php → $files、*.c → $importCFiles ────
+    // ── #import 预扫描：引入 ext/name/src/*.php → $files ────
     // 用 for 而非 foreach：扩展文件可能有自己的 #import，需递归扫描
     $extRoot = $inPhar ? ($extRootPhar ?? __DIR__ . DIRECTORY_SEPARATOR . 'ext') : (__DIR__ . DIRECTORY_SEPARATOR . 'ext');
-    $importCFiles = [];
     $importedExts = [];  // 已处理的扩展名，避免重复
 
     // Magic constants for #include / #flag
@@ -290,11 +289,11 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                 }
                 $extSrc = $extSrcReal;
                 if (!is_dir($extSrc)) die("Error: #import {$extName} — ext/{$extName}/src/ not found\n");
+                // #import 只收集 .php 文件；C 依赖由 ext 的 .php 通过 #flag 显式声明
+                // （如 #flag __EXT__ . "name/src/name.c"），符合 phpc 显式模型
                 $extPhp = glob($extSrc . DIRECTORY_SEPARATOR . '*.php');
-                $extC   = glob($extSrc . DIRECTORY_SEPARATOR . '*.c');
                 foreach ($extPhp as $f) { if (!in_array($f, $files)) $files[] = $f; }
-                foreach ($extC   as $f) { $rf = realpath($f); if ($rf && !in_array($rf, $importCFiles)) $importCFiles[] = $rf; }
-                echo "       #import {$extName} => " . count($extPhp) . " php + " . count($extC) . " c\n";
+                echo "       #import {$extName} => " . count($extPhp) . " php\n";
             }
         }
     }
@@ -632,14 +631,8 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                   . "  Search dirs: " . implode(', ', $allSearchDirs) . "\n"
                   . "  Hint: use #flag -I__DIR__. \"your/include/path\" to add include search paths\n");
             }
-            $baseName = basename($resolvedInclude, '.h');
-            foreach ($allSearchDirs as $dir) {
-                $cSrc = $dir . DIRECTORY_SEPARATOR . $baseName . '.c';
-                if (file_exists($cSrc)) {
-                    $extraCFiles[] = $cSrc;
-                    break;
-                }
-            }
+            // #include 只负责引入头文件；同名 .c 依赖由 #flag 显式声明
+            // （如 #flag __EXT__ . "name/src/name.c"），符合 phpc 显式模型
         }
         $extraCFiles = array_unique($extraCFiles);
     }
@@ -946,7 +939,7 @@ if (PHP_OS_FAMILY === 'Darwin' && $isTCC) {
     $bFlag .= ' -I"' . $tccRoot . DIRECTORY_SEPARATOR . 'include' . '"';
 }
 
-$allCFiles = array_unique(array_merge($userCFiles, $extraCFiles, $importCFiles));
+$allCFiles = array_unique(array_merge($userCFiles, $extraCFiles));
 $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
 // Linux needs -lm for math functions (round, ceil, floor, sqrt, pow, etc.)
 $linkFlags = '';

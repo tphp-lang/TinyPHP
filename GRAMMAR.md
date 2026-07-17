@@ -640,7 +640,7 @@ __TRAIT__             ❌
   | '#include' '<' file '>'   ✅ (系统头文件)
   | '#flag' compiler? platform? flags   ✅ (编译器/平台过滤标志,flags 中 .c 文件自动加入编译列表)
   | '#callback' type IDENTIFIER '(' params ')'   ✅ (声明 C 回调签名)
-  | '#import' name   ✅ (按需引入 ext/name/src/*.php + *.c)
+  | '#import' name   ✅ (按需引入 ext/name/src/*.php;C 依赖由 .php 中 #flag 显式声明)
   | '#cstruct' IDENTIFIER '{' fields '}'   ✅ (声明 C 结构体字段布局,支持 $p->field 原生访问)
   | '#if' condition          ✅ (条件编译开始)
   | '#elseif' condition      ✅ (别名 #elif)

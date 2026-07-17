@@ -22,6 +22,13 @@
 
 ### 变更
 
+- **`#import` 机制重构为显式模型**：`#import name` 只收集 `ext/name/src/*.php`，不再自动收集 `.c` 文件。C 依赖由 ext 的 `.php` 通过 `#flag` 显式声明（如 `#flag __EXT__ . "name/src/name.c"`），符合 phpc 显式声明哲学。
+  - 移除 `tphp.php` 中 `#import` 的 `.c` 自动收集逻辑（`$importCFiles` 变量删除）
+  - 移除 `tphp.php` 中 `#include .h` 自动关联同名 `.c` 的副作用（`#include` 只负责引入头文件）
+  - `ext/pcre/src/pcre.php`、`ext/demo/src/demo.php` 添加 `#flag __EXT__ . ".../xxx.c"` 显式声明 C 依赖
+  - 新建 `ext/posix/src/posix.php`、`ext/pcntl/src/pcntl.php` stub（纯 C 扩展的 .php 入口，声明 `#flag` + `#include`）
+  - `ext/posix/src/posix.c`、`ext/pcntl/src/pcntl.c` 修复 include 依赖：移除 `common.h`（含非 static inline 函数，多 TU 重复定义），Windows 分支改用 `fprintf+exit`（不使用 `tp_throw`，因 posix/pcntl 在 Windows 上 `@skip`）
+  - `CodeGenerator.php` `$builtinRetTypes` 注册 12 个 posix 函数 + 7 个 pcntl 函数返回类型
 - **stream 常量体系对标 PHP 原生**：
   - 新增 `STREAM_SOCK_RAW`=3、`STREAM_IPPROTO_IP`=0
   - 修正 `STREAM_OPTION_WRITE_BUFFER`=5（原错误命名 `WRITE_TIMEOUT`）、`STREAM_OPTION_CHUNK_SIZE`=7（原错误值 6）
