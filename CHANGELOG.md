@@ -8,6 +8,11 @@
 
 ### 新增
 
+- **PDO 扩展**（SQLite 驱动）：首个基于类的扩展实现，含 `PDO` + `PDOStatement` 两个类，16 + 17 = 33 个方法。SQLite amalgamation 3.46.0 静态编译，零运行时依赖。
+  - **AOT 类型安全**：所有方法参数/返回值使用 tphp 具体类型（int/string/array/bool），不使用 `mixed`/`t_var`。PHP 原生 `mixed` 方法按类型拆分（`bindValueInt`/`bindValueStr`/`bindValueNamedInt`/`bindValueNamedStr`，`getAttributeStr`/`getAttributeInt`/`getAttributeBool`，`fetchColumnStr`/`fetchColumnInt`）
+  - **指针 ↔ int 桥接**：sqlite3*/sqlite3_stmt* 指针以 `t_int` 存储在 PHP 类字段中，方法内部用 `phpc_int_to_ptr` 转回 `C.void*` 调用 SQLite C API
+  - **错误处理**：所有错误抛 `Exception`（`tp_throw_ex`），可被 `try-catch` 捕获
+  - 测试：`test/pdo/pdo_basic.php`（19 节覆盖连接/exec/prepare/位置绑定/命名绑定/execute(array)/fetch 模式/fetchAll/fetchColumn/事务/lastInsertId/rowCount/quote/getAttribute/setAttribute/errorCode/getColumnMeta/closeCursor 复用/错误处理/静态方法/NULL/float 列）
 - **stream 扩展对标 PHP 原生补全**（新增 6 个函数，总数 15 → 21）：
   - `stream_set_write_buffer(int $fd, int $buffer): int` — 设置写缓冲（socket 无 stdio 缓冲，stub 返回 0）
   - `stream_set_timeout(int $fd, int $seconds, int $microseconds = 0): bool` — 设置读写超时（`setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)`）
@@ -22,6 +27,11 @@
 
 ### 变更
 
+- **`C->` 调用强制类型声明**（AOT 类型安全）：`C->func()` 和 `C->CONST` 赋值给变量时**必须显式声明类型**，否则编译错误。消除了 `$ptrFns` 白名单和默认 `t_int` 假设，编译期即捕获类型错误。
+  - 语句上下文（`C->foo();`）无需声明
+  - 赋值上下文：`int $rc = C->foo();` / `C.void* $p = C->foo();` / `float $x = C->foo();`
+  - 表达式上下文：用 cast 包装（`php_int(C->foo())`）或先赋值给类型化变量
+  - 影响：16 处旧代码需补充类型声明（1 处 ext/demo + 15 处 test/phpc）
 - **`#import` 机制重构为显式模型**：`#import name` 只收集 `ext/name/src/*.php`，不再自动收集 `.c` 文件。C 依赖由 ext 的 `.php` 通过 `#flag` 显式声明（如 `#flag __EXT__ . "name/src/name.c"`），符合 phpc 显式声明哲学。
   - 移除 `tphp.php` 中 `#import` 的 `.c` 自动收集逻辑（`$importCFiles` 变量删除）
   - 移除 `tphp.php` 中 `#include .h` 自动关联同名 `.c` 的副作用（`#include` 只负责引入头文件）

@@ -712,6 +712,12 @@ function init(): void {
 c_call:
     'C->' IDENTIFIER '(' args ')'   ✅ (直接 C 函数调用)
   | 'C->' IDENTIFIER                ✅ (直接 C 常量/枚举/宏访问，无括号)
+  // ⚠️ 赋值上下文必须显式声明类型（AOT 类型安全）：
+  //   int $rc = C->foo();         ✅
+  //   C.void* $p = C->foo();      ✅
+  //   $rc = C->foo();             ❌ 编译错误：requires explicit type declaration
+  //   C->foo();                   ✅ 语句上下文无需声明
+  //   if (php_int(C->foo())==0)   ✅ 表达式上下文需 cast 包装
 
 c_type_annotation:                  ✅ (借鉴 vlang C.Type 命名空间设计)
     'C.' IDENTIFIER ['*'+]          → C 类型注解（函数参数/返回值）

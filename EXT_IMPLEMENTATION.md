@@ -37,7 +37,7 @@
 | 11 | [exif](#11-exif) ✅ 已完成     | ⭐⭐⭐   | 无(纯解析)         | 6   |
 | 12 | [ZIP](#12-zip) ✅ 已完成(内置)  | ⭐⭐⭐⭐  | 内置 zlib (手写ZIP) | 18  |
 | 13 | [MySQL](#13-mysql)           | ⭐⭐⭐⭐⭐ | libmysqlclient | 16  |
-| 14 | [PDO](#14-pdo)               | ⭐⭐⭐⭐⭐ | 每驱动各异          | 10  |
+| 14 | [PDO](#14-pdo) ✅ 已完成       | ⭐⭐⭐⭐⭐ | sqlite3 (内置 amalgamation) | 10  |
 | 15 | [GD](#15-gd)                 | ⭐⭐⭐⭐⭐ | libgd+png+jpeg | 20  |
 
 ***
@@ -2154,113 +2154,43 @@ mysql_close($db);
 
 ***
 
-## 14. PDO
+## 14. PDO ✅ 已完成
 
-| 属性         | 值                                                      |
-| ---------- | ------------------------------------------------------ |
-| **外部依赖**   | 按驱动: pdo\_mysql→libmariadb, pdo\_sqlite→sqlite3        |
-| **预估行数**   | \~700 行 C (核心+驱动分派)                                    |
-| **PHP 参考** | `ext/pdo/pdo.c` + `ext/pdo_mysql/` + `ext/pdo_sqlite/` |
-| **难度**     | ⭐⭐⭐⭐⭐                                                  |
+> **实现状态**: 已完成 SQLite 驱动实现于 `ext/pdo/pdo.h` + `ext/pdo/src/pdo.php`，
+> SQLite amalgamation 3.46.0 静态编译（`include/os/sqlite_src/sqlite3.c`），零运行时依赖。
+> **AOT 类型安全**：所有方法参数/返回值使用 tphp 具体类型（int/string/array/bool），不使用 `mixed`/`t_var`
+> （会触发运行时类型分发，违反 AOT 编译期类型解析原则）。多态方法按类型拆分
+> （`bindValueInt`/`bindValueStr`/`bindValueNamedInt`/`bindValueNamedStr`，
+> `getAttributeStr`/`getAttributeInt`/`getAttributeBool`，
+> `fetchColumnStr`/`fetchColumnInt`）。
+> **指针 ↔ int 桥接**：sqlite3\*/sqlite3_stmt\* 指针以 `t_int` 存储在 PHP 类字段中，
+> 方法内部用 `phpc_int_to_ptr` 转回 `C.void*` 调用 SQLite C API（AOT 安全，无 GC 介入）。
+> **错误处理**：所有错误抛 `Exception`（`tp_throw_ex`），可被 `try-catch` 捕获，不静默返回 false。
+> 测试: `test/pdo/pdo_basic.php` (19 节覆盖连接/预处理/绑定/fetch 模式/事务/错误处理/元信息) 全部通过。
+> 完整 API 见 FUNCTIONS.md "pdo — SQLite 数据库" 章节。
 
-### 14.1 为什么 PDO 可以做
+### 砍掉的功能（AOT 不兼容或极少使用）
 
-之前标记"深度绑定 Zend"过于保守。逐组件分析：
+- `FETCH_LAZY` / `FETCH_FUNC` / `FETCH_SERIALIZE`：依赖 zend 运行时类型分发
+- `ATTR_PERSISTENT` / `ATTR_STATEMENT_CLASS`：依赖 persistent_list / zend_class_entry
+- `PARAM_INPUT_OUTPUT` / `PARAM_STR_NATL` / `PARAM_STR_CHAR`：标志位
+- UDF：`createFunction` / `createAggregate` / `createCollation`：依赖 zend_fcall_info
+- `loadExtension` / `openBlob`：AOT 不适用
+- `bindParam` 引用语义：回退到 `bindValue` 语义（值拷贝）
+- `FETCH_COLUMN` 模式的 `fetch()`：拆分为独立的 `fetchColumnStr`/`fetchColumnInt` 方法
+- `FETCH_OBJ` / `FETCH_CLASS` / `FETCH_INTO` / `FETCH_BOUND`：依赖运行时对象反射
 
-| 组件                       | Zend 依赖               | AOT 方案               |
-| ------------------------ | --------------------- | -------------------- |
-| `PDO` 类                  | `zend_class_entry` 注册 | TinyPHP COS class 系统 |
-| `PDOStatement` 类         | 同上                    | COS class            |
-| `PDOException`           | Zend exception        | 已有 `Exception` 支持    |
-| `prepare()` 占位符          | 纯字符串 `:name`→`?` 替换   | \~80 行 C             |
-| `bindValue()`            | t\_var 类型标记           | 已有类型系统               |
-| `execute()`              | 驱动分发                  | 函数指针表 `pdo_driver`   |
-| `fetch()` / `fetchAll()` | t\_array 填充           | 已有 array API         |
-| 驱动层 (MySQL/SQLite)       | 委托 C 库                | libmariadb / sqlite3 |
+### 与 PHP 原生 PDO 的主要差异
 
-### 14.2 常量
-
-```
-PDO::PARAM_NULL (0)  PARAM_INT (1)  PARAM_STR (2)  PARAM_BOOL (5)  PARAM_LOB (3)
-PDO::FETCH_ASSOC (2)  FETCH_NUM (3)  FETCH_BOTH (4)  FETCH_COLUMN (7)
-PDO::ERRMODE_SILENT (0)  ERRMODE_WARNING (1)  ERRMODE_EXCEPTION (2)
-PDO::ATTR_ERRMODE (3)  ATTR_DEFAULT_FETCH_MODE (19)  ATTR_EMULATE_PREPARES (20)
-```
-
-### 14.3 核心架构
-
-```c
-// ── 驱动接口表 (每个驱动实现一个 pdo_driver 实例) ──
-typedef struct {
-    const char *name;
-    void* (*open)(const char *dsn, const char *user, const char *pass, char **err);
-    void  (*close)(void *conn);
-    void* (*prepare)(void *conn, const char *sql);
-    bool  (*execute)(void *stmt, t_var *params, int n);
-    bool  (*fetch)(void *stmt, t_array **row, int mode);
-    int   (*row_count)(void *stmt);
-    const char* (*last_insert_id)(void *conn);
-    const char* (*error)(void *conn);
-    char* (*quote)(void *conn, const char *str, int len, int *out_len);
-    bool  (*begin_txn)(void *conn);
-    bool  (*commit)(void *conn);
-    bool  (*rollback)(void *conn);
-} pdo_driver;
-
-// ── 编译时注册的驱动列表 ──
-extern const pdo_driver pdo_mysql_driver;
-extern const pdo_driver pdo_sqlite_driver;
-static const pdo_driver *g_drivers[] = { &pdo_mysql_driver, &pdo_sqlite_driver, NULL };
-```
-
-### 14.4 PDO 类接口 (8 函数)
-
-| 函数                                                | 说明                  |
-| ------------------------------------------------- | ------------------- |
-| `__construct($dsn, $user, $pass, $opts)`          | 解析 DSN→查找驱动→连接      |
-| `prepare($sql)` → PDOStatement                    | 占位符解析→驱动 prepare    |
-| `query($sql, $fetchMode)` → PDOStatement          | 快捷: prepare+execute |
-| `exec($sql)` → int                                | 执行无结果 SQL, 返回影响行数   |
-| `beginTransaction() / commit() / rollBack()`      | 委托驱动事务              |
-| `lastInsertId($name?)` → string                   | AUTO\_INCREMENT 返回值 |
-| `quote($str, $type)` → string                     | 驱动级转义, 防注入          |
-| `setAttribute($attr, $val) / getAttribute($attr)` | 配置选项                |
-
-### 14.5 PDOStatement 类接口 (6 函数)
-
-| 函数                                  | 说明                |
-| ----------------------------------- | ----------------- |
-| `bindValue($param, $value, $type)`  | `:name`→位置映射, 存储值 |
-| `execute($params?)` → bool          | 绑定参数→驱动 execute   |
-| `fetch($mode=ASSOC)` → array\|false | 取一行→关联数组          |
-| `fetchAll($mode=ASSOC)` → array     | 循环 fetch→全部行      |
-| `fetchColumn($col=0)` → mixed       | 取第一行指定列           |
-| `rowCount() / columnCount()` → int  | 元信息               |
-
-### 14.6 典型用法
-
-```php
-// SQLite 内存库
-$pdo = new PDO("sqlite::memory:");
-$pdo->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
-$pdo->exec("INSERT INTO t VALUES (1, 'Alice')");
-
-$stmt = $pdo->prepare("SELECT * FROM t WHERE id = :id");
-$stmt->execute([":id" => 1]);
-echo $stmt->fetch()["name"];  // "Alice"
-
-// MySQL + 事务
-$pdo = new PDO("mysql:host=127.0.0.1;dbname=test", "root", "");
-$pdo->beginTransaction();
-$pdo->exec("UPDATE accounts SET balance = balance - 100 WHERE id = 1");
-$pdo->commit();
-
-// Prepared statement 防注入
-$stmt = $pdo->prepare("SELECT * FROM users WHERE name = :n");
-$stmt->execute([":n" => "O'Brien"]);  // 自动转义
-$rows = $stmt->fetchAll();
-echo count($rows);
-```
+| 差异点 | PHP 原生 | TinyPHP |
+|------|---------|---------|
+| `mixed` 返回值 | `fetch()` 返回 `array\|false`，`fetchColumn` 返回 `mixed` | `fetch()` 始终返回 `array`（取完返回 `[]`，用 `fetchDone()` 检测）；列取值按类型拆分 |
+| 多态方法 | `bindValue($param, $value, $type)` 单一签名 | 按值类型 + 参数形式拆分为 4 个方法 |
+| 多态属性获取 | `getAttribute($attr): mixed` | 按返回类型拆分为 `getAttributeStr`/`getAttributeInt`/`getAttributeBool` |
+| `null` 默认值 | `array $params = null`（隐式 nullable） | `array $params = []`（PHP 8.4+ 废弃隐式 nullable） |
+| 驱动架构 | 运行时驱动分发（pdo_driver 函数指针表） | 编译期单驱动（SQLite），无分发开销 |
+| 错误模式 | `ERRMODE_SILENT`/`WARNING`/`EXCEPTION` | 仅 `EXCEPTION`（错误一律抛异常） |
+| `query()` 第四参 | `query($sql, $mode, $arg, $ctor_args)` | 仅 `$sql` + `$fetchMode`（无 ctor_args） |
 
 ***
 
@@ -2616,5 +2546,5 @@ void tphp_fn_imagejpeg(gdImagePtr im, t_string path, t_int quality) {
 | 11 | exif           | \~800  | ⭐⭐⭐ ✅ 已完成 | 无(纯解析)         | 4   | ✅ 已完成 |
 | 12 | ZIP            | \~400  | ⭐⭐⭐⭐       | libzip+zlib    | 12  | 2-3 天 |
 | 13 | MySQL          | \~600  | ⭐⭐⭐⭐⭐      | libmariadb     | 16  | 3-5 天 |
-| 14 | PDO            | \~700  | ⭐⭐⭐⭐⭐      | 按驱动            | 16  | 3-5 天 |
+| 14 | PDO            | \~700  | ⭐⭐⭐⭐⭐ ✅ 已完成 | sqlite3 (内置 amalgamation) | 16  | ✅ 已完成 |
 | 15 | GD             | \~600  | ⭐⭐⭐⭐⭐      | libgd+png+jpeg | 20  | 3-5 天 |

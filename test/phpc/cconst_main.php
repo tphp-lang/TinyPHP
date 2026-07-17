@@ -23,11 +23,11 @@ class Main {
         var_dump(C->PI_APPROX);
 
         // 在表达式中使用
-        $red = C->COLOR_RED;
-        $green = C->COLOR_GREEN;
+        int $red = C->COLOR_RED;
+        int $green = C->COLOR_GREEN;
         var_dump($red + $green);
 
-        $max = C->MAX_SIZE;
+        int $max = C->MAX_SIZE;
         var_dump($max + 2);
     }
 }

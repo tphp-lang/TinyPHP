@@ -41,7 +41,7 @@ function sum_array_int(array $arr): int
 {
     // phpc_arr_int 自动注册到 tphp_rt_register，无需手动 phpc_free
     C.int32_t* $data = phpc_arr_int($arr);
-    $result = C->sum_ints($data, c_int(count($arr)));
+    int $result = C->sum_ints($data, c_int(count($arr)));
     return php_int($result);
 }
 
@@ -49,7 +49,7 @@ function sum_array_dbl(array $arr): float
 {
     // phpc_arr_dbl 自动注册到 tphp_rt_register，无需手动 phpc_free
     C.double* $data = phpc_arr_dbl($arr);
-    $result = C->sum_dbls($data, c_int(count($arr)));
+    float $result = C->sum_dbls($data, c_int(count($arr)));
     return $result;
 }
 
@@ -124,7 +124,7 @@ function fold_double(array $arr, callable $fn): float
     $len = count($arr);
     // phpc_arr_dbl 自动注册，无需手动 phpc_free
     C.double* $data = phpc_arr_dbl($arr);
-    $result = C->fold_dbl($data, c_int($len), phpc_thunk('fold_dbl_cb', $fn));
+    float $result = C->fold_dbl($data, c_int($len), phpc_thunk('fold_dbl_cb', $fn));
     return $result;
 }
 
@@ -182,7 +182,7 @@ function create_and_free_point(float $x, float $y): int
     if (!$p) {
         return 0;
     }
-    $valid = C->obj_valid($p);
+    int $valid = C->obj_valid($p);
     C->point_free($p);
     phpc_unregister_obj($p);
     return php_int($valid);
@@ -197,7 +197,7 @@ function steal_and_free_point(float $x, float $y): int
     if (!$p) {
         return 0;
     }
-    $valid = C->obj_valid($p);
+    int $valid = C->obj_valid($p);
     phpc_obj_steal($p);   // 标记分离，防止 GC double-free
     C->point_free($p);    // C 库释放
     return php_int($valid);

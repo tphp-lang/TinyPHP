@@ -55,7 +55,7 @@ class Main {
         echo "3. read y: " . $p->y . "\n";
 
         // 字段参与运算
-        $norm = C->sqrt($p->x * $p->x + $p->y * $p->y);
+        float $norm = C->sqrt($p->x * $p->x + $p->y * $p->y);
         echo "4. norm: " . $norm . "\n";
 
         // 直接修改字段(无需 setter)
@@ -71,19 +71,19 @@ class Main {
         echo "8. rect size: " . $r->w . "," . $r->h . "\n";
 
         // 字段参与 C 函数运算
-        $area = C->rect_area($r);
+        float $area = C->rect_area($r);
         echo "9. rect area: " . $area . "\n";
 
         // 字段作为 C 函数参数
-        $in1 = C->rect_is_inside($r, 5.0, 5.0);
+        int $in1 = C->rect_is_inside($r, 5.0, 5.0);
         echo "10. inside (5,5): " . $in1 . "\n";
-        $in2 = C->rect_is_inside($r, 15.0, 25.0);
+        int $in2 = C->rect_is_inside($r, 15.0, 25.0);
         echo "11. inside (15,25): " . $in2 . "\n";
 
         // 修改字段后重新计算
         $r->w = 100.0;
         echo "12. modify w: " . $r->w . "\n";
-        $area2 = C->rect_area($r);
+        float $area2 = C->rect_area($r);
         echo "13. new area: " . $area2 . "\n";
         C->rect_free($r);
 
@@ -94,7 +94,7 @@ class Main {
         C.Point* $tmp = C->point_create(7.0, 24.0);
         C.void* $ap = phpc_auto($tmp);
         echo "14. auto point: " . $tmp->x . "," . $tmp->y . "\n";
-        $anorm = C->sqrt($tmp->x * $tmp->x + $tmp->y * $tmp->y);
+        float $anorm = C->sqrt($tmp->x * $tmp->x + $tmp->y * $tmp->y);
         echo "15. auto norm: " . $anorm . "\n";
 
         echo "\n=== All passed ===\n";

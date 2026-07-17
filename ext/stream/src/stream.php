@@ -13,9 +13,8 @@
 // TLS 支持由 ext/openssl 扩展提供（openssl.h 定义 TPHP_STREAM_TLS_IMPLEMENTED 后
 // stream.h 中的 stream_socket_enable_crypto stub 被跳过）。
 //
-// 注意：不要在此文件中 #include stream.h，否则它会被当作"用户 include"
-//       放在 common.h 之前，导致 stream.h 依赖的 object/exception.h 中的
-//       t_object 类型未完整定义（incomplete type 错误）。
-//       stream.h 由 CodeGenerator 自动检测 stream_* 函数调用后在 common.h 之后 include。
+// stream.h 通过 #include 引入：CodeGenerator 检测到 ext/ 路径后自动放在 common.h 之后
+// （stream.h 依赖 common.h 中的 tphp_rt_str_free/tphp_rt_str_dup 等前向声明）。
 
 #flag windows -lws2_32
+#include __EXT__ . "stream/src/stream.h"

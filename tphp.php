@@ -973,12 +973,8 @@ if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "os/zlib.h"')
     // 重建 extraSrcs（包含新增的 zlib 源码）
     $extraSrcs = !empty($allCFiles) ? ' "' . implode('" "', $allCFiles) . '"' : '';
 }
-// stream: 检测生成的 C 代码是否使用了 stream 扩展（CodeGenerator 条件引入 ext/stream/src/stream.h）
-// Windows 需要链接 ws2_32.lib（winsock2）；POSIX socket API 在 libc 中无需额外链接
-if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "ext/stream/src/stream.h"') !== false
-    && PHP_OS_FAMILY === 'Windows') {
-    $lateLinkFlags .= ' -lws2_32';
-}
+// stream: ws2_32 链接由 ext/stream/src/stream.php 的 #flag windows -lws2_32 声明
+// （#import stream 引入 stream.php → #flag 被收集到 lateLinkFlags）
 // openssl（基于内置 mbedTLS 源码静态编译）：
 //   检测生成的 C 代码是否使用了 openssl 扩展（CodeGenerator 条件引入 ext/openssl/src/openssl.h）
 //   策略：统一使用内置 mbedTLS 3.6.6 源码（include/mbedtls_src/）静态编译，

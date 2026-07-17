@@ -208,6 +208,20 @@ class CodeGenerator implements ASTVisitor
         'openssl_ssl_set_fd' => 't_bool', 'openssl_ssl_shutdown' => 't_bool',
         'openssl_ctx_free' => 'void', 'openssl_ssl_free' => 'void',
         'openssl_ctx_set_verify' => 'void',
+        // ── pdo (内置 ext, SQLite 驱动) ──
+        //   指针以 t_int 句柄形式在 PHP 层流转（phpc_ptr_to_int/phpc_int_to_ptr 转换）
+        //   const char* 返回为借用指针，由 php_str()/pdo_str_from_ptr() 转为 t_string
+        'pdo_open_db' => 't_int', 'pdo_prepare' => 't_int',
+        'pdo_exec' => 't_int', 'pdo_str_len' => 't_int',
+        'pdo_bind_text' => 't_int', 'pdo_bind_blob' => 't_int',
+        'pdo_bind_params' => 'void',
+        'pdo_str_from_ptr' => 't_string', 'pdo_sqlite_errstate' => 't_string',
+        'pdo_quote' => 't_string', 'pdo_column_double' => 't_float',
+        'pdo_column_text' => 'const char*', 'pdo_column_name' => 'const char*',
+        'pdo_column_decltype' => 'const char*', 'pdo_errmsg' => 'const char*',
+        'pdo_libversion' => 'const char*',
+        'pdo_throw_msg' => 'void', 'pdo_throw_db_error' => 'void',
+        'pdo_throw_stmt_error' => 'void',
         // ── posix (内置 ext, POSIX 系统函数) ──
         'posix_getpid' => 't_int', 'posix_getppid' => 't_int',
         'posix_getuid' => 't_int', 'posix_geteuid' => 't_int',
@@ -262,6 +276,18 @@ class CodeGenerator implements ASTVisitor
         'preg_grep' => 't_string', 'filter_list' => 't_string',
         'gzfile' => 't_string',
         'stream_socket_pair' => 't_int',
+        // ── PDO 方法返回数组的元素类型（方法 C 名作为键）──
+        //   fetch() 返回 array<string>（所有列值统一转为字符串）
+        'tphp_class_PDOStatement_fetch' => 't_string',
+        //   fetchAll() 返回 array<array<string>>（外层元素是数组，内层元素是字符串）
+        'tphp_class_PDOStatement_fetchAll' => 't_array*',
+        'tphp_class_PDOStatement_fetchAll[]' => 't_string',
+        //   errorInfo() 返回 array<string|int>（混合类型，默认按 int 访问）
+        'tphp_class_PDO_errorInfo' => 't_string',
+        'tphp_class_PDOStatement_errorInfo' => 't_string',
+        'tphp_class_PDOStatement_getColumnMeta' => 't_string',
+        //   getAvailableDrivers() 返回 array<string>（驱动名列表）
+        'tphp_class_PDO_getAvailableDrivers' => 't_string',
     ];
 
     /**
@@ -593,22 +619,7 @@ class CodeGenerator implements ASTVisitor
             }
         }
 
-        // 检测是否使用了 stream 函数（需要条件引入 stream.h + Windows 链接 ws2_32）
-        $streamFns = ['stream_close(', 'stream_last_error(', 'stream_strerror(',
-                      'stream_set_blocking(', 'stream_set_read_buffer(', 'stream_set_write_buffer(',
-                      'stream_set_timeout(', 'stream_isatty(', 'stream_select(',
-                      'stream_socket_server(', 'stream_socket_accept(', 'stream_socket_client(',
-                      'stream_socket_recvfrom(', 'stream_socket_sendto(',
-                      'stream_socket_get_name(', 'stream_socket_shutdown(',
-                      'stream_socket_enable_crypto(', 'stream_socket_pair(',
-                      'stream_get_contents(', 'stream_get_line(', 'stream_get_meta_data('];
-        $needStream = false;
-        if ($src !== false) {
-            foreach ($streamFns as $fn) {
-                if (str_contains($src, $fn)) { $needStream = true; break; }
-            }
-        }
-
+        // stream: 不再自动检测，由 #import stream 显式引入（stream.php 中 #include stream.h）
         // 检测是否使用了 openssl 函数（需要条件引入 openssl.h + 链接 libssl/libcrypto）
         $opensslFns = ['openssl_ctx_new(', 'openssl_ctx_free(', 'openssl_ctx_use_certificate_file(',
                        'openssl_ctx_use_private_key_file(', 'openssl_ctx_set_verify(', 'openssl_ctx_set_options(',
@@ -630,9 +641,22 @@ class CodeGenerator implements ASTVisitor
         $this->sectionLine(self::SEC_HEADER, '');
 
         // ── SEC_INCLUDES ──
-        // 用户 #include 的头文件放在 common.h 之前，以便处理符号冲突
-        // （例如 raylib_compat.h 需要在 windows.h 之前 #define 重命名 GDI 函数）
+        // 用户 #include 分两组：
+        //   - 非 ext/ 路径 → common.h 之前（如 raylib_compat.h 需要 #define 在 windows.h 之前）
+        //   - ext/ 路径 → common.h 之后（扩展头文件依赖 common.h 的前向声明，如 stream.h 依赖
+        //     common.h 中的 tphp_rt_str_free/tphp_rt_str_dup 等前向声明）
+        $userIncBefore = [];
+        $userIncAfter  = [];
         foreach ($node->includes as $inc) {
+            $file = is_array($inc) ? ($inc['file'] ?? '') : $inc;
+            $normalized = str_replace('\\', '/', $file);
+            if (str_contains($normalized, '/ext/')) {
+                $userIncAfter[] = $inc;
+            } else {
+                $userIncBefore[] = $inc;
+            }
+        }
+        foreach ($userIncBefore as $inc) {
             if (is_array($inc)) {
                 $delim = ($inc['quoted'] ?? true) ? '"' : '<';
                 $end   = ($inc['quoted'] ?? true) ? '"' : '>';
@@ -652,8 +676,15 @@ class CodeGenerator implements ASTVisitor
         if ($needOpenssl) {
             $this->sectionLine(self::SEC_INCLUDES, '#include "ext/openssl/src/openssl.h"');
         }
-        if ($needStream) {
-            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/stream/src/stream.h"');
+        // ext/ 路径的用户 #include 放在 common.h 之后（由 #import 引入的扩展头文件）
+        foreach ($userIncAfter as $inc) {
+            if (is_array($inc)) {
+                $delim = ($inc['quoted'] ?? true) ? '"' : '<';
+                $end   = ($inc['quoted'] ?? true) ? '"' : '>';
+                $this->sectionLine(self::SEC_INCLUDES, '#include ' . $delim . $inc['file'] . $end);
+            } else {
+                $this->sectionLine(self::SEC_INCLUDES, '#include "' . $inc . '"');
+            }
         }
         if ($needExtra) {
             $this->sectionLine(self::SEC_INCLUDES, '#include "builtin_extra.h"');
@@ -1065,7 +1096,18 @@ class CodeGenerator implements ASTVisitor
         }
         // 方法返回类型 + 参数类型 + 默认值信息（第一遍即注册完整信息，
         // 确保跨类方法调用在 emitClassImpl 阶段即可解析重载版本）
-        $this->symbols->getClass($cn)->methods['__construct'] = new MethodInfo('void');
+        // __construct 也需注册 defaultCount/totalParams，否则 visitNew 无法选择重载版本
+        if ($ctor !== null) {
+            $cpts = array_map(fn($p) => $this->mapType($p->type), $ctor->params);
+            $ctp = count($ctor->params);
+            $cdc = 0;
+            for ($i = $ctp - 1; $i >= 0; $i--) {
+                if ($ctor->params[$i]->default !== null) { $cdc++; } else { break; }
+            }
+            $this->symbols->getClass($cn)->methods['__construct'] = new MethodInfo('void', $cpts, false, 'public', $cdc, $ctp);
+        } else {
+            $this->symbols->getClass($cn)->methods['__construct'] = new MethodInfo('void');
+        }
         $this->symbols->getClass($cn)->methods['__destruct']  = new MethodInfo('void');
         foreach ($methods as $m) {
             $mr = $m->isGenerator ? 'tphp_class_Generator*' : $this->mapType($m->returnType);
@@ -1158,6 +1200,24 @@ class CodeGenerator implements ASTVisitor
         } else {
             $ctorParams = $this->ctorParamStr($ctor);
             $o[] = "{$cn}* new_{$cn}(" . ($ctorParams ? $ctorParams : 'void') . ");";
+            // 默认参数重载前置声明（static，需在使用前声明）
+            if ($ctor !== null) {
+                $ctorDefCount = 0;
+                foreach ($ctor->params as $p) {
+                    if ($p->default !== null) $ctorDefCount++;
+                }
+                if ($ctorDefCount > 0) {
+                    $total = count($ctor->params);
+                    $firstDef = $total - $ctorDefCount;
+                    for ($cutIdx = $firstDef; $cutIdx < $total; $cutIdx++) {
+                        $overloadName = "new_{$cn}_" . ($total - $cutIdx);
+                        $cutParams = array_slice($ctor->params, 0, $cutIdx);
+                        $overloadParamStr = implode(', ', array_map(fn($p) => self::paramDecl($p), $cutParams));
+                        if (empty($overloadParamStr)) $overloadParamStr = 'void';
+                        $o[] = "static {$cn}* {$overloadName}({$overloadParamStr});";
+                    }
+                }
+            }
         }
 
         // Property Hook getter/setter 前置声明
@@ -1321,7 +1381,16 @@ class CodeGenerator implements ASTVisitor
         if ($ctor && !empty($ctor->body)) {
             $savedMethodName = $this->currentMethodName;
             $this->currentMethodName = '__construct';
-            foreach ($ctor->body as $s) $o[] = $this->ind($s->accept($this));
+            // 三阶段生成：与 visitMethod 一致，支持 if/for/while 块内变量声明提升到函数作用域
+            $this->funcScopeDecls = [];
+            $this->scopeDepth = 0;
+            $ctorBodyLines = [];
+            foreach ($ctor->body as $s) $ctorBodyLines[] = $this->ind($s->accept($this));
+            // Phase 3: 注入提升到函数作用域的变量声明（在 body 之前）
+            foreach ($this->funcScopeDecls as $vn => $ct) {
+                $o[] = $this->ind("{$ct} {$vn};");
+            }
+            foreach ($ctorBodyLines as $bl) $o[] = $bl;
             $this->currentMethodName = $savedMethodName;
         } else if ($isMain) {
             $o[] = $this->ind('(void)argc;');
@@ -1334,7 +1403,21 @@ class CodeGenerator implements ASTVisitor
         $o[] = "void {$cn}___destruct({$cn}* self) {";
         $o[] = $this->ind('if (self == NULL) return;');
         if ($dtor && !empty($dtor->body)) {
-            foreach ($dtor->body as $s) $o[] = $this->ind($s->accept($this));
+            // 同 __construct，使用三阶段生成机制
+            // 注意：必须重置 declaredVars/varTypes 等，避免 __construct 中已声明的变量
+            //（如 $dbh）被误判为已声明而跳过类型声明 + funcScopeDecls 注册
+            $this->declaredVars = ['self' => true];
+            $this->varTypes = [];
+            $this->localConsts = [];
+            $this->symbols->clearScopeObjects();
+            $this->funcScopeDecls = [];
+            $this->scopeDepth = 0;
+            $dtorBodyLines = [];
+            foreach ($dtor->body as $s) $dtorBodyLines[] = $this->ind($s->accept($this));
+            foreach ($this->funcScopeDecls as $vn => $ct) {
+                $o[] = $this->ind("{$ct} {$vn};");
+            }
+            foreach ($dtorBodyLines as $bl) $o[] = $bl;
         }
         // 自动释放所有 t_string 属性的堆内存（静态属性为文件作用域变量，不在此释放）
         foreach ($class->properties as $prop) {
@@ -1448,6 +1531,35 @@ class CodeGenerator implements ASTVisitor
             $o[] = $this->ind('return self;');
             $o[] = '}';
             $o[] = '';
+            // 默认参数重载：生成 new_cn_<missing>(partial args) → new_cn(full args with defaults)
+            if (!$isMain && $ctor !== null) {
+                $ctorDefCount = 0;
+                foreach ($ctor->params as $p) {
+                    if ($p->default !== null) $ctorDefCount++;
+                }
+                if ($ctorDefCount > 0) {
+                    $total = count($ctor->params);
+                    $firstDef = $total - $ctorDefCount;
+                    for ($cutIdx = $firstDef; $cutIdx < $total; $cutIdx++) {
+                        $overloadName = "new_{$cn}_" . ($total - $cutIdx);
+                        $cutParams = array_slice($ctor->params, 0, $cutIdx);
+                        $overloadParams = array_map(fn($p) => self::paramDecl($p), $cutParams);
+                        if (empty($overloadParams)) $overloadParams[] = 'void';
+                        $callArgs = [];
+                        for ($i = 0; $i < $total; $i++) {
+                            if ($i < $cutIdx) {
+                                $callArgs[] = self::varName($ctor->params[$i]->name);
+                            } else {
+                                $callArgs[] = $this->defaultExprCode($ctor->params[$i]);
+                            }
+                        }
+                        $o[] = "static {$cn}* {$overloadName}(" . implode(', ', $overloadParams) . ") {";
+                        $o[] = $this->ind("return new_{$cn}(" . implode(', ', $callArgs) . ");");
+                        $o[] = '}';
+                        $o[] = '';
+                    }
+                }
+            }
         }
 
         return implode("\n", $o);
@@ -2402,13 +2514,13 @@ class CodeGenerator implements ASTVisitor
             if ($node->type !== null) {
                 $cType = self::mapType($node->type);
                 if ($inferredType !== 'null' && $inferredType !== $cType) {
-                    // Raw C call 默认返回 t_int,但用户可能声明了 C 指针类型
-                    //   (Raw C call 返回类型编译期不可靠,信任用户的显式声明)
-                    $isRawCPtrAssign = ($inferredType === 't_int'
-                        && $node->expr instanceof CallExpr
-                        && $node->expr->isRawC
-                        && !self::isAutoInferableType($cType));
-                    if (!$isRawCPtrAssign) {
+                    // Raw C 调用/常量返回类型编译期不可靠（默认推导为 t_int），
+                    //   信任用户的显式声明（覆盖 tphp 标准类型和 C 指针类型）
+                    $isRawCAccess = ($node->expr instanceof CallExpr && $node->expr->isRawC)
+                        || ($node->expr instanceof PropertyAccessExpr
+                            && $node->expr->object instanceof VariableExpr
+                            && $node->expr->object->name === 'C');
+                    if (!$isRawCAccess) {
                         throw new \RuntimeException(
                             "Variable \${$var} type mismatch: declared '{$node->type}' ({$cType}) "
                             . "but inferred {$inferredType}"
@@ -2416,6 +2528,19 @@ class CodeGenerator implements ASTVisitor
                     }
                 }
             } else {
+                // Raw C 调用/常量必须显式声明类型（AOT 类型安全）
+                //   原因：C->foo() 返回类型编译期不可靠（inferCallReturnType 默认 t_int），
+                //   强制声明可消除白名单和默认 t_int 假设，编译期即捕获类型错误
+                $isRawCAccess = ($node->expr instanceof CallExpr && $node->expr->isRawC)
+                    || ($node->expr instanceof PropertyAccessExpr
+                        && $node->expr->object instanceof VariableExpr
+                        && $node->expr->object->name === 'C');
+                if ($isRawCAccess) {
+                    throw new \RuntimeException(
+                        "Variable \${$var} requires explicit type declaration for raw C access. "
+                        . "Use 'int \$x = C->foo()' or 'C.void* \$x = C->foo()' to declare."
+                    );
+                }
                 // tphp 标准类型可自动推导；phpc C 指针类型须显式声明
                 //   原因：C->func() 返回 void* 时 inferType 统一推导为 'null'，类型信息丢失，
                 //   后续 cstruct 字段访问（$p->x）等操作无法正确展开。
@@ -2552,6 +2677,23 @@ class CodeGenerator implements ASTVisitor
                 $this->arrValueTypes[$var] ??= [];
                 foreach ($this->fnReturnArrKeyTypes[$fnCName] as $k => $t) {
                     $this->arrValueTypes[$var][$k] = $t;
+                }
+            }
+        }
+
+        // $var = $obj->method() → 追踪方法返回数组的元素类型
+        //   查 $builtinArrElemTypes 注册表（键为方法 C 名 tphp_class_X_method）
+        if ($node->expr instanceof CallExpr && $node->expr->callee !== null) {
+            $methodCName = $this->resolveMethodCNameForElem($node->expr);
+            if ($methodCName !== null && isset(self::$builtinArrElemTypes[$methodCName])) {
+                $et = self::$builtinArrElemTypes[$methodCName];
+                $this->arrElementTypes[$var] = $et;
+                // 嵌套数组：查 "<methodCName>[]" 获取内层元素类型
+                if ($et === 't_array*') {
+                    $nestedKey = $methodCName . '[]';
+                    if (isset(self::$builtinArrElemTypes[$nestedKey])) {
+                        $this->arrNestedTypes[$var] = self::$builtinArrElemTypes[$nestedKey];
+                    }
                 }
             }
         }
@@ -3115,6 +3257,54 @@ class CodeGenerator implements ASTVisitor
             return "{$arr} = tphp_fn_arr_set_str({$arr}, {$idx}, {$val});";
         }
         return "{$arr} = tphp_fn_arr_set_int({$arr}, {$idx}, {$val});";
+    }
+
+    /**
+     * 解析方法调用的 C 函数名（用于 $builtinArrElemTypes 查表）。
+     * 复用 inferCallReturnType 中的类名推导逻辑，返回 "{cnClean}_{methodName}" 或 null。
+     */
+    private function resolveMethodCNameForElem(CallExpr $node): ?string
+    {
+        $calleeNode = $node->callee;
+        if ($calleeNode === null) return null;
+        $cn = '';
+        if ($calleeNode instanceof VariableExpr) {
+            $key = self::varName($calleeNode->name);
+            if ($key === '$this' || $key === 'self') {
+                $cn = $this->className;
+            } elseif ($key === 'parent') {
+                $parentPhp = $this->lookupParentClass($this->phpClassName);
+                $cn = $parentPhp !== null ? self::classRefName($parentPhp) : $this->className;
+            } else {
+                $raw = $this->varTypes[$key] ?? '';
+                if ($raw === '' && !str_starts_with($calleeNode->name, '$')) {
+                    // 静态方法调用 ClassName::method() — callee 是 VariableExpr("ClassName")
+                    // 当 ClassName 不在 varTypes 中时，将其视为 PHP 类名
+                    $cn = $key;
+                } else {
+                    $cn = str_contains($raw, '\\') ? self::classRefName($raw) : $raw;
+                }
+            }
+        } elseif ($calleeNode instanceof CallExpr) {
+            $cn = $this->inferCallChainClass($calleeNode);
+        } elseif ($calleeNode instanceof EnumAccessExpr) {
+            $cn = $this->symbols->getEnumCName($calleeNode->enumName) ?? '';
+        } else {
+            return null;
+        }
+        $cnClean = rtrim($cn, '*');
+        // 解析 PHP 类名 → C 类名
+        if ($cnClean !== '' && !$this->symbols->hasClass($cnClean)
+            && $this->symbols->resolveEnumCName($cnClean) === null) {
+            $resolved = $this->symbols->resolveClass($cnClean);
+            if ($resolved !== null) $cnClean = $resolved;
+        }
+        // 继承方法：查找父类定义
+        if ($cnClean !== '' && $this->symbols->getClassMethod($cnClean, $node->name) === null) {
+            $parentCN = $this->resolveMethodClass($cnClean, $node->name);
+            if ($parentCN !== '') $cnClean = $parentCN;
+        }
+        return $cnClean !== '' ? "{$cnClean}_{$node->name}" : null;
     }
 
     /** 从数组字面量推导元素类型（取第一个非空元素的类型） */
@@ -5498,7 +5688,15 @@ class CodeGenerator implements ASTVisitor
         if (empty($args) && $cn !== $this->className) {
             return "new_{$cn}()";
         }
-        return "new_{$cn}(" . implode(', ', $args) . ')';
+        // 默认参数重载：构造函数有默认值参数且实参数量 < 总参数时，使用 new_cn_<missing> 重载
+        $ctorInfo = $this->symbols->getClassMethod($cn, '__construct');
+        $allocName = "new_{$cn}";
+        if ($ctorInfo !== null && $ctorInfo->defaultCount > 0
+            && count($args) < $ctorInfo->totalParams) {
+            $missing = $ctorInfo->totalParams - count($args);
+            $allocName = "new_{$cn}_{$missing}";
+        }
+        return "{$allocName}(" . implode(', ', $args) . ')';
     }
 
     public function visitPropertyAccess(PropertyAccessExpr $node): string
@@ -7301,6 +7499,13 @@ class CodeGenerator implements ASTVisitor
         if ($idxType === 't_string' || $node->index instanceof StringLiteralExpr) {
             // per-key 类型追踪
             $keyType = $vt;
+            // 链式访问 $arr[0]["key"]：向上查找根数组的嵌套类型
+            if ($node->array instanceof ArrayAccessExpr) {
+                [$rootArr, $depth] = $this->resolveRootArray($node->array);
+                if ($rootArr !== '' && $depth > 0 && isset($this->arrNestedTypes[$rootArr])) {
+                    $keyType = $this->arrNestedTypes[$rootArr];
+                }
+            }
             if ($node->index instanceof StringLiteralExpr && $node->array instanceof VariableExpr) {
                 $arrName = self::varName($node->array->name);
                 $keyStr  = $node->index->value;

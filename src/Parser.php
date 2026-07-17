@@ -847,12 +847,30 @@ class Parser
         $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
                        TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED, TokenType::TYPE_NEVER, TokenType::IDENTIFIER];
         // 检查从 $off 开始是否为: type $name (;|=|{)
+        //   type 可为: builtin/类名（单 token）, 或 C.TypeName[*]* （phpc C 类型）
+        //   返回 (offset_after_type => 匹配, false => 不匹配)
         $checkPropPattern = function(int $off) use ($typeTokens): bool {
             $t = $this->peek($off);
             if (!in_array($t->type, $typeTokens, true)) return false;
-            $tn = $this->peek($off + 1);
+            $next = $off + 1;
+            // C.TypeName[*]* — C 类型前缀（C.IDENTIFIER 后可跟若干 * 或 **）
+            // 对齐 parseType() 的 C 类型解析逻辑
+            if ($t->type === TokenType::IDENTIFIER && $t->lexeme === 'C' && $this->peek($next)->type === TokenType::DOT) {
+                $next++; // 消费 '.'
+                $memberTok = $this->peek($next);
+                $validCTypeTokens = [
+                    TokenType::IDENTIFIER, TokenType::TYPE_INT, TokenType::TYPE_FLOAT,
+                    TokenType::TYPE_STRING, TokenType::TYPE_BOOL, TokenType::TYPE_VOID,
+                ];
+                if (!in_array($memberTok->type, $validCTypeTokens, true)) return false;
+                $next++; // 消费 type member token
+                while ($this->peek($next)->type === TokenType::STAR || $this->peek($next)->type === TokenType::STAR_STAR) {
+                    $next++; // 消费 * 或 **
+                }
+            }
+            $tn = $this->peek($next);
             if ($tn->type !== TokenType::IDENTIFIER || !str_starts_with($tn->lexeme, '$')) return false;
-            $tt = $this->peek($off + 2);
+            $tt = $this->peek($next + 1);
             return in_array($tt->type, [TokenType::SEMICOLON, TokenType::EQUALS, TokenType::LBRACE], true);
         };
         // static [visibility] [readonly] type $name

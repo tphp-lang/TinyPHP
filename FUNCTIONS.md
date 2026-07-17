@@ -30,11 +30,12 @@
 | `include/fileinfo` (MIME 检测) | `fileinfo.h` | 6 |
 | `ext/stream` (socket stream) | `ext/stream/src/stream.h` | 21 |
 | `ext/openssl` (TLS/加密) | `ext/openssl/src/openssl.h` | 21 |
+| `ext/pdo` (SQLite 数据库) | `ext/pdo/pdo.h` + `ext/pdo/src/pdo.php` | 33 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **345+** |
+| **合计** | | **378+** |
 
 ---
 
@@ -1484,6 +1485,225 @@ echo openssl_digest("sha256", "hello");  // 2cf24dba5fb0a30e...
 
 ---
 
+## pdo — SQLite 数据库
+
+> 文件: `ext/pdo/pdo.h` + `ext/pdo/src/pdo.php`。按需引入 `#import pdo`。
+>
+> **SQLite 驱动**（仅支持此一种驱动），SQLite amalgamation 3.46.0 静态编译
+> （`include/os/sqlite_src/sqlite3.c`），零运行时依赖。
+> **AOT 类型安全**：所有方法参数/返回值使用 tphp 具体类型（int/string/array/bool），
+> 不使用 `mixed`/`t_var`（会触发运行时类型分发，违反 AOT 编译期类型解析原则）。
+> **指针 ↔ int 桥接**：sqlite3\*/sqlite3_stmt\* 指针以 `t_int` 存储在 PHP 类字段中，
+> 方法内部用 `phpc_int_to_ptr` 转回 `C.void*` 调用 SQLite C API。
+> **错误处理**：所有错误抛 `Exception`（`tp_throw_ex`），可被 `try-catch` 捕获，不静默返回 false。
+> **多态拆分**：PHP 原生使用 `mixed` 的方法按类型拆分为多个具体签名
+> （`bindValueInt`/`bindValueStr`/`bindValueNamedInt`/`bindValueNamedStr`，
+> `getAttributeStr`/`getAttributeInt`/`getAttributeBool`，
+> `fetchColumnStr`/`fetchColumnInt`）。
+> **fetch 语义**：`fetch()` 始终返回 `array`（取完返回 `[]`，用 `fetchDone()` 检测是否取完），
+> 所有列值统一转为 string（int/float/null 内部转换）。
+> `|Exception` 返回类型为纯语法提示，C 代码只生成 `|` 前的类型。
+
+### 常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `PDO::PARAM_NULL` | 0 | NULL 参数 |
+| `PDO::PARAM_INT` | 1 | 整数参数 |
+| `PDO::PARAM_STR` | 2 | 字符串参数（默认） |
+| `PDO::PARAM_LOB` | 3 | 大对象参数 |
+| `PDO::PARAM_BOOL` | 5 | 布尔参数 |
+| `PDO::FETCH_DEFAULT` | 0 | 使用默认模式 |
+| `PDO::FETCH_ASSOC` | 2 | 关联数组 |
+| `PDO::FETCH_NUM` | 3 | 索引数组 |
+| `PDO::FETCH_BOTH` | 4 | 关联 + 索引（默认） |
+| `PDO::FETCH_KEY_PAIR` | 12 | 第一列 key → 第二列 value |
+| `PDO::FETCH_ORI_NEXT` | 0 | 游标方向（SQLite 仅支持 NEXT） |
+| `PDO::ERR_NONE` | "00000" | 无错误 SQLSTATE |
+| `PDO::ERRMODE_SILENT` | 0 | 静默模式（仅兼容性，错误仍抛异常） |
+| `PDO::ERRMODE_WARNING` | 1 | 警告模式（仅兼容性，错误仍抛异常） |
+| `PDO::ERRMODE_EXCEPTION` | 2 | 异常模式（实际行为） |
+| `PDO::CASE_NATURAL` | 0 | 列名原样 |
+| `PDO::CASE_LOWER` | 1 | 列名转小写 |
+| `PDO::CASE_UPPER` | 2 | 列名转大写 |
+| `PDO::CURSOR_FWDONLY` | 0 | 前向游标（SQLite 唯一支持） |
+| `PDO::CURSOR_SCROLL` | 1 | 滚动游标（不支持，prepare 时抛异常） |
+| `PDO::NULL_NATURAL` | 0 | NULL 原样 |
+| `PDO::NULL_EMPTY_STRING` | 1 | 空串转 NULL |
+| `PDO::NULL_TO_STRING` | 2 | NULL 转空串 |
+| `PDO::ATTR_AUTOCOMMIT` | 0 | 自动提交（SQLite 始终为 true） |
+| `PDO::ATTR_TIMEOUT` | 2 | busy timeout（秒） |
+| `PDO::ATTR_ERRMODE` | 3 | 错误模式 |
+| `PDO::ATTR_SERVER_VERSION` | 4 | 服务端版本（= SQLite 版本） |
+| `PDO::ATTR_CLIENT_VERSION` | 5 | 客户端版本（= SQLite 版本） |
+| `PDO::ATTR_SERVER_INFO` | 6 | 服务端信息（= SQLite 版本） |
+| `PDO::ATTR_CONNECTION_STATUS` | 7 | 连接状态 |
+| `PDO::ATTR_CASE` | 8 | 列名大小写 |
+| `PDO::ATTR_CURSOR` | 10 | 游标类型 |
+| `PDO::ATTR_ORACLE_NULLS` | 11 | Oracle 空值兼容 |
+| `PDO::ATTR_DRIVER_NAME` | 16 | 驱动名（"sqlite"） |
+| `PDO::ATTR_STRINGIFY_FETCHES` | 17 | 字符串化取值（始终为 true） |
+| `PDO::ATTR_DEFAULT_FETCH_MODE` | 19 | 默认 fetch 模式 |
+| `PDO::ATTR_OPEN_FLAGS` | 1000 | sqlite3_open_v2 flags（SQLite 特有） |
+| `PDO::ATTR_READONLY_STATEMENT` | 1001 | 只读语句（SQLite 特有） |
+| `PDO::ATTR_EXTENDED_RESULT_CODES` | 1002 | 扩展结果码（SQLite 特有） |
+| `PDO::ATTR_BUSY_STATEMENT` | 1003 | 忙语句（SQLite 特有） |
+| `PDO::ATTR_TRANSACTION_MODE` | 1005 | 事务模式（SQLite 特有） |
+| `PDO::OPEN_READONLY` | 1 | 只读打开 |
+| `PDO::OPEN_READWRITE` | 2 | 读写打开 |
+| `PDO::OPEN_CREATE` | 4 | 自动创建 |
+| `PDO::TRANSACTION_MODE_DEFERRED` | 0 | DEFERRED 事务（默认） |
+| `PDO::TRANSACTION_MODE_IMMEDIATE` | 1 | IMMEDIATE 事务 |
+| `PDO::TRANSACTION_MODE_EXCLUSIVE` | 2 | EXCLUSIVE 事务 |
+
+### PDO 类方法（16 个）
+
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `__construct(string $dsn, string $user = "", string $pass = "", array $options = [])` | 同 | 解析 DSN → sqlite3_open_v2 → 设置 busy_timeout + 扩展结果码 | 仅支持 `sqlite:` 前缀 DSN；`$options` 数组键为 ATTR_\* 常量（int），值为 int |
+| `prepare(string $query, array $options = []): PDOStatement` | `prepare(string $query, array $options = []): PDOStatement\|Exception` | sqlite3_prepare_v2 + 包装为 PDOStatement | `$options[ATTR_CURSOR]` 仅接受 `CURSOR_FWDONLY`，否则抛异常 |
+| `query(string $query, int $fetchMode = 0): PDOStatement` | `query(string $query, int $fetchMode = 0): PDOStatement\|Exception` | prepare + execute + setFetchMode | 仅 2 参（PHP 原生有 4 参：`$mode`/`$arg`/`$ctor_args`，后两者依赖反射，已砍掉） |
+| `exec(string $statement): int` | `exec(string $statement): int\|Exception` | sqlite3_exec + sqlite3_changes | 返回受影响行数；失败抛异常（PHP 返回 `false`） |
+| `quote(string $string, int $type = PARAM_STR): string` | `quote(string $string, int $type = 2): string\|Exception` | sqlite3_mprintf `%Q` 格式 | `$type` 参数仅兼容性，统一按字符串转义 |
+| `lastInsertId(string $name = ""): string` | `lastInsertId(string $name = ""): string\|Exception` | sqlite3_last_insert_rowid | `$name` 参数仅兼容性（SQLite 无 sequence 概念）；返回值 strval 转字符串（避免大整数溢出） |
+| `beginTransaction(): bool` | 同 | sqlite3_exec "BEGIN [IMMEDIATE\|EXCLUSIVE]" | 受 `ATTR_TRANSACTION_MODE` 控制；已在事务中抛异常 |
+| `commit(): bool` | 同 | sqlite3_exec "COMMIT" | 不在事务中抛异常 |
+| `rollBack(): bool` | 同 | sqlite3_exec "ROLLBACK" | 不在事务中抛异常 |
+| `inTransaction(): bool` | 同 | 读取 `inTransaction` 字段 | — |
+| `errorCode(): string` | 同 | sqlite3_errcode → SQLSTATE 映射 | 返回 5 字符 SQLSTATE（如 "00000"/"HY000"/"23000"） |
+| `errorInfo(): array` | 同 | [SQLSTATE, native_code, message] | 返回 `array<string>`（native_code 也 strval 转字符串） |
+| `getAttribute(int $attribute): mixed` | `getAttributeStr(int $attribute): string` | ATTR_DRIVER_NAME / ATTR_SERVER_VERSION / ATTR_CLIENT_VERSION / ATTR_SERVER_INFO | 按返回类型拆分为 3 个方法；不支持的属性返回空字符串 |
+| ↑ | `getAttributeInt(int $attribute): int` | ATTR_ERRMODE / ATTR_CASE / ATTR_ORACLE_NULLS / ATTR_DEFAULT_FETCH_MODE / ATTR_TIMEOUT | 不支持的属性返回 0 |
+| ↑ | `getAttributeBool(int $attribute): bool` | ATTR_AUTOCOMMIT（SQLite 始终为 true） | 不支持的属性返回 false |
+| `setAttribute(int $attribute, mixed $value): bool` | `setAttribute(int $attribute, int $value): bool` | 写入字段或调用 sqlite3_busy_timeout | `$value` 统一为 int（所有可设置属性均为整数类型）；不支持的属性静默忽略并返回 true |
+| `getAvailableDrivers(): array` | 同（静态方法） | 返回 `["sqlite"]` | 编译期固定列表，无运行时查表 |
+
+### PDOStatement 类方法（17 个）
+
+| php函数 | tphp函数 | 性能说明 | 差异说明 |
+|------|--------|------|------|
+| `bindValue(int\|string $param, mixed $value, int $type = PARAM_STR): bool` | `bindValueInt(int $param, int $value, int $type = 2): bool` | sqlite3_bind_int64/bind_null/bind_text | 按位置绑定（1-based）；`$type` 控制 NULL/INT/BOOL/STR 绑定方式 |
+| ↑ | `bindValueStr(int $param, string $value, int $type = 2): bool` | sqlite3_bind_text | 按位置绑定字符串 |
+| ↑ | `bindValueNamedInt(string $param, int $value, int $type = 2): bool` | sqlite3_bind_parameter_index + bind_* | 按命名参数（":name"）绑定 |
+| ↑ | `bindValueNamedStr(string $param, string $value, int $type = 2): bool` | 同上 | 按命名参数绑定字符串 |
+| `bindParam(...)` | — | — | 不支持引用语义，回退到 `bindValue*`（值拷贝） |
+| `execute(array $params = null): bool` | `execute(array $params = []): bool` | sqlite3_reset + clear_bindings + bind_params + step | 默认值 `[]`（非 `null`，PHP 8.4+ 废弃隐式 nullable）；首步预取一行；参数数组由 C helper `pdo_bind_params` 内部处理 t_var 类型分发 |
+| `fetch(int $mode = FETCH_BOTH, ...): mixed\|false` | `fetch(int $mode = 0): array` | sqlite3_step + column_* | 始终返回 `array<string>`（列值统一 strval）；取完返回 `[]`；不支持 `FETCH_OBJ`/`FETCH_CLASS`/`FETCH_BOUND` |
+| `fetchAll(int $mode = FETCH_BOTH): array` | `fetchAll(int $mode = 0): array` | 循环 fetch | 返回 `array<array<string>>`（FETCH_KEY_PAIR 模式返回 `array<string>` 单层） |
+| `fetchColumn(int $col = 0): mixed\|false` | `fetchColumnStr(int $col = 0): string` | fetch FETCH_NUM + 索引取值 | 按返回类型拆分为 2 个方法；取完返回空字符串 |
+| ↑ | `fetchColumnInt(int $col = 0): int` | 同上 + _fetchColumnInt | 适用于 INTEGER 列（如 COUNT(*))）；取完返回 0 |
+| — | `fetchDone(): bool` | 读取 `done` 字段 | 新增方法，替代 PHP `fetch() === false` 的判断 |
+| `closeCursor(): bool` | 同 | sqlite3_reset + 重置内部状态 | 幂等；允许再次 execute |
+| `columnCount(): int` | 同 | sqlite3_column_count | — |
+| `rowCount(): int` | 同 | 缓存的 sqlite3_changes 值 | 仅对 INSERT/UPDATE/DELETE 有效（SQLite 限制） |
+| `setFetchMode(int $mode, ...): bool` | `setFetchMode(int $mode, int $arg = 0): bool` | 写入 fetchMode/fetchCol 字段 | `$arg` 仅 FETCH_COLUMN 模式用（列号，int）；其他模式的额外参数已砍掉 |
+| `errorCode(): string` | 同 | sqlite3_errcode(db) → SQLSTATE | 通过 `db` 字段查询（语句所属连接） |
+| `errorInfo(): array` | 同 | [SQLSTATE, native_code, message] | 同 PDO::errorInfo |
+| `getColumnMeta(int $col): array` | 同 | sqlite3_column_name/decltype/type | 返回 `["native_type"=>string, "pdo_type"=>string, "name"=>string]`（pdo_type 已 strval） |
+
+### 公开属性
+
+| 类 | 属性 | 类型 | 说明 |
+|----|------|------|------|
+| `PDOStatement` | `$queryString` | `string` | SQL 查询字符串（PHP 原生公开属性） |
+| `PDOStatement` | `$fetchMode` | `int` | 默认 fetch 模式（FETCH_BOTH=4） |
+| `PDOStatement` | `$fetchCol` | `int` | FETCH_COLUMN 模式的列号 |
+| `PDOStatement` | `$rowCount` | `int` | 受影响行数 |
+| `PDOStatement` | `$executed` | `bool` | 是否已 execute |
+| `PDOStatement` | `$done` | `bool` | 是否取完 |
+| `PDOStatement` | `$columnCount` | `int` | 列数 |
+| `PDO` | `$errMode` | `int` | 错误模式（实际始终为 EXCEPTION） |
+| `PDO` | `$caseMode` | `int` | 列名大小写模式 |
+| `PDO` | `$nullMode` | `int` | 空值处理模式 |
+| `PDO` | `$defaultFetchMode` | `int` | 默认 fetch 模式（FETCH_BOTH=4） |
+| `PDO` | `$inTransaction` | `bool` | 是否在事务中 |
+| `PDO` | `$txnMode` | `int` | 事务模式（DEFERRED/IMMEDIATE/EXCLUSIVE） |
+| `PDO` | `$openFlags` | `int` | sqlite3_open_v2 flags（默认 READWRITE\|CREATE=6） |
+
+> `PDO::$db` 和 `PDOStatement::$stmt`/`$db` 为指针的 int 形式存储，技术上公开但不建议用户直接访问。
+
+### 设计模式
+
+```php
+// 公开 API 纯 tphp 类型签名，指针以 int 在 PHP 层流转
+class PDO {
+    public int $db = 0;  // sqlite3* 指针的 int 形式
+    public function __construct(string $dsn, string $username = "",
+                                string $password = "", array $options = []) {
+        // C 包装函数 pdo_open_db 内部完成 t_int ↔ sqlite3* 转换
+        $dsnC = c_str($dsn);
+        $this->db = pdo_open_db($dsnC, c_int($this->openFlags));
+        if ($this->db == 0) { return; }  // 已抛异常
+        // 方法内部用 C.void* 局部变量承接 phpc_int_to_ptr 返回值
+        C.void* $dbh = phpc_int_to_ptr($this->db);
+        C->sqlite3_busy_timeout($dbh, c_int(60000));
+    }
+    public function __destruct() {
+        if ($this->db != 0) {
+            C.void* $dbh = phpc_int_to_ptr($this->db);
+            C->sqlite3_close_v2($dbh);
+            $this->db = 0;
+        }
+    }
+}
+
+// 多态方法按类型拆分（避免 mixed/t_var）
+class PDOStatement {
+    public function fetch(int $mode = 0): array {
+        // 始终返回 array<string>（列值统一 strval）
+        // 取完返回 []（用 fetchDone() 检测）
+    }
+    public function fetchColumnStr(int $col = 0): string { ... }
+    public function fetchColumnInt(int $col = 0): int { ... }
+    public function fetchDone(): bool { return $this->done; }
+}
+```
+
+### 典型用法
+
+```php
+#import pdo
+
+// SQLite 内存库 + 预处理
+$pdo = new PDO("sqlite::memory:");
+$pdo->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)");
+$pdo->exec("INSERT INTO t VALUES (1, 'Alice', 30)");
+
+// 命名参数绑定
+$stmt = $pdo->prepare("SELECT * FROM t WHERE id = :id");
+$stmt->bindValueNamedInt(":id", 1);
+$stmt->execute();
+$row = $stmt->fetch(PDO::FETCH_ASSOC);
+echo $row["name"];  // "Alice"
+
+// fetchAll + FETCH_KEY_PAIR
+$pdo->exec("INSERT INTO t VALUES (2, 'Bob', 25)");
+$pairs = $pdo->query("SELECT name, age FROM t")->fetchAll(PDO::FETCH_KEY_PAIR);
+echo $pairs["Alice"];  // "30"
+
+// 事务
+$pdo->beginTransaction();
+$pdo->exec("UPDATE t SET age = 31 WHERE id = 1");
+$pdo->commit();
+
+// 错误处理（可 try-catch）
+try {
+    $pdo->exec("SELECT * FROM nonexistent");
+} catch (Exception $e) {
+    echo $e->getMessage();  // "PDO::exec: no such table: nonexistent"
+}
+
+// fetchColumnInt 适用于 COUNT(*) 等
+$count = $pdo->query("SELECT COUNT(*) FROM t")->fetchColumnInt(0);
+echo $count;  // 2
+```
+
+> 测试: `test/pdo/pdo_basic.php`（19 节覆盖连接/exec/prepare/位置绑定/命名绑定/execute(array)/
+> fetch 模式/fetchAll/fetchColumn/事务/lastInsertId/rowCount/quote/getAttribute/setAttribute/
+> errorCode/getColumnMeta/closeCursor 复用/错误处理/静态方法/NULL/float 列）全部通过。
+
+---
+
 ## 异常
 
 > 文件: `object/try.h`
@@ -1739,10 +1959,29 @@ $tid = Thread::id();
 
 | 函数/语法 | 方向 | 说明 |
 |------|------|------|
-| `C->func(args)` | 直接 C 调用 | 无 name mangling |
-| `C->CONST` | 直接 C 常量/枚举/宏访问 | 无括号形式，按 `t_int` 推断 |
+| `C->func(args)` | 直接 C 调用 | 无 name mangling。**赋值给变量必须显式声明类型**（`int $x = C->foo()` / `C.void* $p = C->foo()`），编译期即捕获类型错误。语句上下文（`C->foo();`）无需声明。表达式上下文需用 cast 包装（`php_int(C->foo())`）或先赋值给类型化变量 |
+| `C->CONST` | 直接 C 常量/枚举/宏访问 | 无括号形式。**赋值给变量必须显式声明类型**（`int $x = C->COLOR_RED;`）。默认按 `int` 推断 |
 | `C.Type` | C 类型注解 | 函数参数/返回值用 C 类型（`C.int`→`int`，`C.Point*`→`Point*`，指针用 `*` 后缀） |
 | `(C.XXX) expr` | C 类型 cast | `(C.int)`/`(C.int32)`/`(C.int64)`/`(C.uint32)`/`(C.uint64)`/`(C.float)`/`(C.double)`/`(C.char)`/`(C.bool)`/`(C.void)`/`(C.void*)`/`(C.char*)`/`(C.int*)`/`(C.double*)`/`(C.XXX*)` |
+
+> **C-> 调用类型声明规则**（AOT 类型安全，编译期消除返回类型歧义）：
+>
+> | 使用场景 | 规则 | 示例 |
+> |---------|------|------|
+> | **语句上下文**（void 函数） | 不需要类型声明 | `C->sqlite3_finalize($s);` |
+> | **赋值上下文** | **必须显式声明类型**，否则编译错误 | `int $rc = C->sqlite3_step($s);`<br>`C.void* $p = C->sqlite3_column_text($s, 0);` |
+> | **表达式上下文**（`if`/比较/算术） | 用 cast 包装或先赋值给类型化变量 | `if (php_int(C->sqlite3_step($s)) == 100)`<br>或 `int $rc = C->sqlite3_step($s); if ($rc == 100)` |
+>
+> **类型选择**（C 返回类型 → 推荐声明）：
+>
+> | C 返回类型 | 推荐声明 | 说明 |
+> |-----------|---------|------|
+> | `int` / `int64_t` | `int` | t_int = int64_t，C 隐式转换 |
+> | `double` / `float` | `float` | t_float = double，echo/cast/return 正常工作 |
+> | `const char*`（借用指针） | `C.char*` | 借用指针，需 `php_str()` 转为拥有的 t_string |
+> | `void*` / `T*`（指针） | `C.void*` / `C.T*` | 指针类型，需 `phpc_ptr_to_int()` 转为 int 存储 |
+>
+> 原因：C-> 调用返回类型编译期不可靠（无法解析 C 头文件签名），强制声明消除了白名单和默认 `t_int` 假设，符合 AOT 显式优于推导的哲学。
 
 ### 预处理器指令
 

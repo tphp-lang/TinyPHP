@@ -41,7 +41,11 @@ PHP 中通过 `C->` 直接调用：
 
 class Main {
     public function main(): void {
-        var_dump(C->my_add(c_int(10), c_int(20)));
+        // ⚠️ C-> 调用返回值赋给变量时必须显式声明类型（AOT 类型安全）
+        //   独立语句（无返回值使用）不需要声明，如 C->foo();
+        //   表达式上下文需用 cast 包装，如 php_int(C->foo())
+        int $r = C->my_add(c_int(10), c_int(20));
+        var_dump($r);
     }
 }
 ```
@@ -97,7 +101,7 @@ defer C->fclose($f);               // 所有 return 路径自动关闭
 // 2. phpc_arr_int/dbl 自动注册到运行时，无需手动释放
 //    （仅循环内为避免内存堆积才需手动 phpc_free）
 C.int32_t* $data = phpc_arr_int([1, 2, 3]);   // 自动注册，程序结束/异常自动释放
-$result = C->sum_ints($data, c_int(3));
+int $result = C->sum_ints($data, c_int(3));   // C-> 调用必须显式声明返回类型
 
 // phpc_arr_str 不自动注册，需用 defer 释放
 C.char** $strs = phpc_arr_str(["a", "b"]);
@@ -107,7 +111,7 @@ defer phpc_free_str_arr($strs, c_int(2));
 phpc_free($data);                  // $data 自动为 null
 
 // 4. phpc_assert_ptr 断言指针非 NULL，失败时抛 tp_throw 异常（可 try-catch）
-$ptr = C->maybe_returns_null();
+C.void* $ptr = C->maybe_returns_null();
 try {
     phpc_assert_ptr($ptr, "ptr_name");
     // 安全使用 $ptr
@@ -116,7 +120,7 @@ try {
 }
 
 // 5. phpc_obj_steal 标记对象为"已分离"（refcount=-1），防 tp_obj_release double-free
-$p = C->point_create(1.0, 2.0);
+C.Point* $p = C->point_create(1.0, 2.0);
 phpc_obj_steal($p);   // 标记分离
 C->point_free($p);    // C 库释放，TinyPHP GC 不会再次释放
 
