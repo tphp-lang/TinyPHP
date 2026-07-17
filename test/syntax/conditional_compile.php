@@ -30,7 +30,11 @@
     #debug nested=not_windows
 #endif
 
-#debug not_hit=0
+#if Linux
+    #debug not_hit=1
+#else
+    #debug not_hit=0
+#endif
 
 #if Windows && TCC
     #debug compound=1
