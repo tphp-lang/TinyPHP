@@ -502,7 +502,7 @@ static inline t_int tphp_fn_stream_socket_server(t_string address, t_int flags, 
     struct sockaddr_in saddr;
     memset(&saddr, 0, sizeof(saddr));
     saddr.sin_family = AF_INET;
-    saddr.sin_port = htons((u_short)addr.port);
+    saddr.sin_port = htons((unsigned short)addr.port);
     if (addr.host[0] == '\0' || strcmp(addr.host, "0.0.0.0") == 0) {
         saddr.sin_addr.s_addr = INADDR_ANY;
     } else {
@@ -703,7 +703,7 @@ static inline t_int tphp_fn_stream_socket_sendto(t_int fd, t_string data, t_int 
         struct sockaddr_in saddr;
         memset(&saddr, 0, sizeof(saddr));
         saddr.sin_family = AF_INET;
-        saddr.sin_port = htons((u_short)port);
+        saddr.sin_port = htons((unsigned short)port);
         inet_pton(AF_INET, host, &saddr.sin_addr);
 
         n = sendto((int)fd, data_ptr, data_len, (int)flags,

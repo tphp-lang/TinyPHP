@@ -293,8 +293,11 @@ class Main
         // 原生 PHP stream_socket_pair(int $domain, int $type, int $protocol): array|false
         // POSIX: socketpair(AF_UNIX, SOCK_STREAM) — 返回 [fd0, fd1]
         // Windows: 用 TCP 回环模拟（仅 SOCK_STREAM）
+        // 注意：使用 STREAM_PF_UNIX 而非 STREAM_PF_INET，因为 AF_UNIX socketpair
+        //       在所有 POSIX 平台（Linux/macOS）都通用，AF_INET socketpair
+        //       在某些环境可能受限
         echo "=== 16. stream_socket_pair ===\n";
-        $pair = stream_socket_pair(STREAM_PF_INET, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
         echo "pair_len=" . count($pair) . "\n";
         // 通过 fd0 发送，fd1 接收
         stream_socket_sendto($pair[0], "ping", 0, "");
