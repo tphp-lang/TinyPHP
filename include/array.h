@@ -660,6 +660,7 @@ static inline t_int tphp_fn_arr_get_str_int(t_array *a, t_string key) {
     if (v == NULL) return 0;
     if (v->type == TYPE_INT) return v->value._int;
     if (v->type == TYPE_FLOAT) return (t_int)v->value._float;
+    if (v->type == TYPE_BOOL) return v->value._bool ? 1 : 0;
     return 0;
 }
 
@@ -672,6 +673,10 @@ static inline t_string tphp_fn_arr_get_str_str(t_array *a, t_string key) {
         if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
         int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
         return (t_string){.data = _b, .length = n};
+    }
+    if (v->type == TYPE_BOOL) {
+        // PHP 语义: (string)(true) = "1", (string)(false) = ""
+        return v->value._bool ? STR_LIT("1") : ((t_string){.data = NULL, .length = 0, .is_local = false});
     }
     return (t_string){.data = NULL, .length = 0, .is_local = false};
 }
@@ -692,6 +697,7 @@ static inline t_int tphp_fn_arr_get_int_int(t_array *a, t_int key) {
     if (v == NULL) return 0;
     if (v->type == TYPE_INT) return v->value._int;
     if (v->type == TYPE_FLOAT) return (t_int)v->value._float;
+    if (v->type == TYPE_BOOL) return v->value._bool ? 1 : 0;
     return 0;
 }
 
@@ -710,6 +716,10 @@ static inline t_string tphp_fn_arr_get_int_str(t_array *a, t_int key) {
         if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
         int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
         return (t_string){.data = _b, .length = n};
+    }
+    if (v->type == TYPE_BOOL) {
+        // PHP 语义: (string)(true) = "1", (string)(false) = ""
+        return v->value._bool ? STR_LIT("1") : ((t_string){.data = NULL, .length = 0, .is_local = false});
     }
     return (t_string){.data = NULL, .length = 0, .is_local = false};
 }

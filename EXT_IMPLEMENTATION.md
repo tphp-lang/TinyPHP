@@ -525,15 +525,17 @@ function inflate_get_read_len(Resource $context): int;
 > socket fd 以 `t_int` 流转（与 exif 的 `FILE* → t_int` 模式一致），SSL/TLS 指针同样以 `t_int` 流转。
 > Winsock 懒初始化（首次 socket 操作自动 `WSAStartup`），`FD_SETSIZE` 提升到 1024（Windows 默认 64 太少）。
 > TLS 支持由 `ext/openssl` 扩展提供（`TPHP_STREAM_TLS_IMPLEMENTED` 守卫，openssl.h 必须在 stream.h 之前 include）。
-> **当前 TLS 状态**: OpenSSL 扩展暂停（见 §8），`stream_socket_enable_crypto` 使用 `stream.h` 中的 stub，
-> 调用时抛 "TLS not supported (OpenSSL extension not loaded)" 异常。非 TLS 流功能完全可用。
+> **当前 TLS 状态**: OpenSSL 扩展已通过内置 mbedTLS 3.6.6 源码恢复（见 §8）。
+> 未加载 openssl 扩展时，`stream_socket_enable_crypto` 使用 `stream.h` 中的 stub，调用时抛 "TLS not supported" 异常并返回 `-1`（而非 `0`，避免与 PHP 原生"0=非阻塞需重试"语义混淆）。
 >
 > **跨平台/编译器兼容**:
 > - Windows: `_WIN32_WINNT 0x0600`（inet_pton 需要 Vista+）；`SHUT_RD/WR/RDWR` 映射到 `SD_RECEIVE/SEND/BOTH`；TCC 的 ws2tcpip.h 缺少 `inet_pton`/`inet_ntop` 声明，手动补充
 > - TCC Windows: `-L` 指向 `tcc/win32/lib`（`-B` 不加入 `library_paths`），让 `-lws2_32` 找到 `ws2_32.def`
 > - 不使用 `#pragma comment(lib, "ws2_32.lib")` — TCC 会将完整名传给 `tcc_add_library()`，搜索 `ws2_32.lib.def` 等不存在的文件
+> - `stream_socket_pair`: POSIX 用 `socketpair()`，Windows 不支持 AF_UNIX socketpair，用 TCP 回环连接（bind+listen+connect+accept）模拟
+> - `stream_get_meta_data`: `eof` 用 `MSG_PEEK` 检测（不消费数据）；Windows `blocked` 简化为 `true`（FIONBIO 是设置而非读取），POSIX 用 `fcntl(F_GETFL)` 检测
 >
-> 测试: `test/ext/stream_basic.php`（strerror 非空验证 + TCP echo 本地回环 + set_blocking + shutdown）全部通过。
+> 测试: `test/ext/stream_basic.php`（18 节覆盖全部 21 个函数：strerror/last_error/TCP echo/get_name/select/blocking/read_buffer/write_buffer/timeout/isatty/get_contents/get_line/get_meta_data/enable_crypto/shutdown/socket_pair/error cases/constant values）全部通过。
 
 ### 推荐参考库
 
@@ -559,11 +561,13 @@ const STREAM_SHUT_WR                 = 1;
 const STREAM_SHUT_RDWR               = 2;
 const STREAM_SOCK_STREAM             = 1;
 const STREAM_SOCK_DGRAM              = 2;
+const STREAM_SOCK_RAW                = 3;
 const STREAM_SOCK_RDM                = 4;
 const STREAM_SOCK_SEQPACKET          = 5;
 const STREAM_PF_INET                 = 2;
 const STREAM_PF_INET6                = 10;
 const STREAM_PF_UNIX                 = 1;
+const STREAM_IPPROTO_IP              = 0;
 const STREAM_IPPROTO_TCP             = 6;
 const STREAM_IPPROTO_UDP             = 17;
 const STREAM_IPPROTO_ICMP            = 1;
@@ -573,21 +577,48 @@ const STREAM_PEEK                    = 2;
 const STREAM_AWAIT_READ              = 1;
 const STREAM_AWAIT_WRITE             = 2;
 const STREAM_AWAIT_READ_WRITE        = 3;
-const STREAM_CRYPTO_METHOD_SSLv2     = 0;
-const STREAM_CRYPTO_METHOD_SSLv3     = 1;
-const STREAM_CRYPTO_METHOD_SSLv23    = 2;
-const STREAM_CRYPTO_METHOD_TLS       = 3;
-const STREAM_CRYPTO_METHOD_TLSv1_0   = 4;
-const STREAM_CRYPTO_METHOD_TLSv1_1   = 5;
-const STREAM_CRYPTO_METHOD_TLSv1_2   = 6;
-const STREAM_CRYPTO_METHOD_TLSv1_3   = 7;
+// STREAM_CRYPTO_METHOD_* — 与 PHP 原生 bitmask 值完全一致
+//   _CLIENT / _SERVER 两套（值相同），无后缀别名指向 _CLIENT 版本
+const STREAM_CRYPTO_METHOD_SSLv2_CLIENT     = 0x00;
+const STREAM_CRYPTO_METHOD_SSLv3_CLIENT     = 0x01;
+const STREAM_CRYPTO_METHOD_SSLv23_CLIENT    = 0x02;
+const STREAM_CRYPTO_METHOD_TLS_CLIENT       = 0x03;
+const STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT   = 0x04;
+const STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT   = 0x08;
+const STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT   = 0x10;
+const STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT   = 0x20;
+const STREAM_CRYPTO_METHOD_ANY_CLIENT       = 0x3F;
+const STREAM_CRYPTO_METHOD_SSLv2_SERVER     = 0x00;
+const STREAM_CRYPTO_METHOD_SSLv3_SERVER     = 0x01;
+const STREAM_CRYPTO_METHOD_SSLv23_SERVER    = 0x02;
+const STREAM_CRYPTO_METHOD_TLS_SERVER       = 0x03;
+const STREAM_CRYPTO_METHOD_TLSv1_0_SERVER   = 0x04;
+const STREAM_CRYPTO_METHOD_TLSv1_1_SERVER   = 0x08;
+const STREAM_CRYPTO_METHOD_TLSv1_2_SERVER   = 0x10;
+const STREAM_CRYPTO_METHOD_TLSv1_3_SERVER   = 0x20;
+const STREAM_CRYPTO_METHOD_ANY_SERVER       = 0x3F;
+// 无后缀别名（向后兼容，指向 _CLIENT 版本）
+const STREAM_CRYPTO_METHOD_SSLv2     = STREAM_CRYPTO_METHOD_SSLv2_CLIENT;
+const STREAM_CRYPTO_METHOD_SSLv3     = STREAM_CRYPTO_METHOD_SSLv3_CLIENT;
+const STREAM_CRYPTO_METHOD_SSLv23    = STREAM_CRYPTO_METHOD_SSLv23_CLIENT;
+const STREAM_CRYPTO_METHOD_TLS       = STREAM_CRYPTO_METHOD_TLS_CLIENT;
+const STREAM_CRYPTO_METHOD_TLSv1_0   = STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT;
+const STREAM_CRYPTO_METHOD_TLSv1_1   = STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT;
+const STREAM_CRYPTO_METHOD_TLSv1_2   = STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+const STREAM_CRYPTO_METHOD_TLSv1_3   = STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+// STREAM_CRYPTO_PROTO_* 别名（PHP 8.1+）
+const STREAM_CRYPTO_PROTO_SSLv3      = 1;
+const STREAM_CRYPTO_PROTO_TLSv1_0    = 2;
+const STREAM_CRYPTO_PROTO_TLSv1_1    = 3;
+const STREAM_CRYPTO_PROTO_TLSv1_2    = 4;
+const STREAM_CRYPTO_PROTO_TLSv1_3    = 5;
 const STREAM_CRYPTO_ENABLE           = 1;
 const STREAM_CRYPTO_DISABLE          = 0;
 const STREAM_OPTION_BLOCKING         = 1;
 const STREAM_OPTION_READ_BUFFER      = 3;
 const STREAM_OPTION_READ_TIMEOUT     = 4;
-const STREAM_OPTION_WRITE_TIMEOUT    = 5;
-const STREAM_OPTION_CHUNK_SIZE       = 6;
+const STREAM_OPTION_WRITE_BUFFER     = 5;
+const STREAM_OPTION_CHUNK_SIZE       = 7;
 const STREAM_FILTER_READ             = 1;
 const STREAM_FILTER_WRITE            = 2;
 const STREAM_FILTER_ALL              = 3;
@@ -606,7 +637,7 @@ const STREAM_NOTIFY_SEVERITY_WARN    = 2;
 const STREAM_NOTIFY_SEVERITY_INFO    = 3;
 
 // ================================================================
-// 函数 (15个)
+// 函数 (21个)
 // ================================================================
 
 function stream_close(int $fd): void;
@@ -614,8 +645,13 @@ function stream_last_error(): int;
 function stream_strerror(int $err): string;
 function stream_set_blocking(int $fd, bool $enable): bool;
 function stream_set_read_buffer(int $fd, int $buffer): int;
+function stream_set_write_buffer(int $fd, int $buffer): int;
+function stream_set_timeout(int $fd, int $seconds, int $microseconds = 0): bool;
 function stream_isatty(int $fd): bool;
 function stream_select(array $read, array $write, array $except, int $tv_sec, int $tv_usec = 0): int|Exception;
+function stream_get_contents(int $fd, int $length = -1, int $offset = -1): string|Exception;
+function stream_get_line(int $fd, int $length, string $ending = ""): string|Exception;
+function stream_get_meta_data(int $fd): array;
 function stream_socket_server(string $address, int $flags = STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, array $context = []): int|Exception;
 function stream_socket_accept(int $server_fd, int $timeout_ms = -1): int|Exception;
 function stream_socket_client(string $address, int $timeout_ms = -1, int $flags = STREAM_CLIENT_CONNECT, array $context = []): int|Exception;
@@ -624,6 +660,7 @@ function stream_socket_sendto(int $fd, string $data, int $flags = 0, string $add
 function stream_socket_get_name(int $fd, bool $want_peer): string|Exception;
 function stream_socket_shutdown(int $fd, int $how): bool|Exception;
 function stream_socket_enable_crypto(int $fd, bool $enable, int $crypto_type = 0): int|Exception;
+function stream_socket_pair(int $domain, int $type, int $protocol): array|Exception;
 ```
 
 ***

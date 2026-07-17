@@ -564,6 +564,25 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
                     'conio.h','shlobj.h','shellapi.h','wincrypt.h','winreg.h',
                     // C++ 兼容
                     'cstring','cstdlib','cstdio','cmath','cstdint','vector','string','map',
+                    // mbedtls（本地源码编译，由 ext/openssl 扩展使用，通过 -I 路径查找）
+                    'mbedtls/aes.h','mbedtls/aria.h','mbedtls/asn1.h','mbedtls/asn1write.h',
+                    'mbedtls/base64.h','mbedtls/bignum.h','mbedtls/block_cipher.h',
+                    'mbedtls/build_info.h','mbedtls/camellia.h','mbedtls/ccm.h','mbedtls/chacha20.h',
+                    'mbedtls/chachapoly.h','mbedtls/check_config.h','mbedtls/cipher.h','mbedtls/cmac.h',
+                    'mbedtls/compat-2.x.h','mbedtls/constant_time.h','mbedtls/ctr_drbg.h',
+                    'mbedtls/debug.h','mbedtls/des.h','mbedtls/dhm.h','mbedtls/ecdh.h',
+                    'mbedtls/ecdsa.h','mbedtls/ecjpake.h','mbedtls/ecp.h','mbedtls/entropy.h',
+                    'mbedtls/error.h','mbedtls/gcm.h','mbedtls/hkdf.h','mbedtls/hmac_drbg.h',
+                    'mbedtls/lms.h','mbedtls/md.h','mbedtls/md5.h','mbedtls/memory_buffer_alloc.h',
+                    'mbedtls/net_sockets.h','mbedtls/nist_kw.h','mbedtls/oid.h','mbedtls/pem.h',
+                    'mbedtls/pk.h','mbedtls/pkcs12.h','mbedtls/pkcs5.h','mbedtls/pkcs7.h',
+                    'mbedtls/platform.h','mbedtls/platform_time.h','mbedtls/platform_util.h',
+                    'mbedtls/poly1305.h','mbedtls/private_access.h','mbedtls/psa_util.h',
+                    'mbedtls/ripemd160.h','mbedtls/rsa.h','mbedtls/sha1.h','mbedtls/sha256.h',
+                    'mbedtls/sha3.h','mbedtls/sha512.h','mbedtls/ssl.h','mbedtls/ssl_cache.h',
+                    'mbedtls/ssl_ciphersuites.h','mbedtls/ssl_cookie.h','mbedtls/ssl_ticket.h',
+                    'mbedtls/threading.h','mbedtls/timing.h','mbedtls/version.h','mbedtls/x509.h',
+                    'mbedtls/x509_crl.h','mbedtls/x509_crt.h','mbedtls/x509_csr.h',
                 ];
                 $cleanName = ltrim($fileName, '/');
                 if (!in_array($cleanName, $allowedSystemHeaders, true)) {
@@ -939,22 +958,7 @@ if ($targetOS === 'darwin' || ($targetOS === null && PHP_OS_FAMILY === 'Darwin')
     $linkFlags .= ' -liconv';
 }
 
-// Windows 命令行长度限制（cmd.exe 8191, CreateProcess 32767）
-// 当源文件众多（如内置 zlib 15 个 .c + 扩展 .c + 用户 .c）时，命令行会超限。
-// 使用 response file (@file) 机制：把源文件列表写入临时文件，用 @file 引用。
-// TCC/GCC/Clang 均支持 @file 语法。
-$responseFile = '';
-if (PHP_OS_FAMILY === 'Windows' && strlen($extraSrcs) > 4000) {
-    $respDir = $outDir;
-    if (!is_dir($respDir)) @mkdir($respDir, 0777, true);
-    $responseFile = $respDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '_rsp.txt';
-    $respLines = [];
-    foreach ($allCFiles as $cf) {
-        $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cf) . '"';
-    }
-    file_put_contents($responseFile, implode("\n", $respLines));
-    $extraSrcs = ' @"' . $responseFile . '"';
-}
+// 统一 Response File 机制在所有参数收集完成后处理（见下方 sprintf 之前）
 // zlib/zip: 检测生成的 C 代码是否使用了 zlib（CodeGenerator 条件引入 os/zlib.h）
 // 策略：统一使用内置 zlib 源码（include/os/zlib_src/）静态编译，无需外部 -lz 或 zlib1.dll。
 // 这确保所有平台/编译器组合（包括纯 TCC 环境）都能使用 zlib/zip 扩展，零运行时依赖。
@@ -982,17 +986,216 @@ if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "ext/stream/s
     && PHP_OS_FAMILY === 'Windows') {
     $lateLinkFlags .= ' -lws2_32';
 }
-// openssl: 链接 flags 现由 ext/openssl/src/openssl.php 通过 #flag + #if TCC 条件编译处理
-// （TCC 用 lib-tcc/，GCC/Clang 用 lib/ 或 lib64/；-I/-L/-l 全部在 openssl.php 中声明）
-// tphp.php 不再自动检测和添加 OpenSSL flags，避免重复
+// openssl（基于内置 mbedTLS 源码静态编译）：
+//   检测生成的 C 代码是否使用了 openssl 扩展（CodeGenerator 条件引入 ext/openssl/src/openssl.h）
+//   策略：统一使用内置 mbedTLS 3.6.6 源码（include/mbedtls_src/）静态编译，
+//   无需外部 -lssl/-lcrypto 或系统 OpenSSL，零运行时依赖。
+//   这确保所有平台/编译器组合（包括纯 TCC 环境）都能使用 openssl 扩展。
+//
+//   预编译策略：mbedtls 源码先编译为静态库 libmbedtls.a，再与主程序链接。
+//   原因：TCC 一次编译过多 .c 文件时内部符号表溢出，导致 static inline 函数
+//   声明丢失（tphp_fn_echo 等变为隐式声明）。预编译分离解决了此问题。
+$mbedtlsSrcDir = $includeDir . DIRECTORY_SEPARATOR . 'mbedtls_src';
+if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "ext/openssl/src/openssl.h"') !== false
+    && is_dir($mbedtlsSrcDir)) {
+    $mbedtlsLibDir = $mbedtlsSrcDir . DIRECTORY_SEPARATOR . 'library';
+    // 核心库（仅包含 mbedtls_config.h 启用的模块）
+    $mbedtlsSrcFiles = [
+        'platform.c', 'platform_util.c', 'constant_time.c', 'error.c',
+        'memory_buffer_alloc.c', 'version.c',
+        'md.c', 'md5.c', 'sha1.c', 'sha256.c', 'sha512.c',
+        'aes.c', 'cipher.c', 'cipher_wrap.c',
+        'gcm.c', 'ccm.c', 'chacha20.c', 'chachapoly.c', 'poly1305.c',
+        'cmac.c', 'block_cipher.c',
+        'entropy.c', 'entropy_poll.c', 'ctr_drbg.c', 'hmac_drbg.c',
+        'bignum.c', 'bignum_core.c', 'bignum_mod.c', 'bignum_mod_raw.c',
+        'rsa.c', 'rsa_alt_helpers.c', 'pk.c', 'pk_wrap.c', 'pk_ecc.c',
+        'pkparse.c', 'ecp.c', 'ecp_curves.c', 'ecp_curves_new.c',
+        'ecdh.c', 'ecdsa.c', 'dhm.c',
+        'asn1parse.c', 'asn1write.c', 'oid.c', 'pem.c', 'base64.c',
+        'x509.c', 'x509_create.c', 'x509_crl.c', 'x509_crt.c', 'x509_csr.c',
+        'ssl_ciphersuites.c', 'ssl_client.c', 'ssl_msg.c', 'ssl_ticket.c',
+        'ssl_tls.c', 'ssl_tls12_client.c', 'ssl_tls12_server.c',
+        'hkdf.c', 'pkcs5.c', 'pkcs7.c', 'pkcs12.c',
+        'net_sockets.c', 'threading.c', 'timing.c',
+    ];
+
+    // 预编译为静态库 libmbedtls.a（带缓存）
+    $mbedtlsCacheDir = $cwd . DIRECTORY_SEPARATOR . 'build' . DIRECTORY_SEPARATOR . 'mbedtls_cache';
+    $mbedtlsLibPath = $mbedtlsCacheDir . DIRECTORY_SEPARATOR . 'libmbedtls.a';
+    $mbedtlsConfigFile = $mbedtlsSrcDir . DIRECTORY_SEPARATOR . 'include' . DIRECTORY_SEPARATOR . 'mbedtls' . DIRECTORY_SEPARATOR . 'mbedtls_config.h';
+
+    // 检查是否需要重建（库不存在、或任一源文件/config 比库新）
+    $needRebuild = !file_exists($mbedtlsLibPath);
+    if (!$needRebuild) {
+        $libMtime = filemtime($mbedtlsLibPath);
+        if (file_exists($mbedtlsConfigFile) && filemtime($mbedtlsConfigFile) > $libMtime) {
+            $needRebuild = true;
+        }
+        if (!$needRebuild) {
+            foreach ($mbedtlsSrcFiles as $src) {
+                $srcPath = $mbedtlsLibDir . DIRECTORY_SEPARATOR . $src;
+                if (is_file($srcPath) && filemtime($srcPath) > $libMtime) {
+                    $needRebuild = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if ($needRebuild) {
+        if (!is_dir($mbedtlsCacheDir)) @mkdir($mbedtlsCacheDir, 0755, true);
+        // 构建 mbedtls -I 路径（与 openssl.php 的 #flag 一致）
+        $mbedtlsIncludeFlags = sprintf(
+            '-I"%s" -I"%s" -I"%s" -I"%s" -I"%s"',
+            str_replace('\\', '/', $mbedtlsSrcDir . '/include'),
+            str_replace('\\', '/', $mbedtlsSrcDir . '/library'),
+            str_replace('\\', '/', $mbedtlsSrcDir . '/3rdparty/everest/include'),
+            str_replace('\\', '/', $mbedtlsSrcDir . '/3rdparty/everest/include/everest'),
+            str_replace('\\', '/', $mbedtlsSrcDir . '/3rdparty/everest/include/everest/kremlib')
+        );
+        // 收集存在的源文件路径
+        $mbedtlsSrcPaths = [];
+        foreach ($mbedtlsSrcFiles as $src) {
+            $srcPath = $mbedtlsLibDir . DIRECTORY_SEPARATOR . $src;
+            if (is_file($srcPath)) $mbedtlsSrcPaths[] = $srcPath;
+        }
+        // 编译所有 .c 为 .o（逐文件编译）
+        //   原因：TCC 的 `-c` 模式不支持 `-o` 同时编译多个文件
+        //         （报错 "cannot specify output file with -c many files"），
+        //         必须逐文件调用 `tcc -c -I... file.c -o file.o`。
+        $objDir = $mbedtlsCacheDir . DIRECTORY_SEPARATOR . 'obj';
+        if (!is_dir($objDir)) @mkdir($objDir, 0755, true);
+        $objFiles = [];
+        foreach ($mbedtlsSrcPaths as $srcPath) {
+            $base = basename($srcPath, '.c');
+            $objFiles[] = $objDir . DIRECTORY_SEPARATOR . $base . '.o';
+        }
+        echo "       Pre-compiling mbedTLS (static library, " . count($mbedtlsSrcPaths) . " files)...\n";
+        $compileOk = true;
+        $savedCwd2 = getcwd();
+        $execCwd2 = $savedCwd2;
+        if ($isTCC) {
+            $binDir2 = dirname($ccExe);
+            if (is_dir($binDir2)) $execCwd2 = $binDir2;
+        }
+        foreach ($mbedtlsSrcPaths as $idx => $srcPath) {
+            $objPath = $objFiles[$idx];
+            $singleCmd = sprintf(
+                '"%s" %s -c %s "%s" -o "%s" 2>&1',
+                $ccExe, $bFlag, $mbedtlsIncludeFlags,
+                str_replace('\\', '/', $srcPath),
+                str_replace('\\', '/', $objPath)
+            );
+            $singleOutput = [];
+            $singleRet = 0;
+            if ($execCwd2 !== false && @chdir($execCwd2)) {
+                exec($singleCmd, $singleOutput, $singleRet);
+                @chdir($savedCwd2);
+            } else {
+                exec($singleCmd, $singleOutput, $singleRet);
+            }
+            if ($singleRet !== 0) {
+                echo "       [ERROR] mbedTLS compile failed: " . basename($srcPath) . "\n"
+                   . implode("\n", $singleOutput) . "\n";
+                $compileOk = false;
+                break;
+            }
+        }
+        if ($compileOk) {
+            // 创建静态库 libmbedtls.a
+            $arCmd = sprintf(
+                '"%s" -ar cr "%s" %s 2>&1',
+                $ccExe,
+                str_replace('\\', '/', $mbedtlsLibPath),
+                implode(' ', array_map(fn($f) => '"' . str_replace('\\', '/', $f) . '"', $objFiles))
+            );
+            $arOutput = [];
+            $arRet = 0;
+            $savedCwd3 = getcwd();
+            $execCwd3 = $savedCwd3;
+            if ($isTCC) {
+                $binDir3 = dirname($ccExe);
+                if (is_dir($binDir3)) $execCwd3 = $binDir3;
+            }
+            if ($execCwd3 !== false && @chdir($execCwd3)) {
+                exec($arCmd, $arOutput, $arRet);
+                @chdir($savedCwd3);
+            } else {
+                exec($arCmd, $arOutput, $arRet);
+            }
+            if ($arRet !== 0) {
+                echo "       [ERROR] mbedTLS archive failed:\n" . implode("\n", $arOutput) . "\n";
+            } else {
+                echo "       [OK] libmbedtls.a built (" . count($objFiles) . " objects)\n";
+            }
+        }
+    } else {
+        echo "       [CACHED] libmbedtls.a\n";
+    }
+
+    // 将 libmbedtls.a 加入链接（不加入 $allCFiles，避免 TCC 符号表溢出）
+    if (file_exists($mbedtlsLibPath)) {
+        $lateLinkFlags .= ' "' . str_replace('\\', '/', $mbedtlsLibPath) . '"';
+    } else {
+        // 预编译失败：直接报错退出。
+        //   不回退到直接编译 .c 源码（会触发 TCC 符号表溢出，导致 static inline
+        //   函数声明丢失），也不覆盖 $extraSrcs（会丢失用户 #flag .c 文件）。
+        echo "[ERROR] mbedTLS pre-compile failed — libmbedtls.a not built.\n";
+        echo "       Fix the compile errors above and retry.\n";
+        exit(1);
+    }
+    // Windows: mbedtls net_sockets.c 需要 winsock
+    if (PHP_OS_FAMILY === 'Windows') {
+        $lateLinkFlags .= ' -lws2_32';
+    }
+}
+// openssl 链接 flags 由 ext/openssl/src/openssl.php 通过 #flag 声明（-I 路径）
+// 源码已由 tphp.php 自动收集到 $allCFiles，无需额外 -lssl -lcrypto
 // -shared 模式：生成动态库
 $sharedFlag = $isShared ? ' -shared' : '';
 // 项目根目录作为额外 -I 路径，让 ext/ 下的扩展头文件（如 ext/stream/src/stream.h）可被 #include 查找到
 $projectRoot = dirname($includeDir);
-$cmd = sprintf(
-    '"%s" %s%s%s%s -I"%s" -I"%s" -o "%s" "%s"%s%s 2>&1',
-    $ccExe, $bFlag, $extraFlags, $linkFlags, $sharedFlag, $includeDir, $projectRoot, $outExe, $cFile, $extraSrcs, $lateLinkFlags
+// 注意 -I 顺序：TinyPHP 的 include/ 必须在 $extraFlags（含 mbedtls 的 -I 路径）之前，
+//   否则 mbedtls 的 library/common.h 会顶替 TinyPHP 的 include/common.h，
+//   导致 tphp_fn_echo 等 builtin 函数声明丢失（implicit declaration）。
+
+// === 统一 Response File 机制 ===
+// 当总命令行长度超过阈值时，把可变参数（-I/-D/-O/源文件/-L/-l/.a）全部写入 @file。
+// 保留核心参数在命令行：编译器路径、-B、内置 -I、-o（保持可读性）。
+// TCC/GCC/Clang 均支持 @file 语法，参数顺序自由排列。
+// 阈值 8000：Windows CreateProcess 上限 32767，保守留余量。
+//   Linux/macOS 命令行限制很高（ARG_MAX 通常 128KB+），不触发。
+$respThreshold = 8000;
+$fullCmd = sprintf(
+    '"%s" %s -I"%s" -I"%s" %s%s%s -o "%s" "%s"%s%s 2>&1',
+    $ccExe, $bFlag, $includeDir, $projectRoot, $extraFlags, $linkFlags, $sharedFlag, $outExe, $cFile, $extraSrcs, $lateLinkFlags
 );
+$responseFile = '';
+if (PHP_OS_FAMILY === 'Windows' && strlen($fullCmd) > $respThreshold) {
+    $respDir = $outDir;
+    if (!is_dir($respDir)) @mkdir($respDir, 0777, true);
+    $responseFile = $respDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '_rsp.txt';
+    // 收集可变参数，保持顺序：flags → 主 C 文件 → 附加源文件 → 链接库
+    // 链接库必须在源文件之后（链接器单遍扫描）
+    $respLines = [];
+    if ($extraFlags !== '')  $respLines[] = trim($extraFlags);
+    if ($linkFlags !== '')   $respLines[] = trim($linkFlags);
+    if ($sharedFlag !== '')  $respLines[] = trim($sharedFlag);
+    $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cFile) . '"';
+    foreach ($allCFiles as $cf) {
+        $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cf) . '"';
+    }
+    if ($lateLinkFlags !== '') $respLines[] = trim($lateLinkFlags);
+    file_put_contents($responseFile, implode("\n", $respLines));
+    $cmd = sprintf(
+        '"%s" %s -I"%s" -I"%s" -o "%s" @"%s" 2>&1',
+        $ccExe, $bFlag, $includeDir, $projectRoot, $outExe, $responseFile
+    );
+    if ($debugMode) echo "[DEBUG] Using response file (cmdlen=" . strlen($fullCmd) . " > {$respThreshold}): {$responseFile}\n";
+} else {
+    $cmd = $fullCmd;
+}
 
 $tccOutput = [];
 $retval = 0;
@@ -1075,28 +1278,35 @@ if ($retval !== 0 || !file_exists($outExe) || filesize($outExe) < 64) {
                     if ($tok === '' || str_starts_with($tok, '-l') || str_starts_with($tok, '-L')) continue;
                     $newLateLink .= ' ' . $tok;
                 }
-                // 构建新的源文件列表（原 extraSrcs + .obj 文件）
-                // 注意：如果原 extraSrcs 已是 @responseFile，则保持不变，只追加 .obj
-                $newExtraSrcs = $extraSrcs . ' "' . implode('" "', $allObjs) . '"';
-                // Windows 命令行长度限制：fallback 路径同样可能超限，使用 response file
+                // 构建新的源文件列表（原 allCFiles + .obj 文件）
+                $allFallbackSrcs = array_merge($allCFiles, $allObjs);
+                $newExtraSrcs = !empty($allFallbackSrcs) ? ' "' . implode('" "', $allFallbackSrcs) . '"' : '';
+                // 统一 Response File 机制（与主路径一致）
+                $cmd2Full = sprintf(
+                    '"%s" %s -I"%s" -I"%s" %s%s%s -o "%s" "%s"%s%s 2>&1',
+                    $ccExe, $bFlag, $includeDir, $projectRoot, $extraFlags, $linkFlags, $sharedFlag, $outExe, $cFile, $newExtraSrcs, $newLateLink
+                );
                 $fallbackRespFile = '';
-                if (PHP_OS_FAMILY === 'Windows' && strlen($newExtraSrcs) > 4000) {
+                if (PHP_OS_FAMILY === 'Windows' && strlen($cmd2Full) > $respThreshold) {
                     $fallbackRespFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '_rsp2.txt';
                     $respLines = [];
-                    // 写入所有源文件（allCFiles + allObjs）
-                    foreach ($allCFiles as $cf) {
+                    if ($extraFlags !== '')  $respLines[] = trim($extraFlags);
+                    if ($linkFlags !== '')   $respLines[] = trim($linkFlags);
+                    if ($sharedFlag !== '')  $respLines[] = trim($sharedFlag);
+                    $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cFile) . '"';
+                    foreach ($allFallbackSrcs as $cf) {
                         $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cf) . '"';
                     }
-                    foreach ($allObjs as $obj) {
-                        $respLines[] = '"' . $obj . '"';
-                    }
+                    if ($newLateLink !== '') $respLines[] = trim($newLateLink);
                     file_put_contents($fallbackRespFile, implode("\n", $respLines));
-                    $newExtraSrcs = ' @"' . $fallbackRespFile . '"';
+                    $cmd2 = sprintf(
+                        '"%s" %s -I"%s" -I"%s" -o "%s" @"%s" 2>&1',
+                        $ccExe, $bFlag, $includeDir, $projectRoot, $outExe, $fallbackRespFile
+                    );
+                    if ($debugMode) echo "[DEBUG] TCC .a fallback, using response file (cmdlen=" . strlen($cmd2Full) . " > {$respThreshold})\n";
+                } else {
+                    $cmd2 = $cmd2Full;
                 }
-                $cmd2 = sprintf(
-                    '"%s" %s%s%s -I"%s" -I"%s" -o "%s" "%s"%s%s 2>&1',
-                    $ccExe, $bFlag, $extraFlags, $linkFlags, $includeDir, $projectRoot, $outExe, $cFile, $newExtraSrcs, $newLateLink
-                );
                 if ($debugMode) echo "[DEBUG] TCC .a fallback, extracting .obj files...\n";
                 $tccOutput2 = [];
                 if ($execCwd !== false && @chdir($execCwd)) {

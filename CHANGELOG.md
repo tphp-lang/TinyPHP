@@ -8,6 +8,69 @@
 
 ### 新增
 
+- **stream 扩展对标 PHP 原生补全**（新增 6 个函数，总数 15 → 21）：
+  - `stream_set_write_buffer(int $fd, int $buffer): int` — 设置写缓冲（socket 无 stdio 缓冲，stub 返回 0）
+  - `stream_set_timeout(int $fd, int $seconds, int $microseconds = 0): bool` — 设置读写超时（`setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)`）
+  - `stream_get_contents(int $fd, int $length = -1, int $offset = -1): string` — 读取剩余所有数据（`length=-1` 读全部，`offset=-1` 从当前位置）
+  - `stream_get_line(int $fd, int $length, string $ending = ""): string` — 读到分隔符或长度（不返回 ending）
+  - `stream_get_meta_data(int $fd): array` — 获取流元数据（`timed_out`/`blocked`/`eof`/`stream_type`/`unread_bytes`/`seekable`）
+  - `stream_socket_pair(int $domain, int $type, int $protocol): array` — 创建一对互连的 socket（POSIX `socketpair()`，Windows 用 TCP 回环模拟）
+- **统一 Response File 机制**（`tphp.php`）：当总命令行长度超过 8000 字符时，自动把可变参数（`-I`/`-D`/`-O`/源文件/`-L`/`-l`/`.a`）全部写入 `@file`，保留核心参数（编译器路径、`-B`、内置 `-I`、`-o`）在命令行。TCC/GCC/Clang 均支持 `@file` 语法。彻底解决 Windows CreateProcess 32767 字符限制问题。
+  - 覆盖主编译路径和 TCC `.a` fallback 路径
+  - 修复旧机制仅覆盖 `$extraSrcs` 且会被 zlib 检测覆盖的 bug
+  - 修复 fallback 路径丢失 `-shared` 标记的潜在 bug
+
+### 变更
+
+- **stream 常量体系对标 PHP 原生**：
+  - 新增 `STREAM_SOCK_RAW`=3、`STREAM_IPPROTO_IP`=0
+  - 修正 `STREAM_OPTION_WRITE_BUFFER`=5（原错误命名 `WRITE_TIMEOUT`）、`STREAM_OPTION_CHUNK_SIZE`=7（原错误值 6）
+  - `STREAM_CRYPTO_METHOD_*` 改为 PHP 原生 `_CLIENT`/`_SERVER` 后缀 + bitmask 值（如 `TLSv1_2_CLIENT`=0x10），保留无后缀别名指向 `_CLIENT` 版本（向后兼容）
+  - 新增 `STREAM_CRYPTO_METHOD_ANY_CLIENT`/`ANY_SERVER`=0x3F、`STREAM_CRYPTO_PROTO_*`（PHP 8.1+ 别名）
+  - C 宏名统一全大写（如 `SSLV2_CLIENT` 而非 `SSLv2_CLIENT`），因为 CodeGenerator 把 PHP 常量名 `strtoupper` 后映射到 C 宏
+- **`stream_socket_enable_crypto` 返回值语义修正**：stub 和真实实现失败时返回 `-1`（而非 `0`），避免与 PHP 原生"0=非阻塞需重试"语义混淆
+
+### 修复
+
+- **`stream_select` 数组索引安全**：过滤未就绪 fd 后 in-place 压缩数组，同时调用 `arr_stridx_free`/`arr_intidx_free` 清除哈希索引，避免 entry 位置变化导致索引指向错误位置（内存安全 bug）
+- **`CodeGenerator.php` 字符串键类型追踪不一致**（`visitArrayAccess`）：未知字符串键默认改为 `'t_string'`（与 `inferType` 行为和注释"无记录用 get_str_str"一致），原代码误用数组变量类型 `t_array*` 导致 `$meta["stream_type"]` 生成 `tphp_fn_arr_get_str_arr`（返回 `t_array*`），传给 `strlen` 报类型错误
+- **`CodeGenerator.php` BinaryExpr 误匹配嵌套调用**：`str_contains($lCode, 'tphp_fn_arr_get_str_str')` 会误匹配嵌套在 `strlen(...)` 等调用内的 `get_str_str`，导致 `tphp_rt_parse_int(tphp_fn_strlen(...))` 类型错误。改用 `$lt === 't_string'` 类型推断检查
+- **`array.h` 数组 getter 不处理 TYPE_BOOL**：`arr_get_str_int`/`arr_get_str_str`/`arr_get_int_int`/`arr_get_int_str` 对 TYPE_BOOL 返回零值/空串，导致 `$meta["blocked"] === true` 恒为 false。修复为遵循 PHP 类型转换语义（bool true → 1/"1"，false → 0/""）
+
+### 文档
+
+- [EXT_IMPLEMENTATION.md](EXT_IMPLEMENTATION.md) — stream 章节更新：函数数 15 → 21，常量表补全（新增 `STREAM_SOCK_RAW`/`STREAM_IPPROTO_IP`/`STREAM_CRYPTO_METHOD_*_CLIENT`/`_SERVER`/`STREAM_CRYPTO_PROTO_*`），修正 `STREAM_OPTION_WRITE_BUFFER`/`CHUNK_SIZE` 值，API 列表新增 6 个函数
+- [FUNCTIONS.md](FUNCTIONS.md) — stream 章节同步更新，总览函数数 339+ → 345+
+- [README.md](README.md) — 内置函数数 306+ → 312+
+
+### 测试
+
+- `test/ext/stream_basic.php` 完整重写：18 个测试节覆盖全部 21 个函数（strerror/last_error/TCP echo/get_name/select/blocking/read_buffer/write_buffer/timeout/isatty/get_contents/get_line/get_meta_data/enable_crypto/shutdown/socket_pair/error cases/constant values）
+- 全部 168 个测试通过（Windows AMD64 + TCC）
+
+### 变更（续）
+
+- **OpenSSL 扩展方案重构：内置 mbedTLS 3.6.6 源码静态编译**（零运行时依赖）：
+  - **核心约束**：TinyPHP 承诺零运行时依赖，不能动态链接系统 OpenSSL（`libssl.so`/`.dll` 等）
+  - **参考方案**：vlang `thirdparty/mbedtls/` 集成模式，内置 mbedTLS 3.6.6 源码（`include/mbedtls_src/`）
+  - **mbedTLS 3.6.6**：ARM 维护的 TLS 库，纯 C 无 ASM 依赖，TCC 友好，裁剪版配置仅启用 21 个 openssl 函数所需功能
+  - **预编译静态库策略**：mbedtls 源码先逐文件编译为 `.o`，再归档为 `libmbedtls.a`，最后与主程序链接
+    - 原因：TCC 一次编译过多 `.c` 文件时内部符号表溢出，导致 `static inline` 函数声明丢失（`tphp_fn_echo` 等变为隐式声明）
+    - TCC 的 `-c` 模式不支持 `-o` 同时编译多个文件（报 `cannot specify output file with -c many files`），必须逐文件编译
+    - 缓存机制：基于 `mbedtls_config.h` 和源文件 mtime 检测，未变更时复用 `build/mbedtls_cache/libmbedtls.a`
+    - 预编译失败直接报错退出（不回退到直接编译 `.c`，避免符号表溢出）
+  - **TCC 兼容性配置**（`mbedtls_config.h`）：
+    - 禁用 `MBEDTLS_HAVE_ASM`、`MBEDTLS_AESNI_C`，强制 `MBEDTLS_HAVE_INT32`（避免 TCC 64x64→128 乘法 bug）
+    - 禁用 TLS 1.3（需 PSA Crypto，已裁剪），仅保留 TLS 1.2
+    - 添加 `ECDHE_RSA`/`ECDHE_ECDSA`/`RSA` 三种密钥交换方法
+  - **Windows + TCC 兼容补丁**（`mbedtls_config.h` 末尾）：
+    - `gmtime_s` 不可用（TCC win32 CRT 无 C11 边界检查库）→ 定义 `PLATFORM_UTIL_USE_GMTIME` 使用 `gmtime` 替代
+    - `__stosb` 不可用（TCC 无 MSVC intrinsic，`SecureZeroMemory` 依赖）→ 定义 `MBEDTLS_PLATFORM_HAS_EXPLICIT_BZERO` + `explicit_bzero` 宏（volatile 循环）
+  - **`-I` 路径顺序修复**：TinyPHP 的 `include/` 必须在 mbedtls 的 `-I` 路径之前，否则 mbedtls 的 `library/common.h` 会顶替 TinyPHP 的 `include/common.h`，导致 `tphp_fn_echo` 等 builtin 函数声明丢失
+  - **测试恢复**：`test/ext/openssl_basic.php` 仍标记 `@skip`（CI 默认跳过，mbedTLS 预编译较慢），但本地可手动运行验证
+
+### 新增
+
 - **条件编译指令 `#if`/`#elseif`/`#else`/`#endif`**（TinyPHP 扩展）：
   - 解析期求值：非命中分支的 token 直接跳过（不解析、不类型检查、不生成 C 代码），与 V 语言 `$if` 默认行为一致
   - 可出现在**顶层**（包裹 `#include`/`#flag`/`#callback`/`#cstruct`/`class`/`function`/`const`/`enum`）和**函数体内**（包裹任意语句）
@@ -39,29 +102,21 @@
   - **SSL Connection API**（10 个）：`openssl_ssl_new`/`openssl_ssl_free`/`openssl_ssl_set_fd`/`openssl_ssl_connect`/`openssl_ssl_accept`/`openssl_ssl_read`/`openssl_ssl_write`/`openssl_ssl_shutdown`/`openssl_ssl_get_cipher_name`/`openssl_ssl_get_version`
   - **Error/Encrypt/Random/Hash API**（5 个）：`openssl_error_string`/`openssl_encrypt`/`openssl_decrypt`/`openssl_random_pseudo_bytes`/`openssl_digest`
   - 完整常量集（30+）：SSL 选项、验证模式、文件/密钥类型、加密选项
-  - **依赖策略**：预编译 OpenSSL 3.0.21 静态库 + 头文件，由 CI 构建并打包（`ext/openssl/prebuilt/<OS>/lib/` + `include/`）
-  - **TCC 兼容**：使用 `no-asm` + `-DOPENSSL_NO_INLINE_ASM` 构建（OpenSSL 内联 ASM 不兼容 TCC）
+  - **依赖策略**：内置 mbedTLS 3.6.6 源码静态编译（`include/mbedtls_src/`），零运行时依赖，所有平台/编译器组合（包括纯 TCC 环境）均可使用
+  - **TCC 兼容**：`mbedtls_config.h` 禁用 ASM + 强制 32 位 bignum limbs，Windows+TCC 额外补丁 `gmtime_s`/`__stosb`
+  - **预编译策略**：逐文件编译为 `.o` → 归档为 `libmbedtls.a` → 链接到主程序（解决 TCC 符号表溢出）
   - **TLS 集成**：`openssl.h` 定义 `TPHP_STREAM_TLS_IMPLEMENTED` 后 `stream.h` 跳过 stub，使用真实 TLS 实现（openssl.h 必须在 stream.h 之前 include）
   - **SSL*/SSL_CTX* 指针以 t_int 流转**：遵循 exif FILE* 模式（`phpc_ptr_to_int`/`phpc_int_to_ptr`）
   - AOT 异常契约：所有错误抛 `tp_throw_ex` 异常（可被 try-catch 捕获）
 
-- **CI 构建 OpenSSL 静态库**（`.github/workflows/build-openssl.yml`）：
-  - 三平台构建矩阵：Windows（MSYS2+MinGW）/Linux（GCC）/macOS（Clang）
-  - 配置：`no-asm`（TCC 兼容）、`no-shared`（仅静态库）、`-DOPENSSL_NO_INLINE_ASM`
-  - 合并任务统一打包到 `ext/openssl/prebuilt/<OS>/`
-
 ### 变更
 
-- **OpenSSL 扩展暂时停用**（`@skip` 标记）：
-  - 根因：TCC 无法链接 MinGW GCC 生成的 COFF 静态库（对象格式不兼容），而用 TCC 重编译 OpenSSL 源码耗时过长且部分源文件依赖 TCC 缺失的头文件（`wspiapi.h` 等）
-  - `ext/openssl/src/openssl.{h,php}` 代码保留（含 `#if TCC` 条件 `#flag` 区分 `lib-tcc/` 与 `lib/`/`lib64/`），待后续找到可行的 TCC 构建方案再启用
-  - `test/ext/openssl_basic.php` 标记为 `@skip`（全平台跳过）
-  - `ext/stream` 的 TLS 入口 `stream_socket_enable_crypto` 使用 `stream.h` 中的 stub，调用时抛 "TLS not supported" 异常；非 TLS 流功能不受影响
 - **CI workflows 移除 OpenSSL 构建步骤**（`.github/workflows/build.yml` + `.github/workflows/test.yml`）：
   - 4 个 OS job（Windows/Linux x86_64/Linux aarch64/macOS）全部移除 TCC/GCC/Clang 分支的 OpenSSL 构建和 Verify 步骤
   - 移除 `OPENSSL_VERSION`/`OPENSSL_SOURCE_URL` 环境变量
   - MSYS2 安装项去掉 perl/nasm（仅 OpenSSL 构建需要）
   - 删除独立的 `.github/workflows/build-openssl.yml`（已合并到 build/test 后又移除）
+  - **OpenSSL 扩展已通过内置 mbedTLS 源码恢复**，不再需要 CI 构建系统 OpenSSL 静态库
 - **zlib 依赖架构重构**：从"系统 zlib 动态发现（MSYS2 路径 + PATH 扫描 + DLL 复制）"改为**内置 zlib 1.3.2 源码静态编译**：
   - 源码置于 `include/os/zlib_src/`（15 个 `.c` + 11 个 `.h`，约 332KB）
   - `tphp.php` 检测生成的 C 代码引用 `os/zlib.h` 后，自动将 zlib 源码 `.c` 加入编译列表

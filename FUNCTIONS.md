@@ -28,13 +28,13 @@
 | `ext/exif` (纯 phpc) | `ext/exif/src/exif.php` | 8 |
 | `ext/calendar` (纯 tphp) | `ext/calendar/src/calendar.php` | 16 |
 | `include/fileinfo` (MIME 检测) | `fileinfo.h` | 6 |
-| `ext/stream` (socket stream) | `ext/stream/src/stream.h` | 15 |
+| `ext/stream` (socket stream) | `ext/stream/src/stream.h` | 21 |
 | `ext/openssl` (TLS/加密) | `ext/openssl/src/openssl.h` | 21 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **339+** |
+| **合计** | | **345+** |
 
 ---
 
@@ -1244,8 +1244,8 @@ zip_close($zip2);
 > 跨平台 socket stream：Windows winsock2 / POSIX sys/socket.h。socket fd 以 `t_int` 流转。
 > Winsock 懒初始化（首次 socket 操作自动 `WSAStartup`），`FD_SETSIZE` 提升到 1024。
 > AOT 单返回类型: 所有失败统一 `tp_throw_ex`（可 try-catch，不返回 `false`）。
-> TLS 支持由 `ext/openssl` 扩展提供。**OpenSSL 扩展当前暂停**，`stream_socket_enable_crypto` 使用 stub，
-> 调用时抛 "TLS not supported (OpenSSL extension not loaded)" 异常。非 TLS 流功能完全可用。
+> TLS 支持由 `ext/openssl` 扩展提供（`TPHP_STREAM_TLS_IMPLEMENTED` 守卫）。未加载 openssl 扩展时，
+> `stream_socket_enable_crypto` 使用 stub，调用时抛 "TLS not supported" 异常并返回 `-1`。
 
 ### 常量
 
@@ -1255,11 +1255,13 @@ zip_close($zip2);
 |------|---|------|
 | `STREAM_SOCK_STREAM` | 1 | TCP 流 socket |
 | `STREAM_SOCK_DGRAM` | 2 | UDP 数据报 socket |
+| `STREAM_SOCK_RAW` | 3 | 原始 socket |
 | `STREAM_SOCK_RDM` | 4 | 可靠数据报 |
 | `STREAM_SOCK_SEQPACKET` | 5 | 顺序包 socket |
 | `STREAM_PF_INET` | 2 | IPv4 |
 | `STREAM_PF_INET6` | 10 | IPv6 |
 | `STREAM_PF_UNIX` | 1 | Unix 域 socket |
+| `STREAM_IPPROTO_IP` | 0 | IP 协议 |
 | `STREAM_IPPROTO_TCP` | 6 | TCP |
 | `STREAM_IPPROTO_UDP` | 17 | UDP |
 | `STREAM_IPPROTO_ICMP` | 1 | ICMP |
@@ -1287,21 +1289,31 @@ zip_close($zip2);
 | `STREAM_OPTION_BLOCKING` | 1 | 阻塞模式 |
 | `STREAM_OPTION_READ_BUFFER` | 3 | 读缓冲大小 |
 | `STREAM_OPTION_READ_TIMEOUT` | 4 | 读超时 |
-| `STREAM_OPTION_WRITE_TIMEOUT` | 5 | 写超时 |
-| `STREAM_OPTION_CHUNK_SIZE` | 6 | 块大小 |
+| `STREAM_OPTION_WRITE_BUFFER` | 5 | 写缓冲大小 |
+| `STREAM_OPTION_CHUNK_SIZE` | 7 | 块大小 |
 
-#### Crypto (TLS)
+#### Crypto (TLS) — _CLIENT / _SERVER 两套
+
+> 与 PHP 原生 bitmask 值完全一致。无后缀别名指向 `_CLIENT` 版本（向后兼容）。
 
 | 常量 | 值 | 说明 |
 |------|---|------|
-| `STREAM_CRYPTO_METHOD_SSLv2` | 0 | SSLv2（已废弃） |
-| `STREAM_CRYPTO_METHOD_SSLv3` | 1 | SSLv3 |
-| `STREAM_CRYPTO_METHOD_SSLv23` | 2 | SSLv2.3/TLS（通用） |
-| `STREAM_CRYPTO_METHOD_TLS` | 3 | TLS |
-| `STREAM_CRYPTO_METHOD_TLSv1_0` | 4 | TLS 1.0 |
-| `STREAM_CRYPTO_METHOD_TLSv1_1` | 5 | TLS 1.1 |
-| `STREAM_CRYPTO_METHOD_TLSv1_2` | 6 | TLS 1.2 |
-| `STREAM_CRYPTO_METHOD_TLSv1_3` | 7 | TLS 1.3 |
+| `STREAM_CRYPTO_METHOD_SSLv2_CLIENT` | 0x00 | SSLv2 客户端（已废弃） |
+| `STREAM_CRYPTO_METHOD_SSLv3_CLIENT` | 0x01 | SSLv3 客户端 |
+| `STREAM_CRYPTO_METHOD_SSLv23_CLIENT` | 0x02 | SSLv2.3/TLS 客户端（通用） |
+| `STREAM_CRYPTO_METHOD_TLS_CLIENT` | 0x03 | TLS 客户端 |
+| `STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT` | 0x04 | TLS 1.0 客户端 |
+| `STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT` | 0x08 | TLS 1.1 客户端 |
+| `STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT` | 0x10 | TLS 1.2 客户端 |
+| `STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT` | 0x20 | TLS 1.3 客户端 |
+| `STREAM_CRYPTO_METHOD_ANY_CLIENT` | 0x3F | 任意 TLS 客户端 |
+| `STREAM_CRYPTO_METHOD_*_SERVER` | 同上 | 服务端版本（值相同） |
+| `STREAM_CRYPTO_METHOD_SSLv2` 等无后缀别名 | 同 `_CLIENT` | 向后兼容 |
+| `STREAM_CRYPTO_PROTO_SSLv3` | 1 | PHP 8.1+ 别名 |
+| `STREAM_CRYPTO_PROTO_TLSv1_0` | 2 | PHP 8.1+ 别名 |
+| `STREAM_CRYPTO_PROTO_TLSv1_1` | 3 | PHP 8.1+ 别名 |
+| `STREAM_CRYPTO_PROTO_TLSv1_2` | 4 | PHP 8.1+ 别名 |
+| `STREAM_CRYPTO_PROTO_TLSv1_3` | 5 | PHP 8.1+ 别名 |
 | `STREAM_CRYPTO_ENABLE` | 1 | 启用 TLS |
 | `STREAM_CRYPTO_DISABLE` | 0 | 禁用 TLS |
 
@@ -1314,8 +1326,13 @@ zip_close($zip2);
 | `stream_strerror(int $err): string` | `stream_strerror(int $code): string` | Windows: FormatMessageA；POSIX: strerror。消息语言取决于系统 |
 | `stream_set_blocking(int $fd, bool $enable): bool` | `stream_set_blocking($stream, bool $enable): bool` | Windows: ioctlsocket；POSIX: fcntl |
 | `stream_set_read_buffer(int $fd, int $buffer): int` | `stream_set_read_buffer($stream, int $buffer): int` | socket 无 stdio 缓冲，固定返回 0 |
+| `stream_set_write_buffer(int $fd, int $buffer): int` | `stream_set_write_buffer($stream, int $buffer): int` | socket 无 stdio 缓冲，固定返回 0 |
+| `stream_set_timeout(int $fd, int $seconds, int $microseconds = 0): bool` | `stream_set_timeout($stream, int $seconds, int $microseconds): bool` | `setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)` |
 | `stream_isatty(int $fd): bool` | `stream_isatty($stream): bool` | Windows: `_isatty`；POSIX: `isatty` |
-| `stream_select(array $read, array $write, array $except, int $tv_sec, int $tv_usec = 0): int\|Exception` | `stream_select(array &$read, array &$write, array &$except, int $tv_sec, int $tv_usec = 0): int\|false` | in-place 过滤就绪 fd；失败抛 Exception（非返回 false） |
+| `stream_select(array $read, array $write, array $except, int $tv_sec, int $tv_usec = 0): int\|Exception` | `stream_select(array &$read, array &$write, array &$except, int $tv_sec, int $tv_usec = 0): int\|false` | in-place 过滤就绪 fd 并清除哈希索引；失败抛 Exception |
+| `stream_get_contents(int $fd, int $length = -1, int $offset = -1): string\|Exception` | `stream_get_contents($stream, int $length, int $offset): string\|false` | `length=-1` 读全部；`offset=-1` 从当前位置（socket 不支持 offset） |
+| `stream_get_line(int $fd, int $length, string $ending = ""): string\|Exception` | `stream_get_line($stream, int $length, string $ending): string\|false` | 读到分隔符或长度（不返回 ending） |
+| `stream_get_meta_data(int $fd): array` | `stream_get_meta_data($stream): array` | 返回 `timed_out`/`blocked`/`eof`/`stream_type`/`unread_bytes`/`seekable` |
 | `stream_socket_server(string $address, int $flags = STREAM_SERVER_BIND \| STREAM_SERVER_LISTEN, array $context = []): int\|Exception` | `stream_socket_server(string $address, int $errno, int $errstr, int $timeout, int $flags, $context): resource\|false` | 无 byRef errno/errstr；失败抛 Exception |
 | `stream_socket_accept(int $server_fd, int $timeout_ms = -1): int\|Exception` | `stream_socket_accept($server, float $timeout, string $peername): resource\|false` | timeout 单位为毫秒（PHP 为秒） |
 | `stream_socket_client(string $address, int $timeout_ms = -1, int $flags = STREAM_CLIENT_CONNECT, array $context = []): int\|Exception` | `stream_socket_client(string $address, int $errno, int $errstr, ..., int $flags, $context): resource\|false` | 无 byRef errno/errstr |
@@ -1323,7 +1340,8 @@ zip_close($zip2);
 | `stream_socket_sendto(int $fd, string $data, int $flags = 0, string $address = ""): int\|Exception` | `stream_socket_sendto($socket, string $data, int $flags, string $address): int\|false` | 一致 |
 | `stream_socket_get_name(int $fd, bool $want_peer): string\|Exception` | `stream_socket_get_name($socket, bool $want_peer): string\|false` | 失败抛 Exception |
 | `stream_socket_shutdown(int $fd, int $how): bool\|Exception` | `stream_socket_shutdown($stream, int $how): bool` | 失败抛 Exception |
-| `stream_socket_enable_crypto(int $fd, bool $enable, int $crypto_type = 0): int\|Exception` | `stream_socket_enable_crypto($stream, bool $enable, int $crypto_type): int\|bool\|false` | 需 `ext/openssl`；未加载抛 Exception |
+| `stream_socket_enable_crypto(int $fd, bool $enable, int $crypto_type = 0): int\|Exception` | `stream_socket_enable_crypto($stream, bool $enable, int $crypto_type): int\|bool\|false` | 需 `ext/openssl`；未加载抛 Exception 并返回 `-1` |
+| `stream_socket_pair(int $domain, int $type, int $protocol): array\|Exception` | `stream_socket_pair(int $domain, int $type, int $protocol): array\|false` | POSIX `socketpair()`；Windows 用 TCP 回环模拟 |
 
 ### 示例
 
@@ -1334,10 +1352,21 @@ $client = stream_socket_client("tcp://127.0.0.1:19999");
 $accepted = stream_socket_accept($server, 1000);
 stream_socket_sendto($client, "hello", 0, "");
 echo stream_socket_recvfrom($accepted, 100, 0);  // "hello"
+
+// 流元数据
+$meta = stream_get_meta_data($client);
+echo $meta["stream_type"];  // "tcp_socket"
+echo $meta["blocked"];      // true
+
+// socket pair（进程间通信）
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_socket_sendto($pair[0], "ping", 0, "");
+echo stream_socket_recvfrom($pair[1], 100, 0);  // "ping"
+
 stream_close($server);
 ```
 
-> 测试: `test/ext/stream_basic.php`（strerror 非空 + TCP echo + set_blocking + shutdown）全部通过。
+> 测试: `test/ext/stream_basic.php`（18 节覆盖全部 21 个函数）全部通过。
 
 ---
 

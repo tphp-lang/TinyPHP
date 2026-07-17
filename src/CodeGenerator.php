@@ -184,13 +184,16 @@ class CodeGenerator implements ASTVisitor
         'gzfile' => 't_array*',
         // ── stream (内置 ext) ──
         'stream_last_error' => 't_int', 'stream_set_read_buffer' => 't_int',
+        'stream_set_write_buffer' => 't_int',
         'stream_select' => 't_int', 'stream_socket_server' => 't_int',
         'stream_socket_accept' => 't_int', 'stream_socket_client' => 't_int',
         'stream_socket_sendto' => 't_int', 'stream_socket_enable_crypto' => 't_int',
         'stream_strerror' => 't_string', 'stream_socket_recvfrom' => 't_string',
         'stream_socket_get_name' => 't_string',
+        'stream_get_contents' => 't_string', 'stream_get_line' => 't_string',
         'stream_set_blocking' => 't_bool', 'stream_isatty' => 't_bool',
-        'stream_socket_shutdown' => 't_bool',
+        'stream_set_timeout' => 't_bool', 'stream_socket_shutdown' => 't_bool',
+        'stream_get_meta_data' => 't_array*', 'stream_socket_pair' => 't_array*',
         'stream_close' => 'void',
         // ── openssl (内置 ext, TLS/加密) ──
         'openssl_ctx_new' => 't_int', 'openssl_ctx_set_options' => 't_int',
@@ -244,6 +247,7 @@ class CodeGenerator implements ASTVisitor
         'explode' => 't_string', 'preg_match' => 't_string', 'preg_split' => 't_string',
         'preg_grep' => 't_string', 'filter_list' => 't_string',
         'gzfile' => 't_string',
+        'stream_socket_pair' => 't_int',
     ];
 
     /**
@@ -428,6 +432,13 @@ class CodeGenerator implements ASTVisitor
         'stream_socket_get_name'      => ['cName' => 'tphp_fn_stream_socket_get_name', 'modes' => ['direct', 'direct']],
         'stream_socket_shutdown'      => ['cName' => 'tphp_fn_stream_socket_shutdown', 'modes' => ['direct', 'direct']],
         'stream_socket_enable_crypto' => ['cName' => 'tphp_fn_stream_socket_enable_crypto', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        // ── stream 补充 API（对齐 PHP 原生） ──
+        'stream_set_write_buffer'     => ['cName' => 'tphp_fn_stream_set_write_buffer', 'modes' => ['direct', 'direct']],
+        'stream_set_timeout'          => ['cName' => 'tphp_fn_stream_set_timeout', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
+        'stream_get_contents'         => ['cName' => 'tphp_fn_stream_get_contents', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '-1']],
+        'stream_get_line'             => ['cName' => 'tphp_fn_stream_get_line', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '(t_string){0}']],
+        'stream_get_meta_data'        => ['cName' => 'tphp_fn_stream_get_meta_data', 'modes' => ['direct']],
+        'stream_socket_pair'          => ['cName' => 'tphp_fn_stream_socket_pair', 'modes' => ['direct', 'direct', 'direct']],
         // ── openssl (内置 ext, TLS/加密) ──
         'openssl_ctx_new'                 => ['cName' => 'tphp_fn_openssl_ctx_new', 'modes' => ['direct']],
         'openssl_ctx_free'                => ['cName' => 'tphp_fn_openssl_ctx_free', 'modes' => ['direct']],
@@ -570,11 +581,13 @@ class CodeGenerator implements ASTVisitor
 
         // 检测是否使用了 stream 函数（需要条件引入 stream.h + Windows 链接 ws2_32）
         $streamFns = ['stream_close(', 'stream_last_error(', 'stream_strerror(',
-                      'stream_set_blocking(', 'stream_set_read_buffer(', 'stream_isatty(',
-                      'stream_select(', 'stream_socket_server(', 'stream_socket_accept(',
-                      'stream_socket_client(', 'stream_socket_recvfrom(', 'stream_socket_sendto(',
+                      'stream_set_blocking(', 'stream_set_read_buffer(', 'stream_set_write_buffer(',
+                      'stream_set_timeout(', 'stream_isatty(', 'stream_select(',
+                      'stream_socket_server(', 'stream_socket_accept(', 'stream_socket_client(',
+                      'stream_socket_recvfrom(', 'stream_socket_sendto(',
                       'stream_socket_get_name(', 'stream_socket_shutdown(',
-                      'stream_socket_enable_crypto('];
+                      'stream_socket_enable_crypto(', 'stream_socket_pair(',
+                      'stream_get_contents(', 'stream_get_line(', 'stream_get_meta_data('];
         $needStream = false;
         if ($src !== false) {
             foreach ($streamFns as $fn) {
@@ -4175,11 +4188,12 @@ class CodeGenerator implements ASTVisitor
         // 对 t_var 操作数解包
         if ($lt === 't_var') $lCode = $this->unwrapIfMixed($node->left, $lCode, $rt);
         if ($rt === 't_var') $rCode = $this->unwrapIfMixed($node->right, $rCode, $lt);
-        // 对数组字符串键读取(get_str_str返回t_string) vs 标量，转 int 比较
-        if (str_contains($lCode, 'tphp_fn_arr_get_str_str') && in_array($rt, ['t_int', 't_float', 't_bool'], true)) {
+        // 对 t_string 操作数 vs 标量比较，转 int（PHP 语义：string > int 时 string 转 int）
+        // 用类型推断而非 str_contains 模式匹配，避免误匹配嵌套在 strlen(...) 等调用内的 get_str_str
+        if ($lt === 't_string' && in_array($rt, ['t_int', 't_float', 't_bool'], true)) {
             $lCode = 'tphp_rt_parse_int(' . $lCode . ')';
         }
-        if (str_contains($rCode, 'tphp_fn_arr_get_str_str') && in_array($lt, ['t_int', 't_float', 't_bool'], true)) {
+        if ($rt === 't_string' && in_array($lt, ['t_int', 't_float', 't_bool'], true)) {
             $rCode = 'tphp_rt_parse_int(' . $rCode . ')';
         }
 
@@ -7283,7 +7297,9 @@ class CodeGenerator implements ASTVisitor
                         if (isset($vKeys[$keyStr])) { $keyType = $vKeys[$keyStr]; break; }
                     }
                 }
-                $keyType ??= $vt;
+                // 未知字符串键默认 string（与 inferType line 2713 行为一致，
+                // 与注释"无记录用 get_str_str"匹配；避免误用数组变量类型 t_array* 导致类型冲突）
+                $keyType ??= 't_string';
             }
             return match ($keyType) {
                 't_int'   => "tphp_fn_arr_get_str_int({$arr}, {$idx})",
