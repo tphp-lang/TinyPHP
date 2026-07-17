@@ -28,10 +28,10 @@
 | 2  | filter\_var ✅ 已完成 | ⭐⭐    | 无              | 2   |
 | 3  | calendar ✅ 已完成 | ⭐⭐⭐   | 无              | 16  |
 | 4  | [zlib (gzip)](#4-zlib-gzip) ✅ 已完成(内置) | ⭐⭐⭐   | 内置 zlib 1.3.2 源码 | 29  |
-| 5  | [stream](#5-stream) ✅ 已完成 | ⭐⭐⭐⭐  | winsock2(Windows)/libc(POSIX) | 15  |
+| 5  | [stream](#5-stream) ✅ 已完成 | ⭐⭐⭐⭐  | winsock2(Windows)/libc(POSIX) | 21  |
 | 6  | [SQLite](#6-sqlite)          | ⭐⭐⭐⭐  | sqlite3        | 6   |
 | 7  | [cURL](#7-curl)              | ⭐⭐⭐⭐  | libcurl        | 8   |
-| 8  | [OpenSSL](#8-openssl) ⏸️ 暂停 | ⭐⭐⭐⭐⭐ | OpenSSL 3.0.21（TCC 链接不兼容，待定） | 21  |
+| 8  | [OpenSSL](#8-openssl) ✅ 已完成 | ⭐⭐⭐⭐⭐ | 内置 mbedTLS 3.6.6 源码（静态编译，零运行时依赖） | 21  |
 | 9  | [fileinfo](#9-fileinfo) ✅   | ⭐⭐⭐   | 内置魔数表       | 4   |
 | 10 | [iconv](#10-iconv) ✅ 已完成 | ⭐⭐⭐   | libiconv/系统    | 8   |
 | 11 | [exif](#11-exif) ✅ 已完成     | ⭐⭐⭐   | 无(纯解析)         | 6   |
@@ -535,7 +535,7 @@ function inflate_get_read_len(Resource $context): int;
 > - `stream_socket_pair`: POSIX 用 `socketpair()`，Windows 不支持 AF_UNIX socketpair，用 TCP 回环连接（bind+listen+connect+accept）模拟
 > - `stream_get_meta_data`: `eof` 用 `MSG_PEEK` 检测（不消费数据）；Windows `blocked` 简化为 `true`（FIONBIO 是设置而非读取），POSIX 用 `fcntl(F_GETFL)` 检测
 >
-> 测试: `test/ext/stream_basic.php`（18 节覆盖全部 21 个函数：strerror/last_error/TCP echo/get_name/select/blocking/read_buffer/write_buffer/timeout/isatty/get_contents/get_line/get_meta_data/enable_crypto/shutdown/socket_pair/error cases/constant values）全部通过。
+> 测试: `test/stream/stream_basic.php`（18 节覆盖全部 21 个函数：strerror/last_error/TCP echo/get_name/select/blocking/read_buffer/write_buffer/timeout/isatty/get_contents/get_line/get_meta_data/enable_crypto/shutdown/socket_pair/error cases/constant values）全部通过。
 
 ### 推荐参考库
 
@@ -909,37 +909,31 @@ function curl_version(): array;
 
 ***
 
-## 8. OpenSSL ⏸️ 暂停
+## 8. OpenSSL ✅ 已完成
 
-> **实现状态**: 代码已实现于 `ext/openssl/src/openssl.h` + `ext/openssl/src/openssl.php`（phpc 桥接 + `static inline` C 实现），但**暂时停用**。
+> **实现状态**: 已实现于 `ext/openssl/src/openssl.h` + `ext/openssl/src/openssl.php`（phpc 桥接 + `static inline` C 实现）。
+> **依赖**: 内置 mbedTLS 3.6.6 源码（`include/mbedtls_src/`，静态编译，零运行时依赖）。
+> **API 兼容**: 保持 OpenSSL 函数名和语义，底层实现切换为 mbedTLS（避免 OpenSSL TCC 链接不兼容问题）。
 >
-> **停用原因**: TCC 无法链接 MinGW GCC 生成的 COFF 静态库（对象格式不兼容）。
-> 尝试用 TCC 重编译 OpenSSL 源码（`build/build_openssl_tcc.sh`）虽可编译大部分源文件，
-> 但部分源文件依赖 TCC 缺失的头文件（如 `wspiapi.h`）且整体构建耗时过长，暂不可行。
-> 待后续找到可行的 TCC 构建方案再启用。
->
-> **当前状态**:
-> - `ext/openssl/src/openssl.{h,php}` 代码保留（含 `#if TCC` 条件 `#flag` 区分 `lib-tcc/` 与 `lib/`/`lib64/`）
-> - `test/ext/openssl_basic.php` 标记为 `@skip`（全平台跳过）
-> - CI workflows（`build.yml`/`test.yml`）已移除 OpenSSL 构建步骤
-> - `ext/stream` 的 TLS 入口 `stream_socket_enable_crypto` 使用 `stream.h` 中的 stub，调用时抛 "TLS not supported" 异常
-> - 非 TLS 流功能（TCP/UDP socket、select、shutdown 等）不受影响
->
-> **AOT 错误处理**（代码保留）: 所有失败统一 `tp_throw_ex(new_tphp_class_Exception(...))`（可 try-catch，不返回 `false`）。
+> **AOT 错误处理**: 所有失败统一 `tp_throw_ex(new_tphp_class_Exception(...))`（可 try-catch，不返回 `false`）。
 > SSL*/SSL_CTX* 指针以 `t_int` 流转（`phpc_ptr_to_int` / `phpc_int_to_ptr` 模式，与 exif FILE* 一致）。
 >
-> **原预编译静态库策略**（暂停）:
-> - 配置 `no-asm no-shared -DOPENSSL_NO_INLINE_ASM`（TCC 兼容）
-> - 产物存放于 `ext/openssl/prebuilt/<OS>/lib-tcc/`（TCC 编译）或 `lib/`/`lib64/`（GCC/Clang 编译）
-> - `openssl.php` 通过 `#flag` + `#if TCC` 条件编译声明 `-I`/`-L`/`-l`
-> - Windows 额外链接 `-lws2_32 -lcrypt32`（OpenSSL 依赖 winsock + Windows Crypto API）
+> **mbedTLS 集成**:
+> - 源码位于 `include/mbedtls_src/library/` + `include/mbedtls_src/3rdparty/`（共 100+ 个 `.c` 文件）
+> - `openssl.php` 通过 `#flag -I` 声明 mbedTLS 头文件路径（`include/` + `library/` + `3rdparty/everest/`）
+> - 配置文件 `include/mbedtls_src/include/mbedtls/mbedtls_config.h` 裁剪启用 TLS 1.2/1.3 + AES + SHA + RSA + EC + PKCS + Cipher
+> - 配置宏 `MBEDTLS_CONFIG_FILE` 指定自定义配置文件路径
 >
-> **包含顺序**（代码保留）: `openssl.h` 必须在 `stream.h` 之前 include。
-> `openssl.h` 定义 `TPHP_STREAM_TLS_IMPLEMENTED` 宏，使 `stream.h` 中的 `stream_socket_enable_crypto` stub 被跳过，
-> 使用 `openssl.h` 中的真实 TLS 实现。
+> **stream 扩展 TLS 集成**:
+> - `openssl.h` 必须在 `stream.h` 之前 include（`openssl.h` 定义 `TPHP_STREAM_TLS_IMPLEMENTED` 宏）
+> - `stream.h` 中的 `stream_socket_enable_crypto` stub 被宏守卫跳过，使用 `openssl.h` 中的真实 TLS 实现
+> - 未加载 openssl 扩展时，stub 抛 "TLS not supported" 异常并返回 `-1`
 >
-> 测试: `test/ext/openssl_basic.php`（`@skip` 标记，暂停运行）。
-> 覆盖内容（代码保留）: random_pseudo_bytes + digest + encrypt/decrypt 往返 + error_string。
+> 测试: `test/openssl/openssl_basic.php`（21 节覆盖 20 个函数：random_pseudo_bytes + digest + encrypt/decrypt + error_string + SSL Context API + SSL Connection API，仅 `ssl_accept` 需服务端无法离线测试）。
+> 标记 `@skip` — CI 默认跳过（mbedTLS 源码编译较慢，约 30s+，避免拖慢 CI），本地可手动运行：
+> ```bash
+> php tphp.php test/openssl/openssl_basic.php --debug
+> ```
 
 ### 推荐参考库
 

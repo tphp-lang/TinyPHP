@@ -1367,24 +1367,24 @@ echo stream_socket_recvfrom($pair[1], 100, 0);  // "ping"
 stream_close($server);
 ```
 
-> 测试: `test/ext/stream_basic.php`（18 节覆盖全部 21 个函数）全部通过。
+> 测试: `test/stream/stream_basic.php`（18 节覆盖全部 21 个函数）全部通过。
 
 ---
 
-## openssl — TLS/SSL 加密 ⏸️ 暂停
+## openssl — TLS/SSL 加密 ✅ 已完成
 
 > 文件: `ext/openssl/src/openssl.h`。按需引入 `#import openssl`。
 >
-> **当前状态**: 暂停。TCC 无法链接 MinGW GCC 生成的 COFF 静态库（对象格式不兼容），
-> 用 TCC 重编译 OpenSSL 源码耗时过长且部分源文件依赖 TCC 缺失的头文件（`wspiapi.h` 等），
-> 暂不可行。代码保留，待后续找到可行的 TCC 构建方案再启用。
-> 启用前 `#import openssl` 会因缺失静态库而链接失败，`test/ext/openssl_basic.php` 标记为 `@skip`。
+> **实现状态**: 已完成。底层使用内置 mbedTLS 3.6.6 源码静态编译（`include/mbedtls_src/`），
+> 保持 OpenSSL 函数名和语义，避免 OpenSSL TCC 链接不兼容问题。零运行时依赖。
 >
-> 原依赖 OpenSSL 3.0.21 预编译静态库（`libssl.a` / `libcrypto.a`）。
-> 配置 `no-asm no-shared -DOPENSSL_NO_INLINE_ASM`（TCC 兼容，无内联 ASM）。
 > SSL*/SSL_CTX* 指针以 `t_int` 流转（phpc_ptr_to_int / phpc_int_to_ptr）。
 > AOT 单返回类型: 所有失败统一 `tp_throw_ex`（可 try-catch，不返回 `false`）。
 > 包含顺序: openssl.h 必须在 stream.h 之前（`TPHP_STREAM_TLS_IMPLEMENTED` 守卫）。
+>
+> 测试: `test/openssl/openssl_basic.php`（21 节覆盖 20 个函数，仅 `ssl_accept` 需服务端）。
+> 标记 `@skip` — CI 默认跳过（mbedTLS 编译较慢，约 30s+），本地可手动运行：
+> `php tphp.php test/openssl/openssl_basic.php --debug`
 
 ### 常量
 
