@@ -1388,7 +1388,7 @@ class CodeGenerator implements ASTVisitor
             foreach ($ctor->body as $s) $ctorBodyLines[] = $this->ind($s->accept($this));
             // Phase 3: 注入提升到函数作用域的变量声明（在 body 之前）
             foreach ($this->funcScopeDecls as $vn => $ct) {
-                $o[] = $this->ind("{$ct} {$vn};");
+                $o[] = $this->ind("{$ct} {$vn} = {0};");
             }
             foreach ($ctorBodyLines as $bl) $o[] = $bl;
             $this->currentMethodName = $savedMethodName;
@@ -1415,7 +1415,7 @@ class CodeGenerator implements ASTVisitor
             $dtorBodyLines = [];
             foreach ($dtor->body as $s) $dtorBodyLines[] = $this->ind($s->accept($this));
             foreach ($this->funcScopeDecls as $vn => $ct) {
-                $o[] = $this->ind("{$ct} {$vn};");
+                $o[] = $this->ind("{$ct} {$vn} = {0};");
             }
             foreach ($dtorBodyLines as $bl) $o[] = $bl;
         }
@@ -1647,7 +1647,7 @@ class CodeGenerator implements ASTVisitor
         // 注入 for 循环提升声明
         $declLines = [];
         foreach ($this->funcScopeDecls as $vn => $ct) {
-            $declLines[] = $this->ind("{$ct} {$vn};");
+            $declLines[] = $this->ind("{$ct} {$vn} = {0};");
         }
 
         // 自动生成作用域结束时的释放代码（defer LIFO → scope cleanup → 对象释放）
@@ -1730,7 +1730,7 @@ class CodeGenerator implements ASTVisitor
         // for 循环提升声明
         $declLines = [];
         foreach ($this->funcScopeDecls as $vn => $ct) {
-            $declLines[] = $this->ind("{$ct} {$vn};");
+            $declLines[] = $this->ind("{$ct} {$vn} = {0};");
         }
 
         // 末尾释放（局部字符串/数组/对象）
@@ -1876,7 +1876,7 @@ class CodeGenerator implements ASTVisitor
         // for 循环提升声明
         $declLines = [];
         foreach ($this->funcScopeDecls as $vn => $ct) {
-            $declLines[] = $this->ind("{$ct} {$vn};");
+            $declLines[] = $this->ind("{$ct} {$vn} = {0};");
         }
 
         // 末尾释放
@@ -2089,7 +2089,7 @@ class CodeGenerator implements ASTVisitor
         // Phase 3: 注入 for 循环提升到函数作用域的变量声明（在 body 之前）
         $declLines = [];
         foreach ($this->funcScopeDecls as $vn => $ct) {
-            $declLines[] = $this->ind("{$ct} {$vn};");
+            $declLines[] = $this->ind("{$ct} {$vn} = {0};");
         }
 
         // 自动生成作用域结束时的释放代码（defer LIFO → scope cleanup → 对象释放）
@@ -3898,7 +3898,7 @@ class CodeGenerator implements ASTVisitor
         }
         // for 循环提升声明（闭包内 for (int $i = ...) 需要声明 i）
         foreach ($this->funcScopeDecls as $vn => $ct) {
-            $implLines[] = "    {$ct} {$vn};";
+            $implLines[] = "    {$ct} {$vn} = {0};";
         }
         $implLines = array_merge($implLines, $bodyLines);
         foreach ($this->symbols->scopeObjects() as $ov) {
@@ -4058,7 +4058,7 @@ class CodeGenerator implements ASTVisitor
         // for 循环提升声明
         $declLines = [];
         foreach ($this->funcScopeDecls as $vn => $ct) {
-            $declLines[] = "    {$ct} {$vn};";
+            $declLines[] = "    {$ct} {$vn} = {0};";
         }
 
         // 末尾释放
