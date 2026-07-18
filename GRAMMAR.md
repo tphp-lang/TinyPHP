@@ -604,7 +604,7 @@ primary:
 | `<< >>` | SL/SR | `<< >>` | ✅ |
 | `++ --` | INC/DEC | `++ --` | ✅ |
 | `?:` | QUEST/COLON | `?:` | ✅ |
-| `??` | COALESCE/QUEST_QUEST | `(x) ? (x) : (y)` | ✅ |
+| `??` | COALESCE/QUEST_QUEST | `(x) ? (x) : (y)`；数组键 `$a["k"] ?? d` → `array_key_exists` 检查 | ✅ |
 | `?->` | NULLSAFE_ARROW | `if (obj) obj->m()` 块 | ✅ |
 | `(int)` | INT_CAST | `(t_int)` | ✅ |
 | `(float)` | FLOAT_CAST | `(t_float)` | ✅ |
@@ -800,7 +800,8 @@ phpc_ptr_bridge:
 | 完整 15 级运算符优先级 | 含 `<=>` `??` `?:` `?->` `**` `&|^~` `<<>>` `\|>` |
 | `(int)` `(float)` `(string)` `(bool)` 类型转换 | — |
 | `namespace A\B` `use A\{B,C}` `use function A\{f1,f2}` `use A\{B, function f}` | 分组导入 |
-| `list()/$a[] =` 解构 | 含键名 `"key"=>$v` |
+| `list()/$a[] =` 解构 | 含键名 `"key"=>$v`；类型感知零值（string→`{0}`, float→`0.0`, array→`NULL`） |
+| 嵌套数组深层访问 `$arr[0][1][2]` `$m["items"][0]["id"]` | 多层 ArrayAccess 链；`arrNestedDepth` 深度追踪 + 数组字面量 AST 精确 per-key 类型推导（混合类型关联数组 `["id"=>42, "name"=>"foo"]` 可正确区分 int/string） |
 | `int &$x` 引用传参 | 全类型支持（int/float/bool/string/array/对象） |
 | `self::CONST` `Class::CONST` `self::method()` `parent::method()` `parent::__construct()` | `parent::` 通过 `_parent` 字段访问父类（COS 结构体继承） |
 | `__construct(public $x)` 属性提升 | — |
@@ -876,7 +877,7 @@ phpc_ptr_bridge:
 | 语法 | 原因 |
 |------|------|
 | `?int` `int\|string` | 破坏类型固定优势 |
-| `...$args` 可变参数 | 需动态栈构造 |
+| `...$args` 可变参数 | 需动态栈构造；注：`max()/min()` 等内置函数已通过 `variadic_pack` 分派支持多参数形式（编译期打包为临时 `t_array*`） |
 | 命名参数 | AOT 无意义 |
 | `#[Route(path: "/x")]` 命名参数注解 | 与全局命名参数禁用一致；注解仅支持位置参数 `#[Route("/x")]` |
 | 运行时反射 `Reflection*` | AOT 无运行时元数据，注解仅供编译期消费 |
@@ -884,7 +885,7 @@ phpc_ptr_bridge:
 | `true`/`false`/`null` 字面量类型 | AOT 零性能收益；编译期验证成本高收益低；与现有 `?T` 不做的哲学冲突；纯文档性特性 |
 | `static` 返回类型 | AOT 无后期绑定，语义与 `self` 完全相同，多此一举 |
 | DNF/intersection 类型 `A&B` `(A&B)\|C` | 实现复杂（需接口 vtable 或 `t_var` 降级），收益有限，破坏类型固定优势 |
-| `??=` 空合并赋值 | 可用 `$a = $a ?? $b` 展开；AOT 下 `??` 仅对指针有意义 |
+| `??=` 空合并赋值 | 可用 `$a = $a ?? $b` 展开；`??` 已支持数组键存在性检查（`array_key_exists`），但 `??=` 赋值语法未实现 |
 | `clone` 关键字 | 需 `__clone` 动态分发；COS 对象无通用深拷贝 |
 | `declare(strict_types=1)` | TinyPHP 已是强类型 AOT，`declare` 无意义 |
 | `\u{XXXX}` Unicode 转义 | C 不支持 `\u{}` 语法；可用 `\xXX` 或直接嵌入 UTF-8 字符 |

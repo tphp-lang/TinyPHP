@@ -274,7 +274,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
 |------|--------|------|------|
-| `count(Countable\|array $value, int $mode = COUNT_NORMAL): int` | `count(array $array): int` | `a->length`，O(1) | 无 `$mode` 参数，不支持 `COUNT_RECURSIVE` |
+| `count(Countable\|array $value, int $mode = COUNT_NORMAL): int` | `count(array $array, int $mode = 0): int` | `$mode==1` 递归遍历嵌套 `TYPE_ARRAY`，否则 `a->length`，O(1)/O(n) | `COUNT_RECURSIVE`（`$mode=1`）支持；仅 Countable→array |
 | `array_push(array &$array, mixed ...$values): int` | `array_push(array &$array, mixed $value): int` | 追加 entry + 1.5× grow，O(1) | 仅单值非变参 |
 | `array_pop(array &$array): mixed\|null` | `array_pop(array &$array): mixed` | 取最后一个 entry，O(1) | 空数组返回 `NULL` |
 | `array_shift(array &$array): mixed\|null` | `array_shift(array &$array): mixed` | `memmove` 左移，O(n) | — |
@@ -287,7 +287,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `in_array(mixed $needle, array $array, bool $strict = false): bool` | `in_array(mixed $needle, array $array): bool` | 线性遍历比较，O(n) | 始终严格类型比较（无 PHP 松散转换）；无 `$strict` 参数 |
 | `array_search(mixed $needle, array $array, bool $strict = false): int\|string\|false` | `array_search(array $array, mixed $needle): int` | 线性遍历比较，O(n) | 参数顺序反转；返回 int 索引非键名；失败返回 `-1`（非 `false`） |
 | `array_key_exists(int\|string $key, array $array): bool` | `array_key_exists(int\|string $key, array $array): bool` | 调 `arr_get_int`/`arr_get_str` 判 NULL | 按 key 类型编译期分派为两个 C 函数 |
-| `array_keys(array $array, mixed $search_value = null, bool $strict = false): array` | `array_keys(array $array): array` | 遍历提取 key，O(n) | 无 `$search_value`/`$strict` 参数 |
+| `array_keys(array $array, mixed $search_value = null, bool $strict = false): array` | `array_keys(array $array, mixed $search = null): array` | 遍历提取 key，O(n) | 支持 `$search` 参数（严格类型+值比较）；无 `$strict` 参数（始终严格比较） |
 | `array_values(array $array): array` | `array_values(array $array): array` | 遍历提取 value，O(n) | — |
 | `array_key_first(array $array): int\|string\|null` | `array_key_first(array $array): int` | `len>0 ? 0 : -1`，O(1) | 返回 `t_int`，字符串键返回 `0` 占位；空返回 `-1` |
 | `array_key_last(array $array): int\|string\|null` | `array_key_last(array $array): int` | `len>0 ? len-1 : -1`，O(1) | 返回 `t_int`，字符串键返回位置索引；空返回 `-1` |
@@ -336,10 +336,11 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `reset(array $array): mixed` | `reset(array $array): mixed` | `cursor=0` 返回首值，O(1) | — |
 | `range(int\|string $start, int\|string $end, int\|float $step = 1): array` | `range(int $start, int $end, int $step): array` | 预知长度一次分配，O(n) | 仅 int（不支持单字符字符串）；`step==0` 致命错误 |
 | `array_fill(int $start_index, int $count, mixed $value): array` | `array_fill(int $start_index, int $count, mixed $value): array` | `set_int` 填充，O(n) | `count<0` 致命错误 |
+| `array_pad(array $array, int $length, mixed $value): array` | `array_pad(array $array, int $length, mixed $value): array` | 预分配+复制，O(n) | `length>0` 右侧填充，`length<0` 左侧填充；`abs(length)<=len` 原样返回 |
 | `array_reverse(array $array, bool $preserve_keys = false): array` | `array_reverse(array $array, bool $preserve_keys): array` | 倒序复制，O(n) | `$preserve_keys` 必传 |
 | `array_column(array $array, int\|string\|null $column_key, int\|string\|null $index_key = null): array` | `array_column(array $array, string $column_key): array` | 遍历行匹配 string 键 push 值，O(n×m) | 仅 string 列名；无 `$index_key` 参数；对象行 push `NULL` |
-| `max(mixed $value, mixed ...$values): mixed` | `max(array $array): mixed` | 遍历比较，O(n) | 仅数组形式（不支持可变参数）；空数组致命错误 |
-| `min(mixed $value, mixed ...$values): mixed` | `min(array $array): mixed` | 遍历比较，O(n) | 同 `max` |
+| `max(mixed $value, mixed ...$values): mixed` | `max(array $array): mixed` / `max(mixed ...$vals): mixed` | 遍历比较，O(n) | 支持数组形式和可变参数形式（多参数打包为临时数组）；空数组致命错误 |
+| `min(mixed $value, mixed ...$values): mixed` | `min(array $array): mixed` / `min(mixed ...$vals): mixed` | 遍历比较，O(n) | 同 `max` |
 | `array_sum(array $array): int\|float` | `array_sum(array $array): mixed` | 遍历累加，遇 float 自动提升，O(n) | 非数值静默跳过（PHP 视为 0 并 warning） |
 | `array_product(array $array): int\|float` | `array_product(array $array): mixed` | 遍历累乘，遇 float 自动提升，O(n) | 非数值静默跳过 |
 | `array_is_list(array $array): bool` | `array_is_list(array $array): bool` | 检查所有 entry 为 `TYPE_INT` 且键==位置，O(n) | 空数组返回 `true` |
@@ -357,12 +358,12 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
 |------|--------|------|------|
-| `abs(int\|float $num): int\|float` | `abs(int $num): int` | `llabs(v)`，O(1) | 仅整型（PHP 同时支持 int/float） |
+| `abs(int\|float $num): int\|float` | `abs(int $num): int` / `abs(float $num): float` | `llabs(v)` 或 `fabs(v)`，O(1) | 编译期按参数类型分派 `tphp_fn_abs_int`/`tphp_fn_abs_float` |
 | `round(int\|float $num, int $precision = 0, int $mode = RoundingMode::HALF_UP): float` | `round(float $num): float` | libc `round(v)`，O(1) | 无 `$precision`/`$mode` 参数 |
 | `ceil(int\|float $num): float` | `ceil(float $num): float` | libc `ceil`，O(1) | — |
 | `floor(int\|float $num): float` | `floor(float $num): float` | libc `floor`，O(1) | — |
-| `sqrt(float $num): float` | `sqrt(float $num): float` | `v >= 0.0 ? sqrt(v) : 0.0`，O(1) | 负数返回 `0.0`（PHP 返回 `NAN`） |
-| `pow(int\|float $base, int\|float $exp): int\|float` | `pow(mixed $base, mixed $exp): mixed` | int^int 走 `tphp_rt_pow_int` 快速幂 O(log n)；否则 libc `pow` | int^int 返回 int（负指数返回 0，PHP 返回 float） |
+| `sqrt(float $num): float` | `sqrt(float $num): float` | `v >= 0.0 ? sqrt(v) : NAN`，O(1) | 负数返回 `NAN`（Windows 显示 `-1.#IND`） |
+| `pow(int\|float $base, int\|float $exp): int\|float` | `pow(mixed $base, mixed $exp): mixed` | int^非负整数走 `tphp_rt_pow_int` 快速幂 O(log n)；否则 libc `pow` | int^负整数走 float 路径返回 float（PHP 语义）；int^非负整数返回 int |
 | `pi(): float` | `pi(): float` | 返回 `M_PI` 常量，O(1) | — |
 | `fmod(float $num1, float $num2): float` | `fmod(float $num1, float $num2): float` | libc `fmod`，O(1) | — |
 | `deg2rad(float $num): float` | `deg2rad(float $num): float` | `num * (M_PI/180.0)`，O(1) | — |

@@ -1052,6 +1052,38 @@ static inline t_array* tphp_fn_array_keys(t_array* a) {
     return out;
 }
 
+// ── array_keys($arr, $search) → 值等于 search 的 key 组成新数组 ──
+// t_var 比较：类型和值都相等才匹配（PHP 严格比较语义）
+static inline bool tphp_rt_var_equals(t_var a, t_var b) {
+    if (a.type != b.type) return false;
+    switch (a.type) {
+        case TYPE_INT:    return a.value._int == b.value._int;
+        case TYPE_FLOAT:  return a.value._float == b.value._float;
+        case TYPE_BOOL:   return a.value._int  != 0 ? b.value._int  != 0 : b.value._int  == 0;
+        case TYPE_STRING: return a.value._string.length == b.value._string.length
+                            && memcmp(a.value._string.data, b.value._string.data, a.value._string.length) == 0;
+        case TYPE_NULL:   return true;
+        default:          return false;
+    }
+}
+
+static inline t_array* tphp_fn_array_keys_search(t_array* a, t_var search) {
+    t_array* out = tphp_fn_arr_create(a ? a->length : 0);
+    if (a == NULL || out == NULL) return out;
+    tphp_rt_register((void*)out, 1);
+    for (int i = 0; i < a->length; i++) {
+        if (tphp_rt_var_equals(a->entries[i].val, search)) {
+            t_var k = a->entries[i].key;
+            t_var kcopy = k;
+            if (k.type == TYPE_STRING && k.value._string.length > 0) {
+                kcopy.value._string = tphp_rt_str_dup(k.value._string);
+            }
+            out = tphp_fn_arr_push(out, kcopy);
+        }
+    }
+    return out;
+}
+
 // ── array_values($arr) → 所有 value 组成新数组 ────────────────
 static inline t_array* tphp_fn_array_values(t_array* a) {
     t_array* out = tphp_fn_arr_create(a ? a->length : 0);

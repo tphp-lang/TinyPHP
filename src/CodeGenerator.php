@@ -27,6 +27,13 @@ class CodeGenerator implements ASTVisitor
     private array $arrValueTypes = [];
     /** 嵌套数组元素类型追踪：arrVarName → CType（当数组元素是数组时，记录子数组的元素类型） */
     private array $arrNestedTypes = [];
+    /** 多层嵌套数组深度追踪：arrVarName → ['depth' => N, 'leafType' => CType]
+     *  用于正确推断 $arr[0][1][2] 等深层访问的元素类型 */
+    private array $arrNestedDepth = [];
+    /** 数组字面量 AST 追踪：arrVarName → ArrayLiteralExpr
+     *  用于精确追踪嵌套访问 $m["items"][0]["id"] 中特定键的值类型
+     *  （当叶子层为混合类型关联数组时，inferArrayElementType 只能返回单一类型，无法区分 "id"=>int 与 "name"=>string） */
+    private array $arrLiteralAST = [];
     /** 函数返回数组的 per-key 类型追踪：fnCName → [strKey → CType]
      *  当函数 return ["key" => $val, ...] 时记录，供调用者 $var = func() 后 $var["key"] 类型推断 */
     private array $fnReturnArrKeyTypes = [];
@@ -77,6 +84,8 @@ class CodeGenerator implements ASTVisitor
     private array $loopEndLabelStack = [];
     /** 循环 start label 栈（支持 continue N;） */
     private array $loopStartLabelStack = [];
+    /** 循环 continue label 栈（continue N; 跳到第 N 层外层的 step 前） */
+    private array $loopContLabelStack = [];
 
     /** 是否 -shared 共享库模式（生成导出 trampoline + 库自动初始化） */
     public bool $isShared = false;
@@ -174,6 +183,7 @@ class CodeGenerator implements ASTVisitor
         'array_fill' => 't_array*', 'explode' => 't_array*', 'array_diff' => 't_array*',
         'array_intersect' => 't_array*', 'array_column' => 't_array*', 'array_flip' => 't_array*',
         'array_chunk' => 't_array*', 'array_combine' => 't_array*', 'array_count_values' => 't_array*',
+        'array_pad' => 't_array*',
         'filter_list' => 't_array*', 'str_split' => 't_array*', 'parse_url' => 't_array*',
         'parse_str' => 't_array*', 'preg_match' => 't_array*', 'preg_match_all' => 't_array*',
         'preg_split' => 't_array*', 'preg_grep' => 't_array*',
@@ -304,10 +314,11 @@ class CodeGenerator implements ASTVisitor
      */
     private static array $simpleFnMap = [
         // ── 变长 direct（无 modes，参数全透传）──
-        'count'              => ['cName' => 'tphp_fn_arr_count'],
+        'count'              => ['cName' => 'tphp_fn_arr_count', 'modes' => ['direct'], 'dispatch' => 'count'],
         'array_chunk'        => ['cName' => 'tphp_fn_arr_chunk'],
         'array_combine'      => ['cName' => 'tphp_fn_arr_combine'],
         'array_count_values' => ['cName' => 'tphp_fn_arr_count_values'],
+        'array_pad'          => ['cName' => 'tphp_fn_arr_pad', 'modes' => ['direct', 'direct', 'wrapvar']],
         'filter_id'          => ['cName' => 'tphp_fn_filter_id'],
         'iconv'              => ['cName' => 'tphp_fn_iconv'],
         'iconv_set_encoding' => ['cName' => 'tphp_fn_iconv_set_encoding'],
@@ -323,13 +334,13 @@ class CodeGenerator implements ASTVisitor
         'hrtime'             => ['cName' => 'tphp_fn_hrtime'],
         'filter_list'        => ['cName' => 'tphp_fn_filter_list'],
         // ── 单参 direct ──
-        'array_keys'         => ['cName' => 'tphp_fn_array_keys', 'modes' => ['direct']],
+        'array_keys'         => ['cName' => 'tphp_fn_array_keys', 'modes' => ['direct'], 'dispatch' => 'array_keys'],
         'array_values'       => ['cName' => 'tphp_fn_array_values', 'modes' => ['direct']],
         'array_sum'          => ['cName' => 'tphp_fn_arr_sum', 'modes' => ['direct']],
         'array_product'      => ['cName' => 'tphp_fn_arr_product', 'modes' => ['direct']],
         'array_unique'       => ['cName' => 'tphp_fn_arr_unique', 'modes' => ['direct']],
-        'max'                => ['cName' => 'tphp_fn_max', 'modes' => ['direct']],
-        'min'                => ['cName' => 'tphp_fn_min', 'modes' => ['direct']],
+        'max'                => ['cName' => 'tphp_fn_max', 'modes' => ['direct'], 'dispatch' => 'variadic_pack'],
+        'min'                => ['cName' => 'tphp_fn_min', 'modes' => ['direct'], 'dispatch' => 'variadic_pack'],
         'strlen'             => ['cName' => 'tphp_fn_strlen', 'modes' => ['direct']],
         'trim'               => ['cName' => 'tphp_fn_trim', 'modes' => ['direct']],
         'ltrim'              => ['cName' => 'tphp_fn_ltrim', 'modes' => ['direct']],
@@ -2603,10 +2614,14 @@ class CodeGenerator implements ASTVisitor
             $elemType = $this->inferArrayElementType($node->expr);
             if (str_contains($elemType, 'tphp_class_')) $elemType .= '*';
             $this->arrElementTypes[$var] = $elemType;
+            // 保存数组字面量 AST，用于精确追踪嵌套访问中特定键的值类型
+            $this->arrLiteralAST[$var] = $node->expr;
             // 若元素是数组，记录嵌套级别元素类型（含 t_int）
             if ($elemType === 't_array*') {
                 $nested = $this->inferArrayDeepElementType($node->expr);
                 $this->arrNestedTypes[$var] = $nested;
+                // 记录多层嵌套深度和叶子类型（用于 $arr[0][1][2] 深层访问）
+                $this->arrNestedDepth[$var] = $this->inferArrayNestedDepth($node->expr);
             }
             // 追踪字符串键的 per-key 值类型（用于 foreach string key 检测）
             foreach ($node->expr->entries as $entry) {
@@ -2853,6 +2868,12 @@ class CodeGenerator implements ASTVisitor
             }
         }
         if ($expr instanceof ArrayAccessExpr) {
+            // 优先：通过数组字面量 AST 精确追踪嵌套访问的叶子值类型
+            // （处理混合类型关联数组：$m["items"][0]["id"] 中 "id" 是 int，"name" 是 string）
+            if ($expr->array instanceof ArrayAccessExpr) {
+                $traced = $this->traceNestedAccessType($expr);
+                if ($traced !== null) return $traced;
+            }
             // per-key 类型追踪（字符串字面量键）
             if ($expr->index instanceof StringLiteralExpr && $expr->array instanceof VariableExpr) {
                 $arrName = self::varName($expr->array->name);
@@ -2866,7 +2887,8 @@ class CodeGenerator implements ASTVisitor
                 foreach ($this->arrValueTypes as $vKeys) {
                     if (isset($vKeys[$keyStr])) return $vKeys[$keyStr];
                 }
-                return 't_string';  // 未知字符串键默认 string
+                // 先查数组元素类型，再默认 string
+                return $this->arrElementTypes[$arrName] ?? 't_string';
             }
             // 先查数组变量的元素类型（支持对象/回调/数组）
             if ($expr->array instanceof VariableExpr) {
@@ -2885,6 +2907,14 @@ class CodeGenerator implements ASTVisitor
             if ($expr->array instanceof ArrayAccessExpr) {
                 [$rootArr, $depth] = $this->resolveRootArray($expr->array);
                 if ($rootArr !== '' && $depth > 0 && isset($this->arrNestedTypes[$rootArr])) {
+                    // 多层嵌套：用 arrNestedDepth 判断当前深度是否到达叶子层
+                    if (isset($this->arrNestedDepth[$rootArr])) {
+                        $nd = $this->arrNestedDepth[$rootArr];
+                        if ($depth >= $nd['depth'] - 1) {
+                            return $nd['leafType'];
+                        }
+                        return 't_array*';  // 中间层仍是数组
+                    }
                     return $this->arrNestedTypes[$rootArr];
                 }
             }
@@ -3045,6 +3075,10 @@ class CodeGenerator implements ASTVisitor
             if ($name === 'array_reduce') {
                 $sig = $this->inferCallbackSig($expr->args[1] ?? null);
                 return $sig['ret'] ?? 't_int';
+            }
+            // abs(int|float) → 返回类型随参数类型
+            if ($name === 'abs' && !empty($expr->args)) {
+                return $this->inferType($expr->args[0]) === 't_float' ? 't_float' : 't_int';
             }
             // C-only 函数 → 查注册表
             if (isset(self::$builtinRetTypes[$name])) {
@@ -3380,6 +3414,107 @@ class CodeGenerator implements ASTVisitor
             }
         }
         return 't_int';
+    }
+
+    /** 从数组字面量推导嵌套数组的总深度和叶子元素类型
+     *  返回 ['depth' => N, 'leafType' => 't_int']
+     *  - depth=1: 元素本身是标量（如 [1,2,3]），leafType=t_int
+     *  - depth=2: 元素是数组，子元素是标量（如 [[1,2],[3,4]]），leafType=t_int
+     *  - depth=3: 元素是数组的数组，叶子是标量（如 [[[1,2,3]]]），leafType=t_int
+     */
+    private function inferArrayNestedDepth(ArrayLiteralExpr $expr): array
+    {
+        $depth = 1;
+        $leafType = $this->inferArrayElementType($expr);
+        $current = $expr;
+        while ($leafType === 't_array*') {
+            $foundNested = false;
+            foreach ($current->entries as $entry) {
+                $val = $entry->value ?? $entry;
+                if ($val instanceof ArrayLiteralExpr) {
+                    $depth++;
+                    $leafType = $this->inferArrayElementType($val);
+                    $current = $val;
+                    $foundNested = true;
+                    break;
+                }
+                // spread: ...$arr，取源数组的嵌套信息
+                if ($entry->isSpread && $val instanceof VariableExpr) {
+                    $vn = self::varName($val->name);
+                    if (isset($this->arrNestedDepth[$vn])) {
+                        $depth += $this->arrNestedDepth[$vn]['depth'];
+                        $leafType = $this->arrNestedDepth[$vn]['leafType'];
+                        $foundNested = true;
+                    }
+                    break;
+                }
+            }
+            if (!$foundNested) break;
+        }
+        return ['depth' => $depth, 'leafType' => $leafType];
+    }
+
+    /** 通过数组字面量 AST 精确追踪嵌套访问的叶子值类型
+     *  用于混合类型关联数组：$m["items"][0]["id"] 中 "id" 是 int，"name" 是 string
+     *  inferArrayElementType 只能返回单一类型（首个非 int），无法区分 per-key 类型
+     *
+     *  返回 null 表示追踪失败（动态索引、变量源数组、非字面量等），调用方应回退到默认逻辑
+     *  返回 't_array*' 表示中间层（非叶子）
+     *  返回其他 CType 表示叶子值的具体类型 */
+    private function traceNestedAccessType(ArrayAccessExpr $node): ?string
+    {
+        // 构建访问链（最外层在最后）
+        $chain = [];
+        $current = $node;
+        while ($current instanceof ArrayAccessExpr) {
+            $chain[] = $current;
+            $current = $current->array;
+        }
+        if (!($current instanceof VariableExpr)) return null;
+        $vn = self::varName($current->name);
+        if (!isset($this->arrLiteralAST[$vn])) return null;
+
+        $arrayExpr = $this->arrLiteralAST[$vn];
+        $type = 't_array*';
+
+        // 从最内层到最外层依次访问
+        for ($i = count($chain) - 1; $i >= 0; $i--) {
+            $access = $chain[$i];
+            if (!$arrayExpr instanceof ArrayLiteralExpr) return null;
+            $idx = $access->index;
+            $found = null;
+            if ($idx instanceof IntLiteralExpr) {
+                $intIdx = (int)$idx->value;
+                $i2 = 0;
+                foreach ($arrayExpr->entries as $entry) {
+                    if ($i2 === $intIdx) {
+                        $found = $entry->value ?? $entry;
+                        break;
+                    }
+                    $i2++;
+                }
+            } elseif ($idx instanceof StringLiteralExpr) {
+                $keyStr = $idx->value;
+                foreach ($arrayExpr->entries as $entry) {
+                    $entryKey = $entry->key ?? null;
+                    if ($entryKey instanceof StringLiteralExpr && $entryKey->value === $keyStr) {
+                        $found = $entry->value ?? $entry;
+                        break;
+                    }
+                }
+            } else {
+                return null;  // 动态索引，无法静态追踪
+            }
+            if ($found === null) return null;
+            if ($found instanceof ArrayLiteralExpr) {
+                $arrayExpr = $found;
+                $type = 't_array*';
+            } else {
+                $type = $this->inferType($found);
+                $arrayExpr = null;  // 已到达叶子
+            }
+        }
+        return $type;
     }
 
     /** 检测 ArrayAccess 是否用字符串键 */
@@ -4448,6 +4583,10 @@ class CodeGenerator implements ASTVisitor
         $lt = $this->inferType($node->left);
         // AOT 类型固定：值类型（int/float/bool/string/array*/object*）永不为 null，直接返回 left
         if ($lt === 'null') return $node->right->accept($this);
+        // 数组键访问：?? 需要运行时检查键是否存在（getter 对不存在键返回默认值而非 null）
+        if ($node->left instanceof ArrayAccessExpr) {
+            return $this->generateNullCoalesceArrayAccess($node);
+        }
         $left  = $node->left->accept($this);
         // 只有 t_var（可空联合体）才需要运行时 TYPE_NULL 检查
         if ($lt === 't_var') {
@@ -4461,6 +4600,26 @@ class CodeGenerator implements ASTVisitor
         }
         // 其他值类型：编译期已知非 null，直接返回 left
         return $left;
+    }
+
+    /**
+     * 为数组键访问生成 ?? 代码：键存在则返回值，否则返回默认值。
+     * 注：arr 和 idx 表达式会被求值两次（存在性检查 + 取值），对简单变量/字面量无副作用。
+     */
+    private function generateNullCoalesceArrayAccess(NullCoalesceExpr $node): string
+    {
+        $aa = $node->left;  // ArrayAccessExpr
+        $right = $node->right->accept($this);
+        $valueCode = $aa->accept($this);  // 完整的数组访问 getter 代码
+        $arrCode = $aa->array->accept($this);
+        $idxCode = $aa->index->accept($this);
+        $idxType = $this->inferType($aa->index);
+        if ($idxType === 't_string' || $aa->index instanceof StringLiteralExpr) {
+            $existsCheck = "tphp_fn_array_key_exists_str({$idxCode}, {$arrCode})";
+        } else {
+            $existsCheck = "tphp_fn_array_key_exists_int((t_int)({$idxCode}), {$arrCode})";
+        }
+        return "({$existsCheck} ? {$valueCode} : {$right})";
     }
 
     public function visitMatchExpr(MatchExpr $node): string
@@ -4596,6 +4755,46 @@ class CodeGenerator implements ASTVisitor
         // 0-arg 变体（如 uniqid → uniqid0）
         if (count($node->args) === 0 && isset($info['cNameNoArgs'])) {
             return $info['cNameNoArgs'] . '()';
+        }
+
+        // count($arr, $mode) — 第二参数为 COUNT_RECURSIVE 时切换到递归版本
+        if (($info['dispatch'] ?? null) === 'count') {
+            $arrCode = $node->args[0]->accept($this);
+            if (isset($node->args[1])) {
+                $modeCode = $node->args[1]->accept($this);
+                return "(($modeCode) == 1 ? tphp_fn_arr_count_recursive($arrCode) : tphp_fn_arr_count($arrCode))";
+            }
+            return "tphp_fn_arr_count($arrCode)";
+        }
+
+        // array_keys($arr, $search) — 有第二参数时切换到 search 版本
+        if (($info['dispatch'] ?? null) === 'array_keys') {
+            $arrCode = $node->args[0]->accept($this);
+            if (isset($node->args[1])) {
+                $searchCode = $this->wrapVar($node->args[1]);
+                return "tphp_fn_array_keys_search($arrCode, $searchCode)";
+            }
+            return "tphp_fn_array_keys($arrCode)";
+        }
+
+        // max/min variadic 形式：多参数时打包成数组调用 tphp_fn_max/min(arr)
+        // max(1, 2, 3) → ({ t_array* _t = arr_create(3); push(_t, 1); push(_t, 2); push(_t, 3); tphp_fn_max(_t); })
+        if (($info['dispatch'] ?? null) === 'variadic_pack') {
+            $nArgs = count($node->args);
+            $cName = $info['cName'];
+            if ($nArgs <= 1) {
+                $arrCode = $node->args[0]->accept($this);
+                return "{$cName}({$arrCode})";
+            }
+            // 多参数：打包成数组
+            $tmpArr = '_vp_' . (++$this->tmpVarCounter);
+            $code = "({ t_array* {$tmpArr} = tphp_fn_arr_create({$nArgs}); tphp_rt_register((void*){$tmpArr}, 1);";
+            foreach ($node->args as $arg) {
+                $v = $this->wrapVar($arg);
+                $code .= " {$tmpArr} = tphp_fn_arr_push({$tmpArr}, {$v});";
+            }
+            $code .= " {$cName}({$tmpArr}); })";
+            return $code;
         }
 
         $modes    = $info['modes'] ?? [];
@@ -4969,6 +5168,16 @@ class CodeGenerator implements ASTVisitor
                 }
                 $optCode = $a[2] ?? '0';
                 return "tphp_fn_filter_var({$valVar}, {$filterCode}, {$optCode})";
+            }
+
+            // abs(int|float) → 按参数类型分发 int/float 重载
+            if ($shortN === 'abs' && count($node->args) >= 1) {
+                $argType = $this->inferType($node->args[0]);
+                $argCode = $a[0];
+                if ($argType === 't_float') {
+                    return "tphp_fn_abs_float({$argCode})";
+                }
+                return "tphp_fn_abs_int({$argCode})";
             }
 
             // 通用回退：tphp_fn_函数名(参数) — C 编译器兜底
@@ -5637,16 +5846,7 @@ class CodeGenerator implements ASTVisitor
         }
         if ($expr instanceof ArrayAccessExpr) {
             $code = $expr->accept($this);
-            if ($this->hasStrKey($expr)) {
-                // 检查 per-key 类型追踪
-                if ($expr->index instanceof StringLiteralExpr && $expr->array instanceof VariableExpr) {
-                    $at = self::varName($expr->array->name);
-                    $kt = $this->arrValueTypes[$at][$expr->index->value] ?? 't_string';
-                    if ($kt === 't_int') return "VAR_INT({$code})";
-                }
-                return "VAR_STRING({$code})";
-            }
-            // int 键：使用 inferType 判断实际元素类型
+            // 使用 inferType 判断实际元素类型（涵盖 per-key 追踪、嵌套访问 AST 追踪等）
             $type = $this->inferType($expr);
             return match ($type) {
                 't_string'   => "VAR_STRING({$code})",
@@ -6607,6 +6807,7 @@ class CodeGenerator implements ASTVisitor
         $startLabel = '_lp_start_' . $this->tmpVarCounter;
         $this->loopEndLabelStack[] = $endLabel;
         $this->loopStartLabelStack[] = $startLabel;
+        $this->loopContLabelStack[] = $startLabel;  // while 无 step，continue N 跳到 cond 检查
         $lines = [];
         $lines[] = "{$startLabel}:;";
         $lines[] = "while ({$cond}) {";
@@ -6616,6 +6817,7 @@ class CodeGenerator implements ASTVisitor
         $this->scopeDepth--;
         array_pop($this->loopEndLabelStack);
         array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6625,17 +6827,21 @@ class CodeGenerator implements ASTVisitor
         $this->scopeDepth++;
         $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
         $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $contLabel = '_lp_cont_' . $this->tmpVarCounter;
         $this->loopEndLabelStack[] = $endLabel;
         $this->loopStartLabelStack[] = $startLabel;
+        $this->loopContLabelStack[] = $contLabel;  // do-while continue N 跳到 cond 检查前
         $lines = [];
         $lines[] = "{$startLabel}:;";
         $lines[] = 'do {';
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $lines[] = $this->ind("{$contLabel}:;");
         $lines[] = "} while ({$cond});";
         $lines[] = "{$endLabel}:;";
         $this->scopeDepth--;
         array_pop($this->loopEndLabelStack);
         array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6645,10 +6851,18 @@ class CodeGenerator implements ASTVisitor
         $arrName = '_lst_' . (++$this->tmpVarCounter);
         $expr = $node->expr->accept($this);
         $lines[] = "t_array* {$arrName} = {$expr};";
-        $this->generateListAssign($lines, $arrName, 0, $node->vars);
+        // 推断源数组元素类型，用于 list 解构变量类型
+        $elemType = 't_int';
+        if ($node->expr instanceof VariableExpr) {
+            $vn = self::varName($node->expr->name);
+            $elemType = $this->arrElementTypes[$vn] ?? 't_int';
+        } elseif ($node->expr instanceof ArrayLiteralExpr) {
+            $elemType = $this->inferArrayDeepElementType($node->expr);
+        }
+        $this->generateListAssign($lines, $arrName, 0, $node->vars, $elemType);
         // Keyed destructuring: ['key' => $var, ...] = $arr
         if (!empty($node->keyedEntries)) {
-            $this->generateKeyedAssign($lines, $arrName, $node->keyedEntries);
+            $this->generateKeyedAssign($lines, $arrName, $node->keyedEntries, $elemType);
         }
         return implode("\n", $lines);
     }
@@ -6656,25 +6870,43 @@ class CodeGenerator implements ASTVisitor
     /** Generate assignments for keyed list destructuring:
      *  ['key' => $var] = $arr  →  $var = tphp_fn_arr_get_str_int($arr, STR_LIT("key"));
      */
-    private function generateKeyedAssign(array &$lines, string $arrName, array $entries): void
+    private function generateKeyedAssign(array &$lines, string $arrName, array $entries, string $elemType = 't_int'): void
     {
+        // 元素类型 → keyed getter 后缀
+        $getterSuffix = match ($elemType) {
+            't_float'    => 'float',
+            't_string'   => 'str',
+            't_bool'     => 'int',  // tphp 无 arr_get_str_bool，用 int
+            't_array*'   => 'arr',
+            default      => 'int',
+        };
+        $cType = $this->typeToCType($elemType);
         foreach ($entries as $e) {
             $key = $e['key'];
             $var = $e['var'];
             $klen = strlen($key);
             $isDeclared = isset($this->declaredVars[$var]);
             $this->declaredVars[$var] = true;
-            $this->varTypes[$var] = 't_int';
-            $prefix = $isDeclared ? '' : 't_int ';
-            $lines[] = "{$prefix}{$var} = tphp_fn_arr_get_str_int({$arrName}, (t_string){.data=\"{$key}\", .length={$klen}});";
+            $this->varTypes[$var] = $elemType;
+            $prefix = $isDeclared ? '' : ($cType . ' ');
+            $lines[] = "{$prefix}{$var} = tphp_fn_arr_get_str_{$getterSuffix}({$arrName}, (t_string){.data=\"{$key}\", .length={$klen}});";
         }
     }
 
     /** 递归生成 list 赋值代码
      * @param array $vars (null|string|ListStmtNode)[]
      */
-    private function generateListAssign(array &$lines, string $arrName, int $baseIdx, array $vars): void
+    private function generateListAssign(array &$lines, string $arrName, int $baseIdx, array $vars, string $elemType = 't_int'): void
     {
+        // 元素类型 → item getter 后缀（注意：arr_item_* 系列用 'array'）
+        $getterSuffix = match ($elemType) {
+            't_float'    => 'float',
+            't_string'   => 'str',
+            't_bool'     => 'int',
+            't_array*'   => 'array',
+            default      => 'int',
+        };
+        $cType = $this->typeToCType($elemType);
         $idx = $baseIdx;
         foreach ($vars as $item) {
             if ($item === null) {
@@ -6688,7 +6920,7 @@ class CodeGenerator implements ASTVisitor
                 $tv     = '_tv_' . (++$this->tmpVarCounter);
                 $lines[] = "t_var* {$tv} = ({$arrName} && {$arrName}->length > {$idx}) ? tphp_fn_arr_get_int({$arrName}, {$idx}) : NULL;";
                 $lines[] = "t_array* {$subArr} = ({$tv} && {$tv}->type == TYPE_ARRAY) ? {$tv}->value._array : NULL;";
-                $this->generateListAssign($lines, $subArr, 0, $item->vars);
+                $this->generateListAssign($lines, $subArr, 0, $item->vars, $elemType);
                 $idx++;
                 continue;
             }
@@ -6696,11 +6928,32 @@ class CodeGenerator implements ASTVisitor
             $var = $item;
             $isDeclared = isset($this->declaredVars[$var]);
             $this->declaredVars[$var] = true;
-            $this->varTypes[$var] = 't_int';
-            $prefix = $isDeclared ? '' : 't_int ';
-            $lines[] = "{$prefix}{$var} = ({$arrName} && {$arrName}->length > {$idx}) ? tphp_fn_arr_item_int({$arrName}, {$idx}) : 0;";
+            $this->varTypes[$var] = $elemType;
+            $prefix = $isDeclared ? '' : ($cType . ' ');
+            $zeroVal = match ($elemType) {
+                't_string'   => '(t_string){0}',
+                't_float'    => '0.0',
+                't_array*'   => 'NULL',
+                't_callback' => 'NULL',
+                default      => '0',  // t_int, t_bool
+            };
+            $lines[] = "{$prefix}{$var} = ({$arrName} && {$arrName}->length > {$idx}) ? tphp_fn_arr_item_{$getterSuffix}({$arrName}, {$idx}) : {$zeroVal};";
             $idx++;
         }
+    }
+
+    /** tphp 类型 → C 类型名（用于变量声明） */
+    private function typeToCType(string $tphpType): string
+    {
+        return match ($tphpType) {
+            't_int'      => 't_int',
+            't_float'    => 't_float',
+            't_string'   => 't_string',
+            't_bool'     => 't_bool',
+            't_array*'   => 't_array*',
+            't_callback' => 't_callback',
+            default      => (str_contains($tphpType, 'tphp_class_') ? $tphpType : 't_int'),
+        };
     }
 
     public function visitForStmt(ForStmtNode $node): string
@@ -6732,17 +6985,21 @@ class CodeGenerator implements ASTVisitor
         $this->scopeDepth++;
         $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
         $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $contLabel = '_lp_cont_' . $this->tmpVarCounter;
         $this->loopEndLabelStack[] = $endLabel;
         $this->loopStartLabelStack[] = $startLabel;
+        $this->loopContLabelStack[] = $contLabel;
         $lines = [];
         $lines[] = "{$startLabel}:;";
         $lines[] = "for ({$init}; {$cond}; {$step}) {";
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $lines[] = $this->ind("{$contLabel}:;");
         $lines[] = '}';
         $lines[] = "{$endLabel}:;";
         $this->scopeDepth--;
         array_pop($this->loopEndLabelStack);
         array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6839,8 +7096,10 @@ class CodeGenerator implements ASTVisitor
         $keyType = $keyVar ? ($this->varTypes[$keyVar] ?? 't_int') : '';
         $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
         $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $contLabel = '_lp_cont_' . $this->tmpVarCounter;
         $this->loopEndLabelStack[] = $endLabel;
         $this->loopStartLabelStack[] = $startLabel;
+        $this->loopContLabelStack[] = $contLabel;
         $lines = [];
         if ($needKeyDecl) {
             if ($keyType === 't_string') {
@@ -6872,10 +7131,12 @@ class CodeGenerator implements ASTVisitor
         $this->scopeDepth++;
         foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
         $this->scopeDepth--;
+        $lines[] = $this->ind("{$contLabel}:;");
         $lines[] = '}';
         $lines[] = "{$endLabel}:;";
         array_pop($this->loopEndLabelStack);
         array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6932,6 +7193,8 @@ class CodeGenerator implements ASTVisitor
         // int/bool switch → 直接 C switch（所有 case 均为常量）
         $endLabel = '_sw_end_' . (++$this->tmpVarCounter);
         $this->loopEndLabelStack[] = $endLabel;  // switch 也压栈，支持 break N; 跳出
+        $this->loopStartLabelStack[] = $endLabel;  // switch 中 continue 等价于 break
+        $this->loopContLabelStack[] = $endLabel;
         $lines = [];
         $lines[] = "switch ({$condCode}) {";
         foreach ($node->cases as $case) {
@@ -6948,6 +7211,8 @@ class CodeGenerator implements ASTVisitor
         $lines[] = '}';
         $lines[] = "{$endLabel}:;";
         array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
         return implode("\n", $lines);
     }
 
@@ -6983,6 +7248,8 @@ class CodeGenerator implements ASTVisitor
         $endLabel = '_sw_end_' . $swId;
         $defaultLabel = '_sw_default_' . $swId;
         $this->loopEndLabelStack[] = $endLabel;
+        $this->loopStartLabelStack[] = $endLabel;  // switch 中 continue 等价于 break
+        $this->loopContLabelStack[] = $endLabel;
 
         $hasDefault = false;
         // 1. 匹配检测：if ((cond) == (val)) goto case_label;
@@ -7016,6 +7283,8 @@ class CodeGenerator implements ASTVisitor
         }
         $lines[] = "{$endLabel}:;";
         array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
         return implode("\n", $lines);
     }
 
@@ -7031,6 +7300,8 @@ class CodeGenerator implements ASTVisitor
         $endLabel = '_sw_end_' . $swId;
         $defaultLabel = '_sw_default_' . $swId;
         $this->loopEndLabelStack[] = $endLabel;
+        $this->loopStartLabelStack[] = $endLabel;  // switch 中 continue 等价于 break
+        $this->loopContLabelStack[] = $endLabel;
 
         $hasDefault = false;
         // 1. 匹配检测：if (str_eq(cond, val)) goto case_label;
@@ -7064,6 +7335,8 @@ class CodeGenerator implements ASTVisitor
         }
         $lines[] = "{$endLabel}:;";
         array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
         return implode("\n", $lines);
     }
 
@@ -7081,12 +7354,12 @@ class CodeGenerator implements ASTVisitor
     public function visitContinueStmt(ContinueStmtNode $node): string
     {
         if ($node->level <= 1) return 'continue;';
-        // continue N; → goto 第 N 层外层循环的 start label
-        $idx = count($this->loopStartLabelStack) - $node->level;
-        if ($idx < 0 || !isset($this->loopStartLabelStack[$idx])) {
+        // continue N; → goto 第 N 层外层循环的 continue label（step 之前）
+        $idx = count($this->loopContLabelStack) - $node->level;
+        if ($idx < 0 || !isset($this->loopContLabelStack[$idx])) {
             return 'continue;';  // 栈不足时退化为 continue（防御性）
         }
-        return 'goto ' . $this->loopStartLabelStack[$idx] . ';';
+        return 'goto ' . $this->loopContLabelStack[$idx] . ';';
     }
 
     public function visitTryStmt(TryStmtNode $node): string
@@ -7514,11 +7787,18 @@ class CodeGenerator implements ASTVisitor
         if ($idxType === 't_string' || $node->index instanceof StringLiteralExpr) {
             // per-key 类型追踪
             $keyType = $vt;
-            // 链式访问 $arr[0]["key"]：向上查找根数组的嵌套类型
+            // 链式访问 $arr[0]["key"]：优先用 AST 精确追踪，回退到嵌套类型
             if ($node->array instanceof ArrayAccessExpr) {
-                [$rootArr, $depth] = $this->resolveRootArray($node->array);
-                if ($rootArr !== '' && $depth > 0 && isset($this->arrNestedTypes[$rootArr])) {
-                    $keyType = $this->arrNestedTypes[$rootArr];
+                // 优先：通过数组字面量 AST 精确追踪嵌套访问的叶子值类型
+                // （处理混合类型关联数组：["id"=>42, "name"=>"foo"] 的 per-key 类型）
+                $traced = $this->traceNestedAccessType($node);
+                if ($traced !== null) {
+                    $keyType = $traced;
+                } else {
+                    [$rootArr, $depth] = $this->resolveRootArray($node->array);
+                    if ($rootArr !== '' && $depth > 0 && isset($this->arrNestedTypes[$rootArr])) {
+                        $keyType = $this->arrNestedTypes[$rootArr];
+                    }
                 }
             }
             if ($node->index instanceof StringLiteralExpr && $node->array instanceof VariableExpr) {
@@ -7531,9 +7811,9 @@ class CodeGenerator implements ASTVisitor
                         if (isset($vKeys[$keyStr])) { $keyType = $vKeys[$keyStr]; break; }
                     }
                 }
-                // 未知字符串键默认 string（与 inferType line 2713 行为一致，
-                // 与注释"无记录用 get_str_str"匹配；避免误用数组变量类型 t_array* 导致类型冲突）
-                $keyType ??= 't_string';
+                // 未知字符串键：先查数组元素类型，再默认 string
+                // （arrElementTypes 比 varType 更精确：varType 可能是 t_array*）
+                $keyType ??= $this->arrElementTypes[$arrName] ?? 't_string';
             }
             return match ($keyType) {
                 't_int'   => "tphp_fn_arr_get_str_int({$arr}, {$idx})",
@@ -7562,7 +7842,20 @@ class CodeGenerator implements ASTVisitor
             // 链式访问 $arr[0][0]：向上查找根数组的嵌套类型
             [$rootArr, $depth] = $this->resolveRootArray($node->array);
             if ($rootArr !== '' && $depth > 0 && isset($this->arrNestedTypes[$rootArr])) {
-                $et = $this->arrNestedTypes[$rootArr];
+                // 多层嵌套：用 arrNestedDepth 判断当前深度是否到达叶子层
+                if (isset($this->arrNestedDepth[$rootArr])) {
+                    $nd = $this->arrNestedDepth[$rootArr];
+                    // depth = 链式访问的层数（$arr[0] depth=1, $arr[0][1] depth=2, ...）
+                    // nd['depth'] = 数组总深度（[1,2,3] depth=1, [[1,2]] depth=2, ...）
+                    // 当 depth == nd['depth']-1 时，到达叶子层
+                    if ($depth >= $nd['depth'] - 1) {
+                        $et = $nd['leafType'];
+                    } else {
+                        $et = 't_array*';  // 中间层仍是数组
+                    }
+                } else {
+                    $et = $this->arrNestedTypes[$rootArr];
+                }
                 // 标准化类/枚举类型（补 * 指针后缀）
                 if ((str_contains($et, 'tphp_class_') || str_contains($et, 'tphp_enum_')) && !str_ends_with($et, '*')) {
                     $et .= '*';

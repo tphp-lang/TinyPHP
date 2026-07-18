@@ -45,7 +45,8 @@ static inline t_int  tphp_rt_pow_int(t_int base, t_int exp);
 static inline t_float tphp_rt_pow_float(t_float base, t_float exp);
 
 static inline t_var tphp_fn_pow(t_var base, t_var exp) {
-    if (base.type == TYPE_INT && exp.type == TYPE_INT) {
+    // 整数底+非负整数指数 → 整数结果；负指数必须走 float 路径（PHP 语义）
+    if (base.type == TYPE_INT && exp.type == TYPE_INT && exp.value._int >= 0) {
         return (t_var){.type = TYPE_INT, .value._int = tphp_rt_pow_int(base.value._int, exp.value._int)};
     }
     t_float b = (base.type == TYPE_INT)  ? (t_float)base.value._int  : base.value._float;

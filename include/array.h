@@ -635,6 +635,61 @@ static inline int tphp_fn_arr_count(t_array *a) {
     return likely(a != NULL) ? a->length : 0;
 }
 
+// count($arr, COUNT_RECURSIVE) — 递归计数（含所有嵌套数组元素）
+static inline int tphp_fn_arr_count_recursive(t_array *a) {
+    if (a == NULL) return 0;
+    int n = a->length;
+    for (int i = 0; i < a->length; i++) {
+        if (a->entries[i].val.type == TYPE_ARRAY) {
+            n += tphp_fn_arr_count_recursive(a->entries[i].val.value._array);
+        }
+    }
+    return n;
+}
+
+// array_pad($arr, $size, $value) — 将数组填充到指定长度
+// size > 0: 在右侧填充；size < 0: 在左侧填充；|size| <= length: 原样返回（拷贝）
+static inline t_array* tphp_fn_arr_pad(t_array *a, t_int size, t_var val) {
+    if (a == NULL) return NULL;
+    int len = a->length;
+    int abs_size = size < 0 ? -size : size;
+    if (abs_size <= len) {
+        // 原样返回拷贝
+        t_array* out = tphp_fn_arr_create(len);
+        if (out == NULL) return NULL;
+        for (int i = 0; i < len; i++) out->entries[i] = a->entries[i];
+        out->length = len;
+        return out;
+    }
+    int pad = abs_size - len;
+    int total = abs_size;
+    t_array* out = tphp_fn_arr_create(total);
+    if (out == NULL) return NULL;
+    if (size < 0) {
+        // 左侧填充
+        for (int i = 0; i < pad; i++) {
+            out->entries[i].key.type = TYPE_INT;
+            out->entries[i].key.value._int = i;
+            out->entries[i].val = val;
+        }
+        for (int i = 0; i < len; i++) {
+            out->entries[pad + i] = a->entries[i];
+        }
+    } else {
+        // 右侧填充
+        for (int i = 0; i < len; i++) {
+            out->entries[i] = a->entries[i];
+        }
+        for (int i = len; i < total; i++) {
+            out->entries[i].key.type = TYPE_INT;
+            out->entries[i].key.value._int = i;
+            out->entries[i].val = val;
+        }
+    }
+    out->length = total;
+    return out;
+}
+
 // === Pop (remove last element, return value) ===
 
 static inline bool tphp_fn_arr_pop(t_array *a, t_var *out) {

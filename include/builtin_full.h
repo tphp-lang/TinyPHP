@@ -1340,7 +1340,7 @@ inline t_int   tphp_fn_abs(t_int v)   { return llabs(v); }
 inline t_float tphp_fn_round(t_float v) { return round(v); }
 inline t_float tphp_fn_ceil(t_float v)  { return ceil(v); }
 inline t_float tphp_fn_floor(t_float v) { return floor(v); }
-inline t_float tphp_fn_sqrt(t_float v)  { return v >= 0.0 ? sqrt(v) : 0.0; }
+inline t_float tphp_fn_sqrt(t_float v)  { return v >= 0.0 ? sqrt(v) : NAN; }
 
 // ── C99 <math.h> 1:1 映射 ────────────────────────────────────
 inline t_float tphp_fn_sin(t_float x){return sin(x);}
