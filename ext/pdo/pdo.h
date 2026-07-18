@@ -41,8 +41,10 @@
 #include <ctype.h>
 #include <stdint.h>
 
-// ── SQLite amalgamation 头文件（通过 -I 查找 include/os/sqlite_src/）──
-#include "sqlite3.h"
+// ── SQLite amalgamation 头文件 ──
+// 用路径相对包含避免被 tcc/include/sqlite3.h 顶替（macOS TCC bundle 自带 sqlite3.h）
+// 搜索路径: -I"include" → include/os/sqlite_src/sqlite3.h（本仓库修补版）
+#include "os/sqlite_src/sqlite3.h"
 
 // ── 指针 ↔ t_int 转换宏（C 内部使用，不暴露给 PHP）──
 #define _PDO_INT_TO_DB(v)   ((sqlite3*)(intptr_t)(v))
