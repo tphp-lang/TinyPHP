@@ -3219,6 +3219,21 @@ class CodeGenerator implements ASTVisitor
         $arrCode = $isByRef ? $var : ('&' . $var);
         $vCode   = $node->value->accept($this);
         $val     = $this->wrapArrayElement($node->value, $vCode);
+
+        // 元素类型追踪（$arr[] = value 总是 int key 自增追加）
+        // 与 visitAssignArrayStmt 的 int key 路径一致：
+        // 非 int/float/bool/null 的值类型需记录到 arrElementTypes，
+        // 否则后续 $arr[0] 访问会用默认 get_int_int 截断指针。
+        $elemType = $this->inferType($node->value);
+        if ($elemType !== 'null' && $elemType !== 't_int' && $elemType !== 't_float' && $elemType !== 't_bool') {
+            $this->arrElementTypes[$var] = $elemType;
+            // 若赋的值是数组字面量，记录嵌套元素类型（供 $arr[0][i] 链式访问）
+            if ($elemType === 't_array*' && $node->value instanceof ArrayLiteralExpr) {
+                $nested = $this->inferArrayDeepElementType($node->value);
+                $this->arrNestedTypes[$var] = $nested;
+            }
+        }
+
         return 'tphp_fn_array_push(' . $arrCode . ', ' . $val . ');';
     }
 

@@ -33,6 +33,10 @@
 #debug === 9. 数组值比较 ===
 #debug x.a == 100 OK
 #debug x.b == 200 OK
+#debug
+#debug === 10. arr[] push sub-array ===
+#debug cnt=1 sub_cnt=3 e0=1 e2=3
+#debug cnt2=1 sub_cnt2=2 v0=10 v1=20
 #debug === all passed ===
 
 class Main
@@ -140,6 +144,19 @@ class Main
         $x["b"] = 200;
         if ($x["a"] == 100) { echo "x.a == 100 OK\n"; }
         if ($x["b"] == 200) { echo "x.b == 200 OK\n"; }
+
+        // === 10. arr[] = [子数组] 追加 (PHP 标准语义) ===
+        // 之前 bug: visitAssignArrayPushStmt 不记录元素类型，
+        // 导致 b[0] 用 get_int_int 截断 t_array* 指针 → 返回 0
+        echo "\n=== 10. arr[] push sub-array ===\n";
+        $b = [];
+        $b[] = [1, 2, 3];
+        echo "cnt=" . count($b) . " sub_cnt=" . count($b[0]) . " e0=" . $b[0][0] . " e2=" . $b[0][2] . "\n";
+        $c = [];
+        $m = 10;
+        $n = 20;
+        $c[] = [$m, $n];
+        echo "cnt2=" . count($c) . " sub_cnt2=" . count($c[0]) . " v0=" . $c[0][0] . " v1=" . $c[0][1] . "\n";
 
         echo "=== all passed ===\n";
     }
