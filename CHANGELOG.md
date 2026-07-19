@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [0.2.0-beta.3] — 2026-07-19
 
 ### 新增
 
@@ -188,7 +188,58 @@
 - `test/zip/basic.php` 扩展：覆盖归档创建/读取/条目信息查询/locate
 - `test/ext/stream_basic.php` 新增：覆盖 `stream_strerror`（非空检查，跨语言兼容）、TCP echo（127.0.0.1 本地回环）、`stream_set_blocking`、`stream_socket_shutdown`
 - `test/ext/openssl_basic.php` 新增（`@skip` 标记，OpenSSL 扩展暂停）：覆盖 `openssl_random_pseudo_bytes`、`openssl_digest`（sha256/md5/sha512）、`openssl_encrypt`/`openssl_decrypt` 往返（AES-256-CBC）、`openssl_error_string`
-- 全部 168 个测试通过（Windows AMD64 + TCC），含纯 TCC 环境（无 MSYS2）验证
+
+### 测试体系对标 PHP 原生
+
+- **测试目录重组**：按功能类别重新归类，对齐 PHP 原生 `tests/` 布局
+  - 移除按开发阶段命名的目录（`phase1/`/`phase2/`/`tier1/`/`tier2/`/`tier3/`/`builtin/`）
+  - 顶层子目录改为功能分类：`lang/`/`func/`/`array/`/`strings/`/`math/`/`type/`/`object/`/`control_flow/`/`syntax/`/`error/`
+  - 根目录散落的 `verify_*.php` 文件移入对应功能目录
+  - 每个测试文件头部标注 PHP 原生测试编号（如 `// 对应 PHP tests/lang/007.phpt`）
+- **新增 50+ PHP 8.5 原生测试移植**：
+  - `test/lang/`：do-while、break/continue 多层、list 解构、闭包、heredoc、三元运算符、null 合并、foreach key=>value 等 11 个测试
+  - `test/func/`：strlen、递归、默认参数、引用传参等 5 个测试
+  - `test/strings/`：sprintf/printf、str_replace、substr、explode/implode、trim 系列、strpos、strrev、chr/ord、strtolower/strtoupper、str_contains/str_starts_with/str_ends_with、str_repeat/str_pad/str_split 等 15 个测试
+  - `test/math/`：abs/ceil/floor/round、max/min/pow/sqrt、intdiv/fmod、进制转换、log/log10/sin/cos/tan/pi 等 9 个测试
+  - `test/array/`：array_push/pop/shift/unshift、array_slice/merge/flip/reverse、array_keys/values/map/filter/reduce、sort/rsort/asort/ksort/usort、in_array/array_search/count、array_sum/product/fill/pad 等 8 个测试
+- **测试数量**：169 → 209（+40，超出 200+ 目标）
+- **跨平台 CI 全绿**：Windows AMD64 / Linux x86_64 / Linux aarch64 / macOS arm64 四平台全部通过
+
+### 兼容性缺陷修复（14 项）
+
+- **嵌套数组深层访问**（`$arr[0][1][2]`、`$m["items"][0]["id"]`）：
+  - 根因：`visitArrayAccess`/`inferType` 仅追踪单层数组元素类型，3 层及以上嵌套访问返回空数组或空字符串
+  - 修复：新增 `arrLiteralAST` 字段保存数组字面量 AST，`traceNestedAccessType()` 方法递归追踪访问链到具体键的值类型；`arrNestedDepth` 字段记录数组嵌套深度，`inferArrayNestedDepth()` 计算总深度，访问时按深度判断到达叶层还是中间数组层
+  - 测试：`test/array/nested_access.php`（6 节覆盖 3 层 int、字符串键、混合 int/str 键、4 层深度、foreach 嵌套、嵌套运算）
+- **list/[] 解构类型推断**：
+  - 根因：`generateListAssign` 用单一 `elemType` 处理整个 list，混合类型数组 `[10, [20, [30]]]` 中 `$a1`（int）被当作 array 读取
+  - 修复：`generateListAssign` 新增 `srcLiteral` 参数，从源数组字面量按位置推断每个元素类型（per-index type inference）；零值按元素类型生成（`t_string` → `(t_string){0}`，`t_float` → `0.0`，`t_array*` → `NULL`，`t_int`/`t_bool` → `0`）
+  - 测试：`test/lang/lang_039_list_destructure.php`、`test/array/list_test.php`
+- **`??` null 合并数组键**：
+  - 根因：`??` 直接返回数组 getter 结果，但缺失键的 getter 返回默认值（0/空串）而非 null
+  - 修复：`??` 左侧为 `ArrayAccessExpr` 时生成 `array_key_exists` 检查，键存在才取值，否则取右侧
+  - 测试：`test/lang/lang_044_null_coalesce.php`
+- **abs() 类型分派**：`abs(int)` → `tphp_fn_abs_int`，`abs(float)` → `tphp_fn_abs_float`，返回类型跟随参数类型（测试：`test/math/abs_basic.php`）
+- **pow() 负指数语义**：`tphp_fn_pow` 整数路径要求 `exp.value._int >= 0`，负指数走 float 路径返回 float（PHP 语义，测试：`test/math/pow_sqrt_basic.php`）
+- **sqrt() 负数返回 NAN**：从 `0.0` 改为 `NAN`（测试：`test/math/sqrt_basic.php`）
+- **count() COUNT_RECURSIVE**：新增 `tphp_fn_arr_count_recursive` 递归统计嵌套数组元素数（测试：`test/array/count_recursive.php`）
+- **array_pad() 实现**：新增 `tphp_fn_arr_pad`，支持正 size 右填充、负 size 左填充（测试：`test/array/array_pad_basic.php`）
+- **array_keys() 搜索参数**：新增 `tphp_fn_array_keys_search`，用 `tphp_rt_var_equals` 严格比较类型+值（测试：`test/array/array_keys_search.php`）
+- **max/min 可变参数**：新增 `variadic_pack` 分派，多个参数打包为临时 `t_array*` 再调用 `tphp_fn_max`/`tphp_fn_min`（测试：`test/math/max_min_basic.php`）
+- **空数组字面量 `[]` 不设置 arrElementTypes**：避免 `[]` 被误判为 `t_int`，后续 `$arr[$k]=val` 变量键赋值后读取返回 0（测试：`test/array/array_str_key.php`）
+- **未知字符串键类型回退**：`visitArrayAccess`/`inferType` 先查 `arrElementTypes[$arrName]` 再默认 `t_string`，避免类型不匹配
+- **break 2 / continue 2 语义**：多层循环的 break/continue N 正确跳出指定层数（测试：`test/lang/lang_037.php`）
+- **暂缓**：`array_splice` 需要 by-reference 修改支持，AOT 下不支持，测试保留 `@skip`
+
+### 文档
+
+- [FUNCTIONS.md](FUNCTIONS.md) — 更新 `count()`（COUNT_RECURSIVE）、`array_keys()`（search 参数）、`max()`/`min()`（可变参数）、`abs()`（类型分派）、`pow()`（负指数）、`sqrt()`（NAN）条目；新增 `array_pad()` 条目
+- [GRAMMAR.md](GRAMMAR.md) — 更新 `??` 运算符（数组键用 array_key_exists）、`list`/`[]` 解构（类型感知零值）、新增嵌套数组深层访问条目、更新 `??=` 和 `...$args` 备注
+
+### 测试
+
+- 全部 209 个测试通过（Windows AMD64 / Linux x86_64 / Linux aarch64 / macOS arm64 四平台 CI 全绿）
+- 含纯 TCC 环境验证（无 MSYS2/GCC/Clang）
 
 ---
 
