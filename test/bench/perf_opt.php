@@ -67,6 +67,7 @@ class Main
 
         echo 'sqrt: ' . sqrt(25) . "\n";
         echo 'abs: ' . abs(-99) . "\n";
+        file_put_contents('_test_fio.txt', 'Hello TinyPHP!');
         echo 'file_put+get: ' . file_get_contents('_test_fio.txt') . "\n";
 
         echo "\n=== All Optimizations OK ===\n";

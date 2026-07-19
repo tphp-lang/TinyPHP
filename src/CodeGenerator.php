@@ -2613,7 +2613,11 @@ class CodeGenerator implements ASTVisitor
         if ($node->expr instanceof ArrayLiteralExpr) {
             $elemType = $this->inferArrayElementType($node->expr);
             if (str_contains($elemType, 'tphp_class_')) $elemType .= '*';
-            $this->arrElementTypes[$var] = $elemType;
+            // 空数组字面量不设置 arrElementTypes（元素类型未知，避免误判为 t_int）
+            // — 后续 $arr[$k] = val 用变量键赋值时，arrElementTypes 不会被错误地锁定为 t_int
+            if (!empty($node->expr->entries)) {
+                $this->arrElementTypes[$var] = $elemType;
+            }
             // 保存数组字面量 AST，用于精确追踪嵌套访问中特定键的值类型
             $this->arrLiteralAST[$var] = $node->expr;
             // 若元素是数组，记录嵌套级别元素类型（含 t_int）
@@ -5846,7 +5850,36 @@ class CodeGenerator implements ASTVisitor
         }
         if ($expr instanceof ArrayAccessExpr) {
             $code = $expr->accept($this);
-            // 使用 inferType 判断实际元素类型（涵盖 per-key 追踪、嵌套访问 AST 追踪等）
+            // 字符串键：优先 AST 嵌套追踪；否则 per-key 追踪；默认 VAR_STRING
+            // （保持兼容性：未追踪的字符串键默认视为 string，避免误判为 int 返回 0）
+            if ($this->hasStrKey($expr)) {
+                // 嵌套访问优先用 AST 精确追踪（处理 $m["items"][0]["id"] 混合类型）
+                if ($expr->array instanceof ArrayAccessExpr) {
+                    $traced = $this->traceNestedAccessType($expr);
+                    if ($traced === 't_int' || $traced === 't_bool') return "VAR_INT({$code})";
+                    if ($traced === 't_float')    return "VAR_FLOAT({$code})";
+                    if ($traced === 't_array*')   return "VAR_ARRAY({$code})";
+                    if ($traced === 't_callback') return "VAR_CALLBACK({$code})";
+                    if ($traced === 'null')       return "VAR_NULL()";
+                    if ($traced !== null && (str_contains($traced, 'tphp_class_') || str_contains($traced, 'tphp_enum_')))
+                        return "VAR_OBJ({$code})";
+                    if ($traced === 't_string')   return "VAR_STRING({$code})";
+                }
+                // 非嵌套或追踪失败：per-key 类型追踪
+                if ($expr->index instanceof StringLiteralExpr && $expr->array instanceof VariableExpr) {
+                    $at = self::varName($expr->array->name);
+                    $kt = $this->arrValueTypes[$at][$expr->index->value] ?? '';
+                    if ($kt === 't_int' || $kt === 't_bool')   return "VAR_INT({$code})";
+                    if ($kt === 't_float')    return "VAR_FLOAT({$code})";
+                    if ($kt === 't_array*')   return "VAR_ARRAY({$code})";
+                    if ($kt === 't_callback') return "VAR_CALLBACK({$code})";
+                    if ($kt === 'null')       return "VAR_NULL()";
+                    if ($kt && (str_contains($kt, 'tphp_class_') || str_contains($kt, 'tphp_enum_')))
+                        return "VAR_OBJ({$code})";
+                }
+                return "VAR_STRING({$code})";
+            }
+            // int 键：使用 inferType 判断实际元素类型
             $type = $this->inferType($expr);
             return match ($type) {
                 't_string'   => "VAR_STRING({$code})",
@@ -6853,13 +6886,15 @@ class CodeGenerator implements ASTVisitor
         $lines[] = "t_array* {$arrName} = {$expr};";
         // 推断源数组元素类型，用于 list 解构变量类型
         $elemType = 't_int';
+        $srcLiteral = null;
         if ($node->expr instanceof VariableExpr) {
             $vn = self::varName($node->expr->name);
             $elemType = $this->arrElementTypes[$vn] ?? 't_int';
         } elseif ($node->expr instanceof ArrayLiteralExpr) {
             $elemType = $this->inferArrayDeepElementType($node->expr);
+            $srcLiteral = $node->expr;
         }
-        $this->generateListAssign($lines, $arrName, 0, $node->vars, $elemType);
+        $this->generateListAssign($lines, $arrName, 0, $node->vars, $elemType, $srcLiteral);
         // Keyed destructuring: ['key' => $var, ...] = $arr
         if (!empty($node->keyedEntries)) {
             $this->generateKeyedAssign($lines, $arrName, $node->keyedEntries, $elemType);
@@ -6895,42 +6930,68 @@ class CodeGenerator implements ASTVisitor
 
     /** 递归生成 list 赋值代码
      * @param array $vars (null|string|ListStmtNode)[]
+     * @param ArrayLiteralExpr|null $srcLiteral 源数组字面量（用于 per-index 元素类型推断，处理混合类型数组）
      */
-    private function generateListAssign(array &$lines, string $arrName, int $baseIdx, array $vars, string $elemType = 't_int'): void
+    private function generateListAssign(array &$lines, string $arrName, int $baseIdx, array $vars, string $elemType = 't_int', ?ArrayLiteralExpr $srcLiteral = null): void
     {
-        // 元素类型 → item getter 后缀（注意：arr_item_* 系列用 'array'）
-        $getterSuffix = match ($elemType) {
-            't_float'    => 'float',
-            't_string'   => 'str',
-            't_bool'     => 'int',
-            't_array*'   => 'array',
-            default      => 'int',
-        };
         $cType = $this->typeToCType($elemType);
         $idx = $baseIdx;
+        $entryIdx = 0;
         foreach ($vars as $item) {
             if ($item === null) {
-                // 跳过当前元素
                 $idx++;
+                $entryIdx++;
                 continue;
             }
+            // per-index 元素类型推断：从源数组字面量对应位置推断具体元素类型
+            // （处理 [10, [20, [30]]] 等混合类型数组：index 0 是 int，index 1 是 array）
+            $itemElemType = $elemType;
+            $itemSrcLiteral = null;
+            if ($srcLiteral !== null && isset($srcLiteral->entries[$entryIdx])) {
+                $srcEntry = $srcLiteral->entries[$entryIdx];
+                $srcVal = $srcEntry->value ?? $srcEntry;
+                if ($srcVal !== null) {
+                    $inferred = $this->inferType($srcVal);
+                    if ($inferred !== 'null') {
+                        $itemElemType = $inferred;
+                        if (str_contains($itemElemType, 'tphp_class_')) $itemElemType .= '*';
+                    }
+                    if ($srcVal instanceof ArrayLiteralExpr) {
+                        $itemSrcLiteral = $srcVal;
+                    }
+                }
+            }
+            // 元素类型 → item getter 后缀（注意：arr_item_* 系列用 'array'）
+            $getterSuffix = match ($itemElemType) {
+                't_float'    => 'float',
+                't_string'   => 'str',
+                't_bool'     => 'int',
+                't_array*'   => 'array',
+                default      => 'int',
+            };
+            $itemCType = $this->typeToCType($itemElemType);
             if ($item instanceof ListStmtNode) {
                 // 嵌套 list：先取 t_var*，再取 .value._array
                 $subArr = '_sublst_' . (++$this->tmpVarCounter);
                 $tv     = '_tv_' . (++$this->tmpVarCounter);
                 $lines[] = "t_var* {$tv} = ({$arrName} && {$arrName}->length > {$idx}) ? tphp_fn_arr_get_int({$arrName}, {$idx}) : NULL;";
                 $lines[] = "t_array* {$subArr} = ({$tv} && {$tv}->type == TYPE_ARRAY) ? {$tv}->value._array : NULL;";
-                $this->generateListAssign($lines, $subArr, 0, $item->vars, $elemType);
+                // 递归：传入子数组的字面量 AST（若有），elemType 用子数组自身的元素类型
+                $subElemType = $itemSrcLiteral !== null
+                    ? $this->inferArrayDeepElementType($itemSrcLiteral)
+                    : $itemElemType;
+                $this->generateListAssign($lines, $subArr, 0, $item->vars, $subElemType, $itemSrcLiteral);
                 $idx++;
+                $entryIdx++;
                 continue;
             }
             // 普通变量
             $var = $item;
             $isDeclared = isset($this->declaredVars[$var]);
             $this->declaredVars[$var] = true;
-            $this->varTypes[$var] = $elemType;
-            $prefix = $isDeclared ? '' : ($cType . ' ');
-            $zeroVal = match ($elemType) {
+            $this->varTypes[$var] = $itemElemType;
+            $prefix = $isDeclared ? '' : ($itemCType . ' ');
+            $zeroVal = match ($itemElemType) {
                 't_string'   => '(t_string){0}',
                 't_float'    => '0.0',
                 't_array*'   => 'NULL',
@@ -6939,6 +7000,7 @@ class CodeGenerator implements ASTVisitor
             };
             $lines[] = "{$prefix}{$var} = ({$arrName} && {$arrName}->length > {$idx}) ? tphp_fn_arr_item_{$getterSuffix}({$arrName}, {$idx}) : {$zeroVal};";
             $idx++;
+            $entryIdx++;
         }
     }
 

@@ -16,7 +16,7 @@
 #debug ===== cos =====
 #debug float(1)
 #debug float(0.5)
-#debug float(6.1232339957368e-017)
+#debug float(-1)
 #debug ===== tan =====
 #debug float(0)
 #debug float(1)
@@ -41,8 +41,8 @@ class Main
         echo "===== cos =====\n";
         var_dump(cos(0.0));
         var_dump(cos(pi() / 3.0));
-        // cos(pi/2) 浮点精度下为极小值而非精确 0，符合 IEEE 754
-        var_dump(cos(pi() / 2.0));
+        // cos(pi) = -1（避免 cos(pi/2) 浮点精度在不同平台 printf 格式不同：e-017 vs e-17）
+        var_dump(cos(pi()));
         echo "===== tan =====\n";
         var_dump(tan(0.0));
         var_dump(tan(pi() / 4.0));
