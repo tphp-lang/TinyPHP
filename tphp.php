@@ -13,7 +13,7 @@ declare(strict_types=1);
 // ============================================================
 
 /** TinyPHP 版本号 */
-const TPHP_VERSION = '0.2.0-beta.2';
+const TPHP_VERSION = '0.2.0-beta.3';
 
 spl_autoload_register(function (string $class): void {
     $baseDir = __DIR__ . '/src';
