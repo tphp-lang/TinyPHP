@@ -281,10 +281,11 @@ class AssignArrayStmtNode extends StmtNode
 }
 
 // $arr[] = value  (array push 语法糖)
+// target: VariableExpr（简单变量 $arr）或 PropertyAccessExpr（$obj->prop / $this->prop）
 class AssignArrayPushStmtNode extends StmtNode
 {
     public function __construct(
-        public readonly string $varName,
+        public readonly ExprNode $target,
         public readonly ExprNode $value,
     ) {}
 
@@ -698,6 +699,20 @@ class ArrayAccessExpr extends ExprNode
     }
 }
 
+// 数组追加: $expr[]（空下标，仅用于赋值上下文 $expr[] = value）
+// 不直接生成 C 代码，由 AssignArrayPushStmtNode 处理
+class ArrayAppendExpr extends ExprNode
+{
+    public function __construct(
+        public readonly ExprNode $target,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitArrayAppend($this);
+    }
+}
+
 // 属性访问: $obj->prop 或 $this->prop
 class PropertyAccessExpr extends ExprNode
 {
@@ -1107,6 +1122,7 @@ interface ASTVisitor
     public function visitPostfix(PostfixExpr $node): string;
     public function visitCompoundAssign(CompoundAssignExpr $node): string;
     public function visitArrayAccess(ArrayAccessExpr $node): string;
+    public function visitArrayAppend(ArrayAppendExpr $node): string;
     public function visitPropertyAccess(PropertyAccessExpr $node): string;
     public function visitPropertyDecl(PropertyDeclNode $node): string;
     public function visitConst(ConstNode $node): string;

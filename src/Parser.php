@@ -1149,21 +1149,6 @@ class Parser
             $this->advance(); // skip :
             return new LabelStmtNode($label);
         }
-        // 数组 push: $a[] = expr;
-        if ($this->check(TokenType::IDENTIFIER) && $this->checkNext(TokenType::LBRACKET)) {
-            $save = $this->current;
-            $this->advance(); // IDENTIFIER
-            $this->advance(); // LBRACKET
-            if ($this->check(TokenType::RBRACKET)) {
-                $varName = $this->tokens[$save]->lexeme;
-                $this->advance(); // RBRACKET
-                $this->consume(TokenType::EQUALS, 'Expected =');
-                $expr = $this->parseExpr();
-                $this->consume(TokenType::SEMICOLON, 'Expected ;');
-                return new AssignArrayPushStmtNode($varName, $expr);
-            }
-            $this->current = $save; // 回退
-        }
         // 赋值: $var = expr;  或  TYPE $var = expr; (可选类型标记)
         if ($this->check(TokenType::IDENTIFIER) && $this->checkNext(TokenType::EQUALS)) {
             return $this->parseAssignStmt();
@@ -1768,6 +1753,13 @@ class Parser
             return new ExprStmtNode($expr);
         }
         $expr = $this->parseExpr();
+        // 数组追加赋值: $arr[] = value 或 $obj->prop[] = value
+        if ($expr instanceof ArrayAppendExpr && $this->check(TokenType::EQUALS)) {
+            $this->advance();
+            $val = $this->parseExpr();
+            $this->consume(TokenType::SEMICOLON, 'Expected ;');
+            return new AssignArrayPushStmtNode($expr->target, $val);
+        }
         // 数组元素赋值: $arr[$i] = value
         if ($expr instanceof ArrayAccessExpr && $this->check(TokenType::EQUALS)) {
             $this->advance();
@@ -2019,9 +2011,15 @@ class Parser
                     $expr = $this->setPos(new PropertyAccessExpr($expr, $member, $nullsafe), $expr->line, $expr->column);
                 }
             } elseif ($this->match(TokenType::LBRACKET)) {
-                $index = $this->parseExpr();
-                $this->consume(TokenType::RBRACKET, 'Expected ]');
-                $expr = $this->setPos(new ArrayAccessExpr($expr, $index), $expr->line, $expr->column);
+                // $expr[] 空下标 → ArrayAppendExpr（仅用于 $expr[] = value 赋值上下文）
+                if ($this->check(TokenType::RBRACKET)) {
+                    $this->advance(); // consume ]
+                    $expr = $this->setPos(new ArrayAppendExpr($expr), $expr->line, $expr->column);
+                } else {
+                    $index = $this->parseExpr();
+                    $this->consume(TokenType::RBRACKET, 'Expected ]');
+                    $expr = $this->setPos(new ArrayAccessExpr($expr, $index), $expr->line, $expr->column);
+                }
             } elseif ($this->match(TokenType::INC) || $this->match(TokenType::DEC)) {
                 $expr = $this->setPos(new PostfixExpr($expr, $this->previous()->lexeme), $expr->line, $expr->column);
             } else {
@@ -2169,8 +2167,12 @@ class Parser
                 return $this->setPos(new CallExpr(null, $name, $args), $line, $col);
             }
 
-            // 数组访问: $var[expr]
+            // 数组访问: $var[expr] 或 $var[] 空下标（赋值上下文）
             if ($this->match(TokenType::LBRACKET)) {
+                if ($this->check(TokenType::RBRACKET)) {
+                    $this->advance(); // consume ]
+                    return $this->setPos(new ArrayAppendExpr(new VariableExpr($name)), $line, $col);
+                }
                 $index = $this->parseExpr();
                 $this->consume(TokenType::RBRACKET, 'Expected ]');
                 return $this->setPos(new ArrayAccessExpr(new VariableExpr($name), $index), $line, $col);

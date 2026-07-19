@@ -3250,26 +3250,38 @@ class CodeGenerator implements ASTVisitor
 
     public function visitAssignArrayPushStmt(AssignArrayPushStmtNode $node): string
     {
-        $var    = self::varName($node->varName);
-        $varT   = $this->varTypes[$var] ?? '';
-        $isByRef = $this->isByRefType($varT);
-        // byRef 数组：变量已是 t_array**，直接传；非 byRef：取地址
-        $arrCode = $isByRef ? $var : ('&' . $var);
         $vCode   = $node->value->accept($this);
         $val     = $this->wrapArrayElement($node->value, $vCode);
 
-        // 元素类型追踪（$arr[] = value 总是 int key 自增追加）
-        // 与 visitAssignArrayStmt 的 int key 路径一致：
-        // 非 int/float/bool/null 的值类型需记录到 arrElementTypes，
-        // 否则后续 $arr[0] 访问会用默认 get_int_int 截断指针。
-        $elemType = $this->inferType($node->value);
-        if ($elemType !== 'null' && $elemType !== 't_int' && $elemType !== 't_float' && $elemType !== 't_bool') {
-            $this->arrElementTypes[$var] = $elemType;
-            // 若赋的值是数组字面量，记录嵌套元素类型（供 $arr[0][i] 链式访问）
-            if ($elemType === 't_array*' && $node->value instanceof ArrayLiteralExpr) {
-                $nested = $this->inferArrayDeepElementType($node->value);
-                $this->arrNestedTypes[$var] = $nested;
+        // 目标可能是 $var 或 $obj->prop / $this->prop
+        $target = $node->target;
+        if ($target instanceof VariableExpr) {
+            $var    = self::varName($target->name);
+            $varT   = $this->varTypes[$var] ?? '';
+            $isByRef = $this->isByRefType($varT);
+            // byRef 数组：变量已是 t_array**，直接传；非 byRef：取地址
+            $arrCode = $isByRef ? $var : ('&' . $var);
+
+            // 元素类型追踪（$arr[] = value 总是 int key 自增追加）
+            // 与 visitAssignArrayStmt 的 int key 路径一致：
+            // 非 int/float/bool/null 的值类型需记录到 arrElementTypes，
+            // 否则后续 $arr[0] 访问会用默认 get_int_int 截断指针。
+            $elemType = $this->inferType($node->value);
+            if ($elemType !== 'null' && $elemType !== 't_int' && $elemType !== 't_float' && $elemType !== 't_bool') {
+                $this->arrElementTypes[$var] = $elemType;
+                // 若赋的值是数组字面量，记录嵌套元素类型（供 $arr[0][i] 链式访问）
+                if ($elemType === 't_array*' && $node->value instanceof ArrayLiteralExpr) {
+                    $nested = $this->inferArrayDeepElementType($node->value);
+                    $this->arrNestedTypes[$var] = $nested;
+                }
             }
+        } elseif ($target instanceof PropertyAccessExpr) {
+            // $obj->prop[] = value 或 $this->prop[] = value
+            // 生成为取属性地址：&($obj->prop)
+            $arrCode = '&(' . $target->accept($this) . ')';
+        } else {
+            // 其他目标（如数组元素 $arr[$i][]=）：回退到 accept 取地址
+            $arrCode = '&(' . $target->accept($this) . ')';
         }
 
         return 'tphp_fn_array_push(' . $arrCode . ', ' . $val . ');';
@@ -7812,6 +7824,14 @@ class CodeGenerator implements ASTVisitor
     {
         if ($expr instanceof NullLiteralExpr) return 'tphp_fn_arr_create(0)';
         return 'tphp_fn_arr_from_val(' . $this->wrapVar($expr) . ')';
+    }
+
+    public function visitArrayAppend(ArrayAppendExpr $node): string
+    {
+        // $expr[] 在非赋值上下文无意义（PHP 中 $arr[] 单独使用会抛 Notice: Undefined variable）
+        // TinyPHP 中 ArrayAppendExpr 仅用于 $expr[] = value 赋值，由 visitAssignArrayPushStmt 处理
+        // 若到达此处说明语法误用
+        throw new \Exception('$expr[] in expression context (expected assignment $expr[] = value)');
     }
 
     public function visitArrayAccess(ArrayAccessExpr $node): string
