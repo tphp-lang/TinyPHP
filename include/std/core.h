@@ -440,6 +440,55 @@ static inline t_int tphp_fn_strpos(t_string haystack, t_string needle) {
     return -1;
 }
 
+// strrpos — 大小写敏感，从右往左找最后一次出现位置
+//   未找到返回 -1（非 false）；空 needle 返回 haystack.length（PHP 8+ 语义）
+static inline t_int tphp_fn_strrpos(t_string haystack, t_string needle) {
+    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return -1;
+    if (needle.length <= 0) return (t_int)haystack.length;
+    if (needle.length > haystack.length) return -1;
+    for (int i = haystack.length - needle.length; i >= 0; i--) {
+        if (memcmp(STR_PTR(haystack) + i, STR_PTR(needle), (size_t)needle.length) == 0)
+            return (t_int)i;
+    }
+    return -1;
+}
+
+// ASCII 大小写不敏感的字节比较（仅 A-Z/a-z 转换，与 strtolower 实现一致）
+static inline int _tp_strcasecmp_at(const char *a, const char *b, int n) {
+    for (int i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return (int)ca - (int)cb;
+    }
+    return 0;
+}
+
+// stripos — 大小写不敏感，从左往右找首次出现位置
+static inline t_int tphp_fn_stripos(t_string haystack, t_string needle) {
+    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return -1;
+    if (needle.length <= 0) return 0;
+    if (needle.length > haystack.length) return -1;
+    for (int i = 0; i <= haystack.length - needle.length; i++) {
+        if (_tp_strcasecmp_at(STR_PTR(haystack) + i, STR_PTR(needle), needle.length) == 0)
+            return (t_int)i;
+    }
+    return -1;
+}
+
+// strripos — 大小写不敏感，从右往左找最后一次出现位置
+static inline t_int tphp_fn_strripos(t_string haystack, t_string needle) {
+    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return -1;
+    if (needle.length <= 0) return (t_int)haystack.length;
+    if (needle.length > haystack.length) return -1;
+    for (int i = haystack.length - needle.length; i >= 0; i--) {
+        if (_tp_strcasecmp_at(STR_PTR(haystack) + i, STR_PTR(needle), needle.length) == 0)
+            return (t_int)i;
+    }
+    return -1;
+}
+
 static inline t_bool tphp_fn_str_contains(t_string haystack, t_string needle) {
     return tphp_fn_strpos(haystack, needle) >= 0;
 }

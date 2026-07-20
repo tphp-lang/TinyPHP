@@ -115,7 +115,9 @@ class CodeGenerator implements ASTVisitor
         // ── t_int ──
         'time' => 't_int', 'hrtime' => 't_int', 'count' => 't_int', 'sleep' => 't_int', 'usleep' => 't_int',
         'array_push' => 't_int', 'array_unshift' => 't_int', 'mb_strlen' => 't_int', 'filter_id' => 't_int',
-        'strlen' => 't_int', 'strpos' => 't_int', 'abs' => 't_int', 'array_search' => 't_int',
+        'strlen' => 't_int', 'strpos' => 't_int', 'strrpos' => 't_int',
+        'stripos' => 't_int', 'strripos' => 't_int',
+        'abs' => 't_int', 'array_search' => 't_int',
         'intval' => 't_int', 'rand' => 't_int', 'mt_rand' => 't_int', 'random_int' => 't_int',
         'intdiv' => 't_int', 'ord' => 't_int', 'bindec' => 't_int', 'hexdec' => 't_int', 'octdec' => 't_int',
         'array_key_first' => 't_int', 'array_key_last' => 't_int', 'strtotime' => 't_int', 'mktime' => 't_int',
@@ -379,6 +381,9 @@ class CodeGenerator implements ASTVisitor
         // ── 双参 direct ──
         'array_merge'        => ['cName' => 'tphp_fn_array_merge', 'modes' => ['direct', 'direct']],
         'strpos'             => ['cName' => 'tphp_fn_strpos', 'modes' => ['direct', 'direct']],
+        'strrpos'            => ['cName' => 'tphp_fn_strrpos', 'modes' => ['direct', 'direct']],
+        'stripos'            => ['cName' => 'tphp_fn_stripos', 'modes' => ['direct', 'direct']],
+        'strripos'           => ['cName' => 'tphp_fn_strripos', 'modes' => ['direct', 'direct']],
         'str_contains'       => ['cName' => 'tphp_fn_str_contains', 'modes' => ['direct', 'direct']],
         'implode'            => ['cName' => 'tphp_fn_implode', 'modes' => ['direct', 'direct']],
         'join'               => ['cName' => 'tphp_fn_implode', 'modes' => ['direct', 'direct']],

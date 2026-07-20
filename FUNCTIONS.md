@@ -196,6 +196,9 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | `rtrim(string $string, string $characters = " \t\n\r\v\f"): string` | `rtrim(string $string): string` | 右扫描，无空白时零分配，O(n) | 同 `trim` |
 | `substr(string $string, int $offset, ?int $length = null): string` | `substr(string $string, int $offset, int $length): string` | 偏移截取，全复制时零分配 | `$length` 必传（`0` 表示到末尾）；越界返回空串 |
 | `strpos(string $haystack, string $needle, int $offset = 0): int\|false` | `strpos(string $haystack, string $needle): int` | `memcmp` 线性查找，O(n) | 未找到返回 `-1`（非 `false`）；无 `$offset` 参数；空 needle 返回 `0` |
+| `strrpos(string $haystack, string $needle, int $offset = 0): int\|false` | `strrpos(string $haystack, string $needle): int` | `memcmp` 从右往左，O(n) | 未找到返回 `-1`（非 `false`）；无 `$offset` 参数；空 needle 返回 `haystack.length` |
+| `stripos(string $haystack, string $needle, int $offset = 0): int\|false` | `stripos(string $haystack, string $needle): int` | ASCII 大小写折叠后 `memcmp`，O(n) | 未找到返回 `-1`（非 `false`）；无 `$offset` 参数；空 needle 返回 `0`；仅 ASCII A-Z/a-z |
+| `strripos(string $haystack, string $needle, int $offset = 0): int\|false` | `strripos(string $haystack, string $needle): int` | ASCII 大小写折叠后从右往左 `memcmp`，O(n) | 未找到返回 `-1`（非 `false`）；无 `$offset` 参数；空 needle 返回 `haystack.length`；仅 ASCII A-Z/a-z |
 | `str_contains(string $haystack, string $needle): bool` | `str_contains(string $haystack, string $needle): bool` | 委托 `strpos >= 0`，O(n) | — |
 | `str_starts_with(string $haystack, string $needle): bool` | `str_starts_with(string $haystack, string $needle): bool` | 单次 `memcmp` 前缀，O(len(needle)) | — |
 | `str_ends_with(string $haystack, string $needle): bool` | `str_ends_with(string $haystack, string $needle): bool` | 单次 `memcmp` 后缀，O(len(needle)) | — |

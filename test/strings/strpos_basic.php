@@ -4,7 +4,7 @@
 // tphp 差异：
 //   1. 未找到返回 int(-1)（非 bool(false)）— 与 PHP 语义不同
 //   2. 无 $offset 第三参数
-//   3. strrpos / stripos / strripos 均未实现 → @skip
+//   3. strrpos / stripos / strripos 见 strrpos_basic.php
 #debug int(0)
 #debug int(5)
 #debug int(5)
