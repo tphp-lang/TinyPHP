@@ -485,7 +485,7 @@ class CodeGenerator implements ASTVisitor
         'stream_set_read_buffer'      => ['cName' => 'tphp_fn_stream_set_read_buffer', 'modes' => ['direct', 'direct']],
         'stream_isatty'               => ['cName' => 'tphp_fn_stream_isatty', 'modes' => ['direct']],
         'stream_select'               => ['cName' => 'tphp_fn_stream_select', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct'], 'defaults' => [4 => '0']],
-        'stream_context_create'       => ['cName' => 'tphp_fn_stream_context_create', 'modes' => []],
+        'stream_context_create'       => ['cName' => 'tphp_fn_stream_context_create', 'modes' => ['direct'], 'defaults' => [0 => '(t_array*)NULL']],
         'stream_socket_server'        => ['cName' => 'tphp_fn_stream_socket_server', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '12', 2 => '(t_array*)NULL']],
         'stream_socket_accept'        => ['cName' => 'tphp_fn_stream_socket_accept', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '-1']],
         'stream_socket_client'        => ['cName' => 'tphp_fn_stream_socket_client', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '2', 3 => '(t_array*)NULL']],

@@ -444,7 +444,10 @@ static inline t_int tphp_fn_stream_select(
 //   ((void)context;)，所以本函数只需返回一个有效占位值。
 //   返回非负整数（0）表示"有效 context"，调用方将其传给 stream_socket_*。
 //   与 PHP 语义差异：PHP 返回 resource，TinyPHP 返回 t_int 句柄。
-static inline t_int tphp_fn_stream_context_create(void) {
+//   参数：options 数组（与 PHP 原生 stream_context_create(array $options = []) 对齐）
+//   options 内容当前被忽略（stream_socket_* 不读取 context 字段），仅保持签名兼容。
+static inline t_int tphp_fn_stream_context_create(t_array* options) {
+    (void)options;
     return 0;
 }
 
