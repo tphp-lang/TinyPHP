@@ -582,9 +582,13 @@ class Parser
         }
     }
 
-    /** 解析类名引用：先查 use 导入表，找不到则假定在当前命名空间 */
+    /** 解析类名引用：先查 use 导入表，找不到则假定在当前命名空间
+     *  含命名空间分隔符的名字（FQ 名/部分限定名）直接返回 */
     private function resolveClassName(string $name): string
     {
+        if (str_contains($name, '\\')) {
+            return $name;
+        }
         if (isset($this->classImports[$name])) {
             return $this->classImports[$name];
         }
@@ -688,12 +692,12 @@ class Parser
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected class name')->lexeme;
         $parentName = null;
         if ($this->match(TokenType::EXTENDS_KW)) {
-            $parentName = $this->parseQualifiedName();
+            $parentName = $this->resolveClassName($this->parseQualifiedName());
         }
         $implements = [];
         if ($this->match(TokenType::IMPLEMENTS_KW)) {
             do {
-                $implements[] = $this->parseQualifiedName();
+                $implements[] = $this->resolveClassName($this->parseQualifiedName());
             } while ($this->match(TokenType::COMMA));
         }
 
@@ -758,7 +762,7 @@ class Parser
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected interface name')->lexeme;
         $extends = [];
         if ($this->match(TokenType::EXTENDS_KW)) {
-            do { $extends[] = $this->parseQualifiedName(); } while ($this->match(TokenType::COMMA));
+            do { $extends[] = $this->resolveClassName($this->parseQualifiedName()); } while ($this->match(TokenType::COMMA));
         }
         $this->consume(TokenType::LBRACE, 'Expected {');
         $methods = [];
@@ -2610,6 +2614,13 @@ class Parser
             return $result;
         }
 
+        // 类名类型注解：IDENTIFIER 且非特殊类型名（callable/iterable/object/static）
+        // 走 resolveClassName 解析 use 导入 + 命名空间前缀
+        if ($typeToken->type === TokenType::IDENTIFIER
+            && !in_array($result, ['callable', 'iterable', 'object', 'static'], true)) {
+            $result = $this->resolveClassName($result);
+        }
+
         // union type: int|string|bool
         while ($this->match(TokenType::PIPE)) {
             $next = $this->advance();
@@ -2617,7 +2628,12 @@ class Parser
             if (!in_array($next->type, $ut, true)) {
                 $this->error("Unsupported type in union: '{$next->lexeme}'");
             }
-            $result .= '|' . $next->lexeme;
+            $seg = $next->lexeme;
+            if ($next->type === TokenType::IDENTIFIER
+                && !in_array($seg, ['callable', 'iterable', 'object', 'static'], true)) {
+                $seg = $this->resolveClassName($seg);
+            }
+            $result .= '|' . $seg;
         }
 
         return $result;

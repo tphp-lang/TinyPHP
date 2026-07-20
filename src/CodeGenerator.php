@@ -739,6 +739,11 @@ class CodeGenerator implements ASTVisitor
         foreach ($allClasses as $class) {
             $cn = self::classCName($class);
             $this->symbols->addClassName($class->name, $cn);
+            // 同时注册 FQ 名（命名空间内类型注解经 resolveClassName() 解析为 FQ 名）
+            //   例如 Demo\Sub\Util 类型注解需要查到 tphp_na_Demo_Sub_tphp_class_Util
+            if ($class->namespace !== '') {
+                $this->symbols->addClassName($class->namespace . '\\' . $class->name, $cn);
+            }
         }
 
         // ── SEC_CLSFWDS: Phase 1 — 所有类的 struct + 前置声明 ──
@@ -1118,6 +1123,10 @@ class CodeGenerator implements ASTVisitor
         // ── 注册到统一符号表 ──
         $this->symbols->addClass($cn, $parentCN, $class->isAbstract, $class->implements, $class->isReadonly);
         $this->symbols->addClassName($class->name, $cn);
+        // 同时注册 FQ 名（命名空间内类型注解经 resolveClassName() 解析为 FQ 名）
+        if ($class->namespace !== '') {
+            $this->symbols->addClassName($class->namespace . '\\' . $class->name, $cn);
+        }
         foreach ($class->properties as $prop) {
             $pname = ltrim($prop->name, '$');
             $ptype = self::mapType($prop->type);
@@ -3144,6 +3153,26 @@ class CodeGenerator implements ASTVisitor
             if (isset(self::$builtinRetTypes[$name])) {
                 return self::$builtinRetTypes[$name];
             }
+            // 命名空间 fallback：NS\func() 若 NS 下未定义，剥掉前缀查全局内置函数
+            // 符合 PHP 语义：命名空间下未定义的函数调用查全局
+            if (($pos = strrpos($name, '\\')) !== false) {
+                $nsFnCName = self::funcCNameFromCall($expr);
+                if ($this->symbols->getFuncRet($nsFnCName) === null) {
+                    $baseName = substr($name, $pos + 1);
+                    if (str_starts_with($baseName, 'is_')) return 't_bool';
+                    if (str_starts_with($baseName, 'ctype_')) return 't_bool';
+                    if ($baseName === 'array_reduce') {
+                        $sig = $this->inferCallbackSig($expr->args[1] ?? null);
+                        return $sig['ret'] ?? 't_int';
+                    }
+                    if ($baseName === 'abs' && !empty($expr->args)) {
+                        return $this->inferType($expr->args[0]) === 't_float' ? 't_float' : 't_int';
+                    }
+                    if (isset(self::$builtinRetTypes[$baseName])) {
+                        return self::$builtinRetTypes[$baseName];
+                    }
+                }
+            }
             // 用户定义的函数 → 查 SymbolTable
             $fnCName = self::funcCNameFromCall($expr);
             if ($fnCName && $this->symbols->getFuncRet($fnCName) !== null) {
@@ -4935,6 +4964,19 @@ class CodeGenerator implements ASTVisitor
 
     public function visitCall(CallExpr $node): string
     {
+        // 命名空间 fallback：NS\func() 调用，若 NS 下未定义则 fallback 到全局 func()
+        // 符合 PHP 语义：命名空间下未定义的函数调用查全局
+        if ($node->callee === null && ($pos = strrpos($node->name, '\\')) !== false) {
+            $nsFnCName = self::funcCNameFromCall($node);
+            if ($this->symbols->getFuncRet($nsFnCName) === null) {
+                $baseName = substr($node->name, $pos + 1);
+                $globalNode = new CallExpr($node->callee, $baseName, $node->args, $node->isNullsafe, $node->isRawC);
+                $globalNode->line = $node->line;
+                $globalNode->column = $node->column;
+                return $this->visitCall($globalNode);
+            }
+        }
+
         // ── 注解常量静态索引 call() / newInstance() 编译期展开 ──
         // ROUTE[0]->call(12)        → 直接调用目标方法/函数
         // ROUTE[0]->newInstance(...) → new_tphp_class_X(args)
