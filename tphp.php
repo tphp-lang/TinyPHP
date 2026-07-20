@@ -675,6 +675,22 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
 
             // Security: validate each individual flag token against whitelist
             $tokens = preg_split('/\s+/', trim($flagsStr));
+            // macOS framework 链接：-framework X → -Wl,-framework,X
+            // TCC 不识别 -framework 语法（会把 X 当作输入文件），需通过 -Wl, 透传给系统 ld
+            $fwTokens = [];
+            for ($ti = 0; $ti < count($tokens); $ti++) {
+                if ($tokens[$ti] === '-framework' && isset($tokens[$ti + 1])) {
+                    $fwTokens[] = '-Wl,-framework,' . $tokens[$ti + 1];
+                    $ti++;
+                } elseif ($tokens[$ti] === '-F' && isset($tokens[$ti + 1])) {
+                    // framework 搜索路径同理：-F path → -Wl,-F,path
+                    $fwTokens[] = '-Wl,-F,' . $tokens[$ti + 1];
+                    $ti++;
+                } else {
+                    $fwTokens[] = $tokens[$ti];
+                }
+            }
+            $tokens = $fwTokens;
             foreach ($tokens as $tok) {
                 if ($tok === '' || $tok === '-') continue;
                 // .c 文件：加入 extraCFiles（由编译器编译），不混入 extraFlags
@@ -725,14 +741,15 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $extraFlags .= ' -Wno-implicit-function-declaration -Wno-int-conversion -Wno-discarded-qualifiers';
     }
 
-    // 分离 -L/-l 到 linkFlags：链接器单遍扫描，库必须在 .c 文件之后
+    // 分离 -L/-l/-Wl, 到 linkFlags：链接器单遍扫描，库必须在 .c 文件之后
     // （TCC/Unix 链接器对顺序敏感；-L/-l 放在源文件之前会导致 unresolved reference）
+    // -Wl, 透传链接器选项（如 macOS -framework），同样需放在源文件之后
     $lateLinkFlags = '';
     $extraFlagTokens = preg_split('/\s+/', trim($extraFlags));
     $keptFlags = [];
     foreach ($extraFlagTokens as $tok) {
         if ($tok === '') continue;
-        if (str_starts_with($tok, '-L') || str_starts_with($tok, '-l')) {
+        if (str_starts_with($tok, '-L') || str_starts_with($tok, '-l') || str_starts_with($tok, '-Wl,')) {
             $lateLinkFlags .= ' ' . $tok;
         } else {
             $keptFlags[] = $tok;
