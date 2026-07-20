@@ -2926,9 +2926,21 @@ class CodeGenerator implements ASTVisitor
                     return 't_int';
                 }
             }
-            // 尝试从 SymbolTable 查找
+            // 尝试从 SymbolTable 查找（沿父类链查找继承属性）
             if ($objType !== '' && $this->symbols->hasClass($objType)) {
-                return $this->symbols->getClassPropType($objType, $expr->property) ?? 't_int';
+                $propName = ltrim($expr->property, '$');
+                $pt = $this->symbols->getClassPropType($objType, $propName);
+                if ($pt !== null) return $pt;
+                // 沿父类链查找继承属性
+                //   修复前: 只查当前类，找不到返回 t_int，导致子类访问父类属性时
+                //           inferType 返回 t_int，后续方法调用报 undefined method t_int::xxx
+                $cur = $objType;
+                while ($this->symbols->hasClass($cur) && $this->symbols->getClassParent($cur) !== '') {
+                    $cur = $this->symbols->getClassParent($cur);
+                    $pt = $this->symbols->getClassPropType($cur, $propName);
+                    if ($pt !== null) return $pt;
+                }
+                return 't_int';
             }
         }
         if ($expr instanceof ArrayAccessExpr) {
