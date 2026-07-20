@@ -1,3 +1,6 @@
+.vscode
+.idea
+.trae
 *.exe
 *.dll
 *.pdb

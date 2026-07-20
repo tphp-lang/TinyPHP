@@ -1002,7 +1002,9 @@ if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "os/zlib.h"')
 //   原因：TCC 一次编译过多 .c 文件时内部符号表溢出，导致 static inline 函数
 //   声明丢失（tphp_fn_echo 等变为隐式声明）。预编译分离解决了此问题。
 $mbedtlsSrcDir = $includeDir . DIRECTORY_SEPARATOR . 'mbedtls_src';
-if (is_file($cFile) && strpos(file_get_contents($cFile), '#include "ext/openssl/src/openssl.h"') !== false
+// 检测生成的 C 代码是否 include 了 openssl.h（由 #import openssl 引入）
+// 匹配 "openssl/src/openssl.h" 子串（兼容绝对路径和相对路径两种生成形式）
+if (is_file($cFile) && strpos(file_get_contents($cFile), 'openssl/src/openssl.h') !== false
     && is_dir($mbedtlsSrcDir)) {
     $mbedtlsLibDir = $mbedtlsSrcDir . DIRECTORY_SEPARATOR . 'library';
     // 核心库（仅包含 mbedtls_config.h 启用的模块）
