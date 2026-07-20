@@ -2520,7 +2520,7 @@ class CodeGenerator implements ASTVisitor
                     );
                 }
             }
-            $this->varTypes[$var] = $cn;
+            $this->varTypes[$var] = $cn . '*';
             if ($this->indent == 1) {
                 $this->symbols->addScopeObject($var);  // 仅顶层作用域自动析构
             }
@@ -2657,7 +2657,7 @@ class CodeGenerator implements ASTVisitor
         // 数组赋值 → 推导元素类型（支持对象/回调/嵌套数组）
         if ($node->expr instanceof ArrayLiteralExpr) {
             $elemType = $this->inferArrayElementType($node->expr);
-            if (str_contains($elemType, 'tphp_class_')) $elemType .= '*';
+            if (str_contains($elemType, 'tphp_class_') && !str_ends_with($elemType, '*')) $elemType .= '*';
             // 空数组字面量不设置 arrElementTypes（元素类型未知，避免误判为 t_int）
             // — 后续 $arr[$k] = val 用变量键赋值时，arrElementTypes 不会被错误地锁定为 t_int
             if (!empty($node->expr->entries)) {
@@ -7118,7 +7118,7 @@ class CodeGenerator implements ASTVisitor
                     $inferred = $this->inferType($srcVal);
                     if ($inferred !== 'null') {
                         $itemElemType = $inferred;
-                        if (str_contains($itemElemType, 'tphp_class_')) $itemElemType .= '*';
+                        if (str_contains($itemElemType, 'tphp_class_') && !str_ends_with($itemElemType, '*')) $itemElemType .= '*';
                     }
                     if ($srcVal instanceof ArrayLiteralExpr) {
                         $itemSrcLiteral = $srcVal;
