@@ -439,6 +439,15 @@ static inline t_int tphp_fn_stream_select(
     return (t_int)ret;
 }
 
+// ── stream_context_create ───────────────────────────────────
+//   占位实现：TinyPHP 的 stream_socket_server/client 等函数忽略 context 参数
+//   ((void)context;)，所以本函数只需返回一个有效占位值。
+//   返回非负整数（0）表示"有效 context"，调用方将其传给 stream_socket_*。
+//   与 PHP 语义差异：PHP 返回 resource，TinyPHP 返回 t_int 句柄。
+static inline t_int tphp_fn_stream_context_create(void) {
+    return 0;
+}
+
 // ── stream_socket_server ────────────────────────────────────
 //   address: "tcp://0.0.0.0:8080" / "udp://..." / "unix:///path"
 //   flags: STREAM_SERVER_BIND | STREAM_SERVER_LISTEN
