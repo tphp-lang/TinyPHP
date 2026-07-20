@@ -723,14 +723,21 @@ class CodeGenerator implements ASTVisitor
             $node->extraClasses
         );
         // Topological sort: parent classes before children
+        //   key 必须用 classCName($c)（含命名空间前缀），否则命名空间类的 key
+        //   会是 tphp_class_X（全局类格式），与父类 C 名
+        //   tphp_na_NS_tphp_class_X 不匹配 → isset 查不到 → 拓扑排序退化为原始顺序
+        //   子类 struct 在父类 struct 之前定义 → C 编译报
+        //   "field '_parent' has incomplete type"
         $sorted = [];
         $seen = [];
         $byRefName = [];
-        foreach ($allClasses as $c) { $byRefName[self::classRefName($c->name)] = $c; }
+        foreach ($allClasses as $c) { $byRefName[self::classCName($c)] = $c; }
         $addClass = function ($cn) use (&$addClass, &$seen, &$sorted, $byRefName) {
             if (isset($seen[$cn])) return;
             $seen[$cn] = true;
             if (isset($byRefName[$cn]) && $byRefName[$cn]->parentName !== null) {
+                // parentName 已通过 resolveClassName() 解析为 FQ 名，
+                // classRefName(FQ name) 能正确生成命名空间 C 名
                 $pcn = self::classRefName($byRefName[$cn]->parentName);
                 if (isset($byRefName[$pcn])) $addClass($pcn);
             }
