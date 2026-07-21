@@ -29,14 +29,14 @@
 | 3  | calendar ✅ 已完成 | ⭐⭐⭐   | 无              | 16  |
 | 4  | [zlib (gzip)](#4-zlib-gzip) ✅ 已完成(内置) | ⭐⭐⭐   | 内置 zlib 1.3.2 源码 | 29  |
 | 5  | [stream](#5-stream) ✅ 已完成 | ⭐⭐⭐⭐  | winsock2(Windows)/libc(POSIX) | 21  |
-| 6  | [SQLite](#6-sqlite)          | ⭐⭐⭐⭐  | sqlite3        | 6   |
+| 6  | [SQLite](#6-sqlite) ✅ 已完成 | ⭐⭐⭐⭐  | 内置 SQLite 3.46.0 amalgamation | 11  |
 | 7  | [cURL](#7-curl)              | ⭐⭐⭐⭐  | libcurl        | 8   |
 | 8  | [OpenSSL](#8-openssl) ✅ 已完成 | ⭐⭐⭐⭐⭐ | 内置 mbedTLS 3.6.6 源码（静态编译，零运行时依赖） | 21  |
 | 9  | [fileinfo](#9-fileinfo) ✅   | ⭐⭐⭐   | 内置魔数表       | 4   |
 | 10 | [iconv](#10-iconv) ✅ 已完成 | ⭐⭐⭐   | libiconv/系统    | 8   |
 | 11 | [exif](#11-exif) ✅ 已完成     | ⭐⭐⭐   | 无(纯解析)         | 6   |
 | 12 | [ZIP](#12-zip) ✅ 已完成(内置)  | ⭐⭐⭐⭐  | 内置 zlib (手写ZIP) | 18  |
-| 13 | [MySQL](#13-mysql)           | ⭐⭐⭐⭐⭐ | libmysqlclient | 16  |
+| 13 | [MySQL](#13-mysql) ✅ 已完成 | ⭐⭐⭐⭐⭐ | 无（纯 C 协议实现） | 0（driver 复用 PDO API）  |
 | 14 | [PDO](#14-pdo) ✅ 已完成       | ⭐⭐⭐⭐⭐ | sqlite3 (内置 amalgamation) | 10  |
 | 15 | [GD](#15-gd)                 | ⭐⭐⭐⭐⭐ | libgd+png+jpeg | 20  |
 
@@ -68,105 +68,7 @@
 
 ## 6. SQLite
 
-### 推荐参考库
-
-| 库                             | 说明                           | 链接                       |
-| ----------------------------- | ---------------------------- | ------------------------ |
-| **SQLite3 Amalgamation**      | 官方单文件发行版，sqlite3.c+sqlite3.h | sqlite.org/download.html |
-| **PHP 源码** **`ext/sqlite3/`** | OO 接口参考                      | `sqlite3.c` (\~70KB)     |
-| **SQLite 官方文档**               | C API 完整参考                   | sqlite.org/capi3ref.html |
-
-### 完整 API
-
-```php
-// ================================================================
-// 常量
-// ================================================================
-const SQLITE3_OK = 0;             // 成功
-const SQLITE3_ASSOC = 1;          // query 返回关联数组
-const SQLITE3_NUM = 2;            // query 返回索引数组
-const SQLITE3_BOTH = 3;           // query 返回索引+关联
-const SQLITE3_INTEGER = 1;        // 列类型
-const SQLITE3_FLOAT = 2;
-const SQLITE3_TEXT = 3;
-const SQLITE3_BLOB = 4;
-const SQLITE3_NULL = 5;
-const SQLITE3_OPEN_READONLY = 1;
-const SQLITE3_OPEN_READWRITE = 2;
-const SQLITE3_OPEN_CREATE = 4;
-
-// ================================================================
-// 函数
-// ================================================================
-
-/**
- * sqlite_open(string $filename, int $flags = READWRITE|CREATE, string $enc_key = ""): resource|false
- *
- * 打开/创建 SQLite 数据库。
- * $filename = ":memory:" 创建内存数据库。
- */
-function sqlite_open(string $filename, int $flags = READWRITE|CREATE, string $enc_key = ""): resource|false;
-
-/**
- * sqlite_close(resource $db): void
- *
- * 关闭数据库连接。
- */
-function sqlite_close(resource $db): void;
-
-/**
- * sqlite_exec(resource $db, string $sql): bool
- *
- * 执行不返回结果的 SQL (CREATE, INSERT, UPDATE, DELETE 等)
- */
-function sqlite_exec(resource $db, string $sql): bool;
-
-/**
- * sqlite_query(resource $db, string $sql): array|false
- *
- * 执行 SELECT 查询，返回结果数组。
- * 每行是关联数组 (键=列名, 值=列值)。
- */
-function sqlite_query(resource $db, string $sql): array|false;
-
-/**
- * sqlite_query_single(resource $db, string $sql): array|false
- *
- * 执行 SELECT 查询，只返回第一行。
- * 适合 COUNT(*)、LIMIT 1 等场景。
- */
-function sqlite_query_single(resource $db, string $sql): array|false;
-
-/**
- * sqlite_escape_string(string $str): string
- *
- * 转义 SQL 字符串中的特殊字符 (单引号等)。
- */
-function sqlite_escape_string(string $str): string;
-
-/**
- * sqlite_changes(resource $db): int
- *
- * 返回最近一次 INSERT/UPDATE/DELETE 影响的行数。
- */
-function sqlite_changes(resource $db): int;
-
-/**
- * sqlite_last_insert_rowid(resource $db): int
- *
- * 返回最近一次 INSERT 的 rowid。
- */
-function sqlite_last_insert_rowid(resource $db): int;
-
-/**
- * sqlite_last_error_msg(resource $db): string
- *
- * 返回最近一次错误的消息。
- */
-function sqlite_last_error_msg(resource $db): string;
-```
-
-***
+> 已实现于 ext/sqlite3/sqlite3.h + ext/sqlite3/src/sqlite3.php（函数式 API，内置 SQLite 3.46.0 amalgamation 静态编译），文档见 FUNCTIONS.md "sqlite3 — SQLite 数据库" 章节。
 
 ## 7. cURL
 
@@ -340,585 +242,188 @@ function curl_version(): array;
 
 ***
 
-## 13. MySQL
+## 13. MySQL ✅ 已完成
+
+> 已实现于 `ext/pdo_mysql/pdo_mysql.h`（约 1644 行 C 代码，纯 MySQL 协议实现，零外部依赖）。
+> 文档见 FUNCTIONS.md "pdo — MySQL 数据库" 章节。
+>
+> **设计目标**：纯 C 实现 MySQL 客户端协议，**不依赖 libmysqlclient / libmariadb / mysqlnd**。
+> **认证**：`mysql_native_password`（SHA1，内置 FIPS 180-4 实现，无外部加密库依赖）。
+> **协议**：MySQL 文本协议（COM_QUERY），预处理用文本协议模拟（客户端拼接完整 SQL）。
+> **集成方式**：通过 `pdo_driver_t` 函数指针表暴露给 PDO 类，PHP 用户层 API 完全不变。
+> **不支持**：SSL/TLS、Unix socket、多语句、`caching_sha2_password` 认证、二进制预处理协议。
+>
+> **协议同步机制**（`active_stmt`）：MySQL 协议要求结果集完整消费（直到 EOF packet），否则连接不同步。
+> 在 `mysql_conn_t` 中维护 `active_stmt` 字段跟踪当前有未消费结果集的 stmt，
+> 在新查询发送前（`step`/`exec`）自动 drain 旧 stmt 的剩余结果集。
 
 | 属性         | 值                                           |
 | ---------- | ------------------------------------------- |
-| **外部依赖**   | libmysqlclient 或 libmariadb (\~5MB, 系统库或捆绑) |
-| **预估行数**   | \~600 行 C 包装                                |
-| **PHP 参考** | `ext/mysqli/mysqli.c` + `ext/mysqlnd/`      |
+| **外部依赖**   | 无（纯 C 协议实现，复用 ext/stream 的 socket 抽象） |
+| **实现行数**   | \~1644 行 C 代码（单文件 `pdo_mysql.h`） |
+| **PHP 参考** | `ext/mysqlnd/`（协议实现参考）+ V `vlib/db/mysql/` |
 | **难度**     | ⭐⭐⭐⭐⭐                                       |
 
 ### 13.1 推荐参考库
 
 | 库                                | 说明                                | 链接                                                            |
 | -------------------------------- | --------------------------------- | ------------------------------------------------------------- |
-| **MySQL C API (libmysqlclient)** | 官方客户端库，LGPL 协议                    | dev.mysql.com/doc/c-api/8.0/en/                               |
-| **MariaDB C API (libmariadb)**   | 兼容 MySQL，LGPL 协议，更轻量              | mariadb.com/kb/en/mariadb-connector-c/                        |
-| **PHP 源码** **`ext/mysqli/`**     | OO 接口参考                           | `mysqli.c` (\~150KB)                                          |
-| **PHP 源码** **`ext/mysqlnd/`**    | MySQL Native Driver（不依赖 libmysql） | `mysqlnd/` 目录                                                 |
-| **MySQL 协议文档**                   | 客户端-服务端协议                         | dev.mysql.com/doc/dev/mysql-server/latest/PAGE\_PROTOCOL.html |
+| **MySQL 协议文档**                   | 客户端-服务端协议（核心参考）                 | dev.mysql.com/doc/dev/mysql-server/latest/PAGE\_PROTOCOL.html |
+| **PHP 源码** **`ext/mysqlnd/`**    | PHP Native Driver（纯协议实现参考）      | `mysqlnd/` 目录                                                 |
+| **V 源码** **`vlib/db/mysql/`**     | V 语言 MySQL 纯协议实现（架构参考）          | `mysql.v`                                                     |
+| **SHA1 (FIPS 180-4)**             | mysql_native_password 认证所需         | csrc.nist.gov/publications/fips/fips180-4.pdf                 |
 
-### 13.2 选择：libmysqlclient vs libmariadb vs mysqlnd
+### 13.2 设计说明（AOT 类型安全）
 
-| 方案                                   | 优点                              | 缺点                                                     |
-| ------------------------------------ | ------------------------------- | ------------------------------------------------------ |
-| **libmysqlclient** (MySQL 官方)        | 最完整支持，文档丰富                      | \~5MB 体积，MySQL 8.0+ 默认认证机制复杂 (caching\_sha2\_password) |
-| **libmariadb** (MariaDB C Connector) | LGPL 协议，支持 MySQL + MariaDB，体积较小 | API 与 libmysqlclient 基本兼容但有细微差异                        |
-| **mysqlnd** (PHP 原生)                 | 零外部依赖，纯 PHP 实现                  | 代码量巨大 (\~5万行 C)，深度绑定 Zend，不适合 AOT                      |
+- 通过 `pdo_driver_t` 函数指针表暴露，PHP 层使用 `new PDO("mysql:host=...;port=...;dbname=...")`
+- 数据库句柄（`mysql_conn_t*`）和语句句柄（`mysql_stmt_t*`）以 `int` (`t_int`=`int64_t`) 存储在 PHP 变量中
+- 通过 `_PDO_DRV_FROM_INT` / `_PDO_DBH_FROM_INT` / `_PDO_STMT_FROM_INT` 宏在 C 层转换回指针
+- 预处理用文本协议模拟：客户端在 `step` 首次调用时将 `?` 占位符替换为转义后的参数值，拼接成完整 SQL 发送
+- MySQL 文本协议所有列值都是字符串，PDO 层用 `_fetchColumnInt`（支持 TEXT 列 + `strtoll` 转换）适配
+- 错误抛 `Exception`（`tp_throw_ex`），错误消息由 driver 的 `errmsg` 提供（保存在 `mysql_conn_t.error_msg`）
+- `quote` 转义 `\x00` `\n` `\r` `\\` `'` `"` `\x1a` 字符，结果带单引号包裹
+- 认证算法：`SHA1(password) XOR SHA1(salt + SHA1(SHA1(password)))`（salt 在前）
 
-**推荐方案**: **libmariadb** (兼容 MySQL 8.0 协议，API 与 libmysqlclient 99% 兼容，LGPL 无许可问题)
-
-### 13.3 依赖安装
-
-```bash
-# Linux (Debian/Ubuntu)
-apt install libmariadb-dev
-
-# Linux (RHEL/CentOS)
-yum install mariadb-connector-c-devel
-
-# macOS
-brew install mariadb-connector-c
-
-# Windows (MSYS2)
-pacman -S mingw-w64-x86_64-libmariadbclient
-# 或下载 https://mariadb.com/downloads/connectors/connectors-data-access/c-connector/
-```
-
-### 13.4 完整 API
-
-```php
-// ================================================================
-// 数据类型常量
-// ================================================================
-const MYSQL_TYPE_DECIMAL = 0;
-const MYSQL_TYPE_TINY = 1;        // TINYINT: 1 byte
-const MYSQL_TYPE_SHORT = 2;       // SMALLINT: 2 bytes
-const MYSQL_TYPE_LONG = 3;        // INT: 4 bytes
-const MYSQL_TYPE_FLOAT = 4;
-const MYSQL_TYPE_DOUBLE = 5;
-const MYSQL_TYPE_NULL = 6;
-const MYSQL_TYPE_TIMESTAMP = 7;
-const MYSQL_TYPE_LONGLONG = 8;    // BIGINT: 8 bytes
-const MYSQL_TYPE_INT24 = 9;       // MEDIUMINT
-const MYSQL_TYPE_DATE = 10;
-const MYSQL_TYPE_TIME = 11;
-const MYSQL_TYPE_DATETIME = 12;
-const MYSQL_TYPE_YEAR = 13;
-const MYSQL_TYPE_VARCHAR = 15;
-const MYSQL_TYPE_BIT = 16;
-const MYSQL_TYPE_JSON = 245;
-const MYSQL_TYPE_NEWDECIMAL = 246;
-const MYSQL_TYPE_ENUM = 247;
-const MYSQL_TYPE_SET = 248;
-const MYSQL_TYPE_TINY_BLOB = 249;
-const MYSQL_TYPE_MEDIUM_BLOB = 250;
-const MYSQL_TYPE_LONG_BLOB = 251;
-const MYSQL_TYPE_BLOB = 252;
-const MYSQL_TYPE_VAR_STRING = 253;
-const MYSQL_TYPE_STRING = 254;
-const MYSQL_TYPE_GEOMETRY = 255;
-
-// ================================================================
-// 连接选项
-// ================================================================
-const MYSQL_CLIENT_COMPRESS = 32;       // 使用压缩协议
-const MYSQL_CLIENT_SSL = 2048;          // 使用 SSL
-const MYSQL_CLIENT_FOUND_ROWS = 2;      // 返回匹配行数(非受影响行数)
-const MYSQL_CLIENT_IGNORE_SPACE = 256;  // 忽略函数名后的空格
-const MYSQL_CLIENT_INTERACTIVE = 1024;  // 交互式超时
-
-// ================================================================
-// fetch 模式
-// ================================================================
-const MYSQL_ASSOC = 1;   // 关联数组
-const MYSQL_NUM = 2;     // 索引数组
-const MYSQL_BOTH = 3;    // 关联 + 索引
-
-// ================================================================
-// 函数 — 连接管理
-// ================================================================
-
-/**
- * mysql_connect(string $host = "localhost", string $user = "",
- *               string $pass = "", string $db = "", int $port = 3306,
- *               string $socket = "", int $flags = 0): resource|false
- *
- * 打开 MySQL 服务器连接。建议使用持久连接（连接池）。
- *
- * @param string $host 主机名，可含端口 "host:port" 或 "host:/path/to/socket"
- * @param string $user 用户名
- * @param string $pass 密码
- * @param string $db 默认数据库名 (可选)
- * @param int $port 端口号 (0=默认3306)
- * @param string $socket Unix socket 路径 (Windows下忽略)
- * @param int $flags 客户端标志组合 (MYSQL_CLIENT_*)
- * @return resource|false 连接资源，失败返回 false
- */
-function mysql_connect(string $host = "localhost", string $user = "",
-                      string $pass = "", string $db = "", int $port = 3306,
-                      string $socket = "", int $flags = 0): resource|false;
-
-/**
- * mysql_close(resource $link = null): bool
- *
- * 关闭 MySQL 连接。$link 为 null 时关闭上一次打开的连接。
- */
-function mysql_close(resource $link = null): bool;
-
-/**
- * mysql_select_db(string $dbname, resource $link = null): bool
- *
- * 选择默认数据库。
- */
-function mysql_select_db(string $dbname, resource $link = null): bool;
-
-/**
- * mysql_ping(resource $link = null): bool
- *
- * 检查连接是否存活，断开则自动重连。
-
- * PHP 参考: ext/mysqli/mysqli_nonapi.c:265
- */
-function mysql_ping(resource $link = null): bool;
-
-/**
- * mysql_set_charset(string $charset, resource $link = null): bool
- *
- * 设置客户端字符集。如 "utf8mb4", "latin1"。
- * 等价于 SET NAMES charset
- */
-function mysql_set_charset(string $charset, resource $link = null): bool;
-
-/**
- * mysql_character_set_name(resource $link = null): string
- *
- * 返回当前连接的字符集名称。
- */
-function mysql_character_set_name(resource $link = null): string;
-
-/**
- * mysql_get_host_info(resource $link = null): string
- *
- * 返回连接主机信息。
- */
-function mysql_get_host_info(resource $link = null): string;
-
-/**
- * mysql_get_server_info(resource $link = null): string
- *
- * 返回 MySQL 服务器版本号。
- */
-function mysql_get_server_info(resource $link = null): string;
-
-/**
- * mysql_get_proto_info(resource $link = null): int
- *
- * 返回连接使用的协议版本号。
- */
-function mysql_get_proto_info(resource $link = null): int;
-
-// ================================================================
-// 函数 — 查询执行
-// ================================================================
-
-/**
- * mysql_query(string $sql, resource $link = null): resource|false
- *
- * 执行 SQL 查询。SELECT/SHOW/DESCRIBE 返回结果集，INSERT/UPDATE/DELETE 等返回 true。
- *
- * @param string $sql SQL 语句, 不建议用分号结尾
- * @param resource $link 连接资源
- * @return resource|false 结果集资源，失败返回 false
- */
-function mysql_query(string $sql, resource $link = null): resource|false;
-
-/**
- * mysql_unbuffered_query(string $sql, resource $link = null): resource|false
- *
- * 执行查询但不立即获取所有结果（流式获取，大数据集省内存）。
- * 注意：在读取完所有行前不能执行其他查询。
- */
-function mysql_unbuffered_query(string $sql, resource $link = null): resource|false;
-
-// ================================================================
-// 函数 — 结果集读取
-// ================================================================
-
-/**
- * mysql_fetch_array(resource $result, int $result_type = MYSQL_BOTH): array|false
- *
- * 从结果集中取一行。$result_type 控制返回格式。
- *   MYSQL_ASSOC → ["id"=>1, "name"=>"Alice"]
- *   MYSQL_NUM   → [0=>1, 1=>"Alice"]
- *   MYSQL_BOTH  → 两者都有
- *
- * 读取完所有行返回 false。
- */
-function mysql_fetch_array(resource $result, int $result_type = MYSQL_BOTH): array|false;
-
-/**
- * mysql_fetch_assoc(resource $result): array|false
- *
- * 从结果集中取一行关联数组。等价于 mysql_fetch_array($r, MYSQL_ASSOC)
- */
-function mysql_fetch_assoc(resource $result): array|false;
-
-/**
- * mysql_fetch_row(resource $result): array|false
- *
- * 从结果集中取一行索引数组。等价于 mysql_fetch_array($r, MYSQL_NUM)
- */
-function mysql_fetch_row(resource $result): array|false;
-
-// ================================================================
-// 函数 — 结果集元信息
-// ================================================================
-
-/**
- * mysql_num_rows(resource $result): int|false
- *
- * SELECT 返回的行数。
- */
-function mysql_num_rows(resource $result): int|false;
-
-/**
- * mysql_num_fields(resource $result): int|false
- *
- * 结果集中的列数。
- */
-function mysql_num_fields(resource $result): int|false;
-
-/**
- * mysql_field_name(resource $result, int $index): string|false
- *
- * 返回指定列索引的字段名。
- *
- * @example
- * mysql_field_name($r, 0); // "id"
- */
-function mysql_field_name(resource $result, int $index): string|false;
-
-/**
- * mysql_field_type(resource $result, int $index): string
- *
- * 返回指定列的 MySQL 类型名。如 "int", "varchar", "datetime"
- */
-function mysql_field_type(resource $result, int $index): string;
-
-/**
- * mysql_field_len(resource $result, int $index): int
- *
- * 返回指定列的最大长度。
- */
-function mysql_field_len(resource $result, int $index): int;
-
-/**
- * mysql_field_flags(resource $result, int $index): string
- *
- * 返回指定列的标志。如 "not_null primary_key auto_increment"
- */
-function mysql_field_flags(resource $result, int $index): string;
-
-/**
- * mysql_fetch_lengths(resource $result): array|false
- *
- * 返回当前行各列值的长度数组（字节数）。
- */
-function mysql_fetch_lengths(resource $result): array|false;
-
-/**
- * mysql_field_seek(resource $result, int $offset): bool
- *
- * 设置字段指针到指定偏移（用于 mysql_fetch_field）。
- */
-function mysql_field_seek(resource $result, int $offset): bool;
-
-// ================================================================
-// 函数 — 影响行数 / 错误处理
-// ================================================================
-
-/**
- * mysql_affected_rows(resource $link = null): int
- *
- * 返回上一次 INSERT/UPDATE/DELETE 影响的行数。
- * REPLACE 删除+插入计为 2。
- */
-function mysql_affected_rows(resource $link = null): int;
-
-/**
- * mysql_insert_id(resource $link = null): int
- *
- * 返回上一次 INSERT 的 AUTO_INCREMENT ID。
- */
-function mysql_insert_id(resource $link = null): int;
-
-/**
- * mysql_errno(resource $link = null): int
- *
- * 返回上一次操作的错误码。
- */
-function mysql_errno(resource $link = null): int;
-
-/**
- * mysql_error(resource $link = null): string
- *
- * 返回上一次操作的错误消息。
- */
-function mysql_error(resource $link = null): string;
-
-/**
- * mysql_info(resource $link = null): string|false
- *
- * 返回关于最近一条查询的详细信息。
- * 如 "Records: 5  Duplicates: 0  Warnings: 0"
- */
-function mysql_info(resource $link = null): string|false;
-
-// ================================================================
-// 函数 — 数据转义
-// ================================================================
-
-/**
- * mysql_real_escape_string(string $str, resource $link = null): string|false
- *
- * 转义 SQL 特殊字符（\x00, \n, \r, \, ', ", \x1a）防注入。
- * 必须使用当前连接字符集。
- */
-function mysql_real_escape_string(string $str, resource $link = null): string|false;
-
-/**
- * mysql_escape_string(string $str): string
- *
- * 转义 SQL 特殊字符（不使用连接字符集，不推荐）。
- * 推荐使用 mysql_real_escape_string。
- */
-function mysql_escape_string(string $str): string;
-
-// ================================================================
-// 函数 — 事务
-// ================================================================
-
-/**
- * mysql_begin_transaction(resource $link, int $flags = 0): bool
- *
- * 开始事务。等价于 mysql_query("START TRANSACTION").
- *
- * @param int $flags MYSQL_TRANS_START_WITH_CONSISTENT_SNAPSHOT (1)
- *                   MYSQL_TRANS_START_READ_WRITE (2)
- *                   MYSQL_TRANS_START_READ_ONLY (4)
- */
-function mysql_begin_transaction(resource $link, int $flags = 0): bool;
-
-/**
- * mysql_commit(resource $link, int $flags = 0): bool
- *
- * 提交事务。
- */
-function mysql_commit(resource $link, int $flags = 0): bool;
-
-/**
- * mysql_rollback(resource $link, int $flags = 0): bool
- *
- * 回滚事务。
- */
-function mysql_rollback(resource $link, int $flags = 0): bool;
-
-// ================================================================
-// 函数 — 连接池 / 清理
-// ================================================================
-
-/**
- * mysql_free_result(resource $result): bool
- *
- * 释放结果集内存。
- */
-function mysql_free_result(resource $result): bool;
-
-/**
- * mysql_data_seek(resource $result, int $row): bool
- *
- * 移动结果集指针到指定行。
- */
-function mysql_data_seek(resource $result, int $row): bool;
-```
-
-### 13.5 典型使用流程
-
-```php
-// 1. 连接
-$db = mysql_connect("localhost", "root", "secret");
-mysql_select_db("mydb", $db);
-mysql_set_charset("utf8mb4", $db);
-
-// 2. 查询 (SELECT)
-$result = mysql_query("SELECT id, name, email FROM users WHERE age > 18", $db);
-echo mysql_num_rows($result);  // 行数
-
-// 3. 遍历结果
-while ($row = mysql_fetch_assoc($result)) {
-    echo $row["id"] . ": " . $row["name"] . " - " . $row["email"] . "\n";
-}
-mysql_free_result($result);
-
-// 4. 写入 (INSERT/UPDATE/DELETE)
-$name = mysql_real_escape_string("O'Brien", $db);
-mysql_query("INSERT INTO users (name) VALUES ('$name')", $db);
-echo mysql_insert_id($db);     // 自增 ID
-echo mysql_affected_rows($db); // 影响行数
-
-// 5. 事务
-mysql_begin_transaction($db);
-mysql_query("UPDATE accounts SET balance = balance - 100 WHERE id = 1", $db);
-mysql_query("UPDATE accounts SET balance = balance + 100 WHERE id = 2", $db);
-mysql_commit($db);  // 或 mysql_rollback($db);
-
-// 6. 关闭
-mysql_close($db);
-```
-
-### 13.6 实现要点
+### 13.3 实现要点
 
 ```c
-// ext/mysql/src/mysql_wrap.c
-#include <mysql.h>  // 或 <mariadb/mysql.h>
+// ext/pdo_mysql/pdo_mysql.h（约 1644 行，单文件）
 
-// 存储最后连接（用于 $link=null 默认连接）
-static MYSQL *_mysql_last_link = NULL;
-
-// 结果集包装结构（返回给 PHP 端）
+// ── 协议结构 ──
 typedef struct {
-    MYSQL_RES *res;
-    int num_fields;
-    unsigned long *lengths;
-    MYSQL_FIELD *fields;
-} tphp_mysql_result;
+    int fd;                  // socket fd（来自 ext/stream）
+    int sequence_id;         // MySQL packet sequence id（每个命令重置为 0）
+    int error_code;
+    char error_msg[512];
+    int64_t last_insert_id;
+    int64_t affected_rows;
+    char server_version[64];
+    int capabilities;
+    int charset;
+    void* active_stmt;       // 当前有未消费结果集的 mysql_stmt_t*（防协议不同步）
+} mysql_conn_t;
 
-// ── mysql_connect ──
-MYSQL* tphp_fn_mysql_connect(t_string host, t_string user, t_string pass,
-                              t_string db, t_int port, t_string socket, t_int flags) {
-    MYSQL *conn = mysql_init(NULL);
-    if (!conn) return NULL;
-    
-    // 设置选项
-    if (flags & MYSQL_CLIENT_COMPRESS)
-        mysql_options(conn, MYSQL_OPT_COMPRESS, NULL);
-    
-    const char *h = (host.length > 0) ? STR_PTR(host) : "localhost";
-    const char *u = (user.length > 0) ? STR_PTR(user) : "";
-    const char *p = (pass.length > 0) ? STR_PTR(pass) : "";
-    const char *d = (db.length > 0) ? STR_PTR(db) : NULL;
-    unsigned int pn = (port > 0 && port < 65536) ? (unsigned int)port : 3306;
-    
-    if (!mysql_real_connect(conn, h, u, p, d, pn,
-        (socket.length > 0) ? STR_PTR(socket) : NULL, (unsigned long)flags)) {
-        mysql_close(conn);
-        return NULL;
-    }
-    
-    _mysql_last_link = conn;
-    tphp_rt_register(conn, 5);  // type 5 = mysql_close on cleanup
-    return conn;
-}
+typedef struct {
+    mysql_conn_t* conn;
+    char* sql_template;      // SQL 模板（带 ? 占位符）
+    int num_params;
+    int* param_types;        // 0=null, 1=int, 2=text, 3=blob
+    int64_t* param_ints;
+    char** param_texts;
+    int* param_text_lens;
+    int num_columns;
+    char** column_names;
+    int* column_name_lens;
+    int eof_reached;
+    int executed;
+    char** row_values;       // 当前行各列字符串值（借用，下次 step 失效）
+    int* row_value_lens;
+    int row_value_count;
+} mysql_stmt_t;
 
-// ── mysql_fetch_assoc ──
-t_array* tphp_fn_mysql_fetch_assoc(MYSQL_RES *res) {
-    if (!res) return NULL;
-    
-    MYSQL_ROW row = mysql_fetch_row(res);
-    if (!row) return NULL;
-    
-    unsigned long *lengths = mysql_fetch_lengths(res);
-    unsigned int nf = mysql_num_fields(res);
-    MYSQL_FIELD *fields = mysql_fetch_fields(res);
-    
-    t_array *arr = tphp_fn_arr_create((int)nf);
-    tphp_rt_register(arr, 1);
-    
-    for (unsigned int i = 0; i < nf; i++) {
-        t_string key = tphp_rt_str_dup(
-            (t_string){fields[i].name, (int)strlen(fields[i].name)});
-        
-        if (row[i] == NULL) {
-            arr = tphp_fn_arr_set_str(arr, key, VAR_NULL());
-        } else {
-            t_string val = tphp_rt_str_dup(
-                (t_string){row[i], (int)lengths[i]});
-            arr = tphp_fn_arr_set_str(arr, key, VAR_STRING(val));
-        }
-    }
-    
-    return arr;
+// ── 关键流程 ──
+// 1. open: TCP 连接 → 接收 Handshake V10 → 发 Handshake Response 41 → 认证 → OK packet
+// 2. exec/step: 拼接 SQL → 发 COM_QUERY → 读 Resultset Header → Column Definition ×N → EOF → Row ×N → EOF
+// 3. active_stmt 机制：新查询发送前 drain 旧 stmt 剩余结果集（防止协议不同步）
+// 4. mysql_native_password: SHA1(password) XOR SHA1(salt + SHA1(SHA1(password)))
+
+// ── driver 注册（constructor 自动调用）──
+__attribute__((constructor)) static void _pdo_mysql_register(void) {
+    pdo_register_driver(&_pdo_mysql_driver);
 }
 ```
 
-### 13.7 编译链接
+### 13.4 协议同步问题（已解决）
 
-```bash
-# Linux (libmariadb)
-gcc ... $(mysql_config --cflags) $(mysql_config --libs)
-# 或手动: -I/usr/include/mariadb -lmariadb
+**问题**：生成的 C 代码赋值模式为 `tmp = PDO::query(...); tp_obj_release(st); st = tmp;`——
+新查询在旧 statement finalize 之前就发送了，导致 MySQL 连接协议不同步，引发堆崩溃（`STATUS_HEAP_CORRUPTION 0xC0000374`）。
 
-# macOS (Homebrew)
-gcc ... -I/usr/local/opt/mariadb-connector-c/include \
-        -L/usr/local/opt/mariadb-connector-c/lib -lmariadb
+**解决方案**：在 `mysql_conn_t` 添加 `active_stmt` 字段，跟踪当前有未消费结果集的 stmt。
+- 在 `_pdo_mysql_step` 和 `_pdo_mysql_exec` 发送新查询前，检查并 drain 旧 stmt 的剩余结果集（`_mysql_consume_resultset`）
+- 在 step 首次成功后设置 `active_stmt = s`
+- 在 step EOF / finalize / reset 中清除 `active_stmt`（如果指向本 stmt）
 
-# Windows (MSYS2)
-gcc ... -I/c/msys64/mingw64/include/mariadb \
-        -L/c/msys64/mingw64/lib -lmariadb
-
-# 静态捆绑 (推荐用于 PHAR 分发)
-# 下载 mariadb-connector-c 源码，编译为 libmariadb.a
-git clone https://github.com/mariadb-corporation/mariadb-connector-c
-cd mariadb-connector-c && cmake . && make
-# 得到 libmariadb.a (~3MB)
-```
-
-### 13.8 测试
+### 13.5 典型用法
 
 ```php
-$db = mysql_connect("127.0.0.1", "root", "test123");
-assert(mysql_ping($db) === true);
+#import pdo
+#import pdo_mysql
 
-mysql_select_db("test", $db);
-mysql_set_charset("utf8mb4", $db);
+// 连接 MySQL 8.0
+$pdo = new PDO("mysql:host=127.0.0.1;port=3306;dbname=test", "root", "secret");
 
-// 创建表
-mysql_query("CREATE TABLE IF NOT EXISTS tmp (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100))", $db);
+// 建表
+$pdo->exec("CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    age INT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-// 插入
-$escaped = mysql_real_escape_string("O'Brien", $db);
-mysql_query("INSERT INTO tmp (name) VALUES ('$escaped')", $db);
-echo mysql_insert_id($db);  // > 0
-echo mysql_affected_rows($db);  // 1
+// 预处理 + 位置绑定
+$stmt = $pdo->prepare("INSERT INTO users (name, age) VALUES (?, ?)");
+$stmt->bindValueStr(1, "Alice");
+$stmt->bindValueInt(2, 30);
+$stmt->execute();
+echo $pdo->lastInsertId();  // 自增 ID
 
-// 查询
-$res = mysql_query("SELECT * FROM tmp", $db);
-echo mysql_num_rows($res);  // >= 1
-echo mysql_num_fields($res);  // 2
-
-while ($row = mysql_fetch_assoc($res)) {
-    echo $row['id'] . '=' . $row['name'] . "\n";
+// 查询（FETCH_ASSOC）
+$stmt = $pdo->query("SELECT * FROM users", PDO::FETCH_ASSOC);
+while (!$stmt->fetchDone()) {
+    $row = $stmt->fetch();
+    echo $row["name"] . "\n";
 }
-mysql_free_result($res);
+
+// fetchColumnInt 适用于 COUNT(*)（MySQL 文本协议 + 自动转换）
+$count = $pdo->query("SELECT COUNT(*) FROM users", PDO::FETCH_NUM)->fetchColumnInt(0);
 
 // 事务
-mysql_begin_transaction($db);
-mysql_query("UPDATE tmp SET name = 'Alice' WHERE id = 1", $db);
-mysql_rollback($db);
-// name 仍然是 O'Brien
+$pdo->beginTransaction();
+$pdo->exec("UPDATE users SET age = 31 WHERE id = 1");
+$pdo->commit();
 
-// 清理
-mysql_query("DROP TABLE tmp", $db);
-mysql_close($db);
+// 错误处理（可 try-catch）
+try {
+    $pdo->exec("SELECT * FROM nonexistent_table");
+} catch (Exception $e) {
+    echo $e->getMessage();  // "PDO::exec: Table 'test.nonexistent_table' doesn't exist"
+}
 ```
+
+> 测试: `test/pdo_mysql/pdo_mysql_integration.php`（11 节覆盖连接/建库建表/插入/
+> FETCH_ASSOC 查询/位置绑定 Int+Str/COUNT(*) fetchColumnInt/事务/错误处理/quote/清理）
+> 全部通过（MySQL 8.0.12，root/root，port 3306）。
 
 ***
 
 ## 14. PDO ✅ 已完成
 
 > 已实现于 ext/pdo/pdo.h + ext/pdo/src/pdo.php（SQLite 驱动，内置 amalgamation 3.46.0），文档见 FUNCTIONS.md "pdo — SQLite 数据库" 章节。
+>
+> **Driver 抽象架构**（已完成）：ext/pdo/pdo_driver.h 定义 `pdo_driver_t` 函数指针表接口，SQLite 驱动实现该接口并通过 constructor 自动注册。PDO/PDOStatement 类所有 C 调用通过 `pdo_driver_*` 包装函数分发，添加 MySQL/PostgreSQL 驱动只需实现 driver 接口，PHP 类无需修改。
+>
+> **已实现驱动**：SQLite（内置 amalgamation 3.46.0）、MySQL（纯 C 协议实现，见 [§13](#13-mysql-✅-已完成)）。
+
+### 驱动抽象架构
+
+```
+ext/pdo/
+  pdo_driver.h    — 公共接口（pdo_driver_t 结构体 + 注册/查找 + 包装函数）
+  pdo.h           — SQLite 驱动实现（填充函数指针表 + 自动注册）
+  src/pdo.php     — PDO/PDOStatement 类（通过 driver 指针分发）
+
+ext/pdo_mysql/   — MySQL 驱动（✅ 已实现，纯 C 协议，见 §13）
+ext/pdo_pgsql/   — PostgreSQL 驱动（未来扩展）
+```
+
+**用户使用方式**：
+```php
+#import pdo          // 只用 SQLite
+#import pdo_mysql    // 只用 MySQL
+#import pdo; #import pdo_mysql  // 两个都链接，运行时按 DSN 分发
+
+$pdo = new PDO("sqlite:memory:");                // 自动查找 sqlite driver
+$pdo = new PDO("mysql:host=...", $user, $pass);  // 自动查找 mysql driver
+```
 
 ***
 
@@ -1266,7 +771,7 @@ void tphp_fn_imagejpeg(gdImagePtr im, t_string path, t_int quality) {
 | 3  | calendar       | \~1000 | ⭐⭐⭐ ✅ 已完成 | 无              | 16  | ✅ 已完成 |
 | 4  | zlib           | \~200  | ⭐⭐⭐        | zlib           | 6   | 半天    |
 | 5  | PCRE2 preg\_\* | \~1500 | ⭐⭐⭐⭐ ✅ 已完成 | vlang pcre VM  | 8   | ✅ 已完成 |
-| 6  | SQLite         | \~500  | ⭐⭐⭐⭐       | sqlite3        | 8   | 1-2 天 |
+| 6  | SQLite ✅      | \~500  | ⭐⭐⭐⭐ ✅ 已完成 | sqlite3 (内置 amalgamation) | 11  | ✅ 已完成 |
 | 7  | cURL           | \~300  | ⭐⭐⭐⭐       | libcurl        | 8   | 2-3 天 |
 | 8  | OpenSSL        | \~500  | ⭐⭐⭐⭐⭐      | openssl        | 8   | 3-5 天 |
 | 9  | fileinfo ✅    | \~200  | ⭐⭐⭐        | 内置魔数表       | 6   | 1 天   |

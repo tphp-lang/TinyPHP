@@ -239,6 +239,47 @@ class CodeGenerator implements ASTVisitor
         'pdo_libversion' => 'const char*',
         'pdo_throw_msg' => 'void', 'pdo_throw_db_error' => 'void',
         'pdo_throw_stmt_error' => 'void',
+        // ── PDO driver 抽象层 ──
+        //   通过 driver 函数指针表分发，支持 sqlite/mysql/pgsql...
+        //   void 返回类型无需注册：pdo_driver_close/reset/clear_bindings/finalize
+        //                              /busy_timeout/extended_result_codes/bind_params
+        'pdo_driver_find' => 't_int',
+        'pdo_driver_open' => 't_int',
+        'pdo_driver_exec' => 't_int',
+        'pdo_driver_prepare' => 't_int',
+        'pdo_driver_bind_int' => 't_int',
+        'pdo_driver_bind_text' => 't_int',
+        'pdo_driver_bind_blob' => 't_int',
+        'pdo_driver_bind_null' => 't_int',
+        'pdo_driver_bind_param_index' => 't_int',
+        'pdo_driver_step' => 't_int',
+        'pdo_driver_column_count' => 't_int',
+        'pdo_driver_column_type' => 't_int',
+        'pdo_driver_column_int64' => 't_int',
+        'pdo_driver_column_bytes' => 't_int',
+        'pdo_driver_data_count' => 't_int',
+        'pdo_driver_changes' => 't_int',
+        'pdo_driver_last_insert_rowid' => 't_int',
+        'pdo_driver_errcode' => 't_int',
+        'pdo_driver_column_double' => 't_float',
+        'pdo_driver_column_text' => 'const char*',
+        'pdo_driver_column_name' => 'const char*',
+        'pdo_driver_column_decltype' => 'const char*',
+        'pdo_driver_errmsg' => 'const char*',
+        'pdo_driver_last_open_error' => 'const char*',
+        'pdo_driver_name' => 'const char*',
+        'pdo_driver_server_version' => 'const char*',
+        'pdo_driver_quote' => 't_string',
+        // ── sqlite3 (内置 ext, 函数式 SQLite API) ──
+        //   sqlite3* 指针以 t_int 句柄形式在 PHP 层流转（与 pdo 一致的转换模式）
+        //   查询结果返回 t_array*，元素类型在 $builtinArrElemTypes 注册
+        'sqlite_open' => 't_int', 'sqlite_close' => 'void',
+        'sqlite_exec' => 't_bool',
+        'sqlite_query' => 't_array*', 'sqlite_query_single' => 't_array*',
+        'sqlite_escape_string' => 't_string',
+        'sqlite_changes' => 't_int', 'sqlite_last_insert_rowid' => 't_int',
+        'sqlite_last_error_msg' => 't_string', 'sqlite_last_error_code' => 't_int',
+        'sqlite_version' => 't_string',
         // ── posix (内置 ext, POSIX 系统函数) ──
         'posix_getpid' => 't_int', 'posix_getppid' => 't_int',
         'posix_getuid' => 't_int', 'posix_geteuid' => 't_int',
@@ -305,6 +346,12 @@ class CodeGenerator implements ASTVisitor
         'tphp_class_PDOStatement_getColumnMeta' => 't_string',
         //   getAvailableDrivers() 返回 array<string>（驱动名列表）
         'tphp_class_PDO_getAvailableDrivers' => 't_string',
+        // ── sqlite3 函数返回数组的元素类型 ──
+        //   sqlite_query() 返回 array<array<string>>（外层是行数组，内层是列值字符串）
+        'sqlite_query' => 't_array*',
+        'sqlite_query[]' => 't_string',
+        //   sqlite_query_single() 返回 array<string>（单行，元素是列值字符串）
+        'sqlite_query_single' => 't_string',
     ];
 
     /**
@@ -523,6 +570,20 @@ class CodeGenerator implements ASTVisitor
         'openssl_decrypt'                 => ['cName' => 'tphp_fn_openssl_decrypt', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct'], 'defaults' => [4 => '0']],
         'openssl_random_pseudo_bytes'     => ['cName' => 'tphp_fn_openssl_random_pseudo_bytes', 'modes' => ['direct']],
         'openssl_digest'                  => ['cName' => 'tphp_fn_openssl_digest', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => 'false']],
+        // ── sqlite3 (内置 ext, 函数式 SQLite API) ──
+        //   sqlite_open(filename, flags=6, enc_key=""): flags 默认 READWRITE|CREATE
+        'sqlite_open'                     => ['cName' => 'tphp_fn_sqlite_open', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '6', 2 => '(t_string){0}']],
+        'sqlite_close'                    => ['cName' => 'tphp_fn_sqlite_close', 'modes' => ['direct']],
+        'sqlite_exec'                     => ['cName' => 'tphp_fn_sqlite_exec', 'modes' => ['direct', 'direct']],
+        //   sqlite_query(db, sql, mode=1): mode 默认 SQLITE3_ASSOC
+        'sqlite_query'                    => ['cName' => 'tphp_fn_sqlite_query', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '1']],
+        'sqlite_query_single'             => ['cName' => 'tphp_fn_sqlite_query_single', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '1']],
+        'sqlite_escape_string'            => ['cName' => 'tphp_fn_sqlite_escape_string', 'modes' => ['direct']],
+        'sqlite_changes'                  => ['cName' => 'tphp_fn_sqlite_changes', 'modes' => ['direct']],
+        'sqlite_last_insert_rowid'        => ['cName' => 'tphp_fn_sqlite_last_insert_rowid', 'modes' => ['direct']],
+        'sqlite_last_error_msg'           => ['cName' => 'tphp_fn_sqlite_last_error_msg', 'modes' => ['direct']],
+        'sqlite_last_error_code'          => ['cName' => 'tphp_fn_sqlite_last_error_code', 'modes' => ['direct']],
+        'sqlite_version'                  => ['cName' => 'tphp_fn_sqlite_version'],
     ];
 
     /** 临时变量计数器，用于数组字面量的复合表达式 */
@@ -644,8 +705,8 @@ class CodeGenerator implements ASTVisitor
         // stream/openssl: 不再自动检测，由 #import 显式引入（.php 中 #include 头文件）
         //   - #import stream  → ext/stream/src/stream.php 中 #include __EXT__ . "stream/src/stream.h"
         //   - #import openssl → ext/openssl/src/openssl.php 中 #include __EXT__ . "openssl/src/openssl.h"
-        // 同时使用时用户需按 #import openssl; #import stream; 顺序，确保 openssl.h 先于 stream.h include
-        // （openssl.h 定义 TPHP_STREAM_TLS_IMPLEMENTED 覆盖 stream.h 的 stub）
+        // 同时使用时 CodeGenerator 自动排序确保 openssl.h 先于 stream.h include
+        // （openssl.h 定义 TPHP_STREAM_TLS_IMPLEMENTED 覆盖 stream.h 的 stub，顺序无关用户书写）
 
         // ── SEC_HEADER ──
         $this->sectionLine(self::SEC_HEADER, "/* Generated by TinyPHP — PHP → C (TCC) */");
@@ -683,8 +744,20 @@ class CodeGenerator implements ASTVisitor
         }
         // openssl.h 不再自动 include：由 #import openssl 引入 ext/openssl/src/openssl.php
         //   中的 #include __EXT__ . "openssl/src/openssl.h" 负责（放 common.h 之后）
-        // 同时使用 openssl + stream 时需 #import openssl; #import stream; 顺序
         // ext/ 路径的用户 #include 放在 common.h 之后（由 #import 引入的扩展头文件）
+        //
+        // 自动排序：openssl.h 必须在 stream.h 之前 include
+        //   原因：openssl.h 无条件 #define TPHP_STREAM_TLS_IMPLEMENTED 并提供
+        //   stream_socket_enable_crypto 的真实 TLS 实现；stream.h 用 #ifndef 保护 stub。
+        //   若 stream.h 在前，stub 先生效，openssl.h 的真实实现会导致重复定义编译错误。
+        //   用户 #import 书写顺序无关，CodeGenerator 强制保证 openssl.h 优先。
+        usort($userIncAfter, function ($a, $b) {
+            $fa = str_replace('\\', '/', is_array($a) ? ($a['file'] ?? '') : $a);
+            $fb = str_replace('\\', '/', is_array($b) ? ($b['file'] ?? '') : $b);
+            $pa = str_contains($fa, 'openssl/src/openssl.h') ? 0 : 1;
+            $pb = str_contains($fb, 'openssl/src/openssl.h') ? 0 : 1;
+            return $pa <=> $pb;
+        });
         foreach ($userIncAfter as $inc) {
             if (is_array($inc)) {
                 $delim = ($inc['quoted'] ?? true) ? '"' : '<';
@@ -2712,7 +2785,16 @@ class CodeGenerator implements ASTVisitor
             $fnName = $node->expr->name;
             // 查元素类型注册表
             if (isset(self::$builtinArrElemTypes[$fnName])) {
-                $this->arrElementTypes[$var] = self::$builtinArrElemTypes[$fnName];
+                $et = self::$builtinArrElemTypes[$fnName];
+                $this->arrElementTypes[$var] = $et;
+                // 嵌套数组：查 "<fnName>[]" 获取内层元素类型
+                //   与方法调用路径（resolveMethodCNameForElem）保持一致
+                if ($et === 't_array*') {
+                    $nestedKey = $fnName . '[]';
+                    if (isset(self::$builtinArrElemTypes[$nestedKey])) {
+                        $this->arrNestedTypes[$var] = self::$builtinArrElemTypes[$nestedKey];
+                    }
+                }
             }
             // 特殊处理：需要运行时分析的函数
             switch ($fnName) {

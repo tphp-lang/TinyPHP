@@ -1,0 +1,206 @@
+name: MySQL Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ext/pdo/**'
+      - 'ext/pdo_mysql/**'
+      - 'test/pdo_mysql/**'
+      - '.github/workflows/mysql_test.yml'
+  pull_request:
+    paths:
+      - 'ext/pdo/**'
+      - 'ext/pdo_mysql/**'
+      - 'test/pdo_mysql/**'
+      - '.github/workflows/mysql_test.yml'
+
+jobs:
+  # ============================================================
+  # Linux x86_64 — TCC / GCC / Clang + MySQL 8 (services container)
+  # ============================================================
+  linux-mysql:
+    runs-on: ubuntu-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-x86_64.zip
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [tcc, gcc, clang]
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt update
+          sudo apt install -y gcc make libc6-dev default-mysql-client
+          if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
+
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: Verify MySQL
+        run: |
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent 2>/dev/null; then
+              echo "MySQL is ready"
+              break
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
+
+      - name: Test (${{ matrix.compiler }})
+        run: |
+          ccFlag=""
+          if [ "${{ matrix.compiler }}" != "tcc" ]; then ccFlag="-cc ${{ matrix.compiler }}"; fi
+          ./php tphp.php test/pdo_mysql/pdo_mysql_integration.php --debug $ccFlag \
+            -o build/test_pdo_mysql_integration.exe
+
+  # ============================================================
+  # Windows x86_64 — TCC / GCC / Clang + MySQL (Chocolatey)
+  #   GitHub Actions Windows runner 不支持 services, 改用 choco 安装
+  # ============================================================
+  windows-mysql:
+    runs-on: windows-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-win-x86_64.zip
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [tcc, gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        if: matrix.compiler != 'tcc'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-make
+
+      - name: Install MySQL
+        shell: pwsh
+        run: |
+          choco install mysql -y --no-progress
+          # MySQL 服务应已自动启动, 等待就绪
+          $env:PATH += ";C:\ProgramData\MySQL\MySQL Server*\bin;C:\Program Files\MySQL\MySQL Server*\bin"
+          for ($i = 1; $i -le 30; $i++) {
+            try {
+              $result = & mysql -uroot -e "SELECT 1" 2>&1
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "MySQL is ready (empty password)"
+                break
+              }
+            } catch {}
+            Write-Host "Waiting for MySQL... ($i/30)"
+            Start-Sleep -Seconds 2
+          }
+          # 设置 root 密码为 root (统一与 Linux/macOS 一致)
+          mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
+          mysql -uroot -proot -e "SELECT VERSION();"
+
+      - name: Add TCC
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:TCC_URL -OutFile tcc.zip
+          Expand-Archive -Path tcc.zip -DestinationPath .
+          .\tcc\win32\tcc.exe -v
+
+      - name: Download PHP
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:PHP_URL -OutFile php.zip
+          Expand-Archive -Path php.zip -DestinationPath .
+          if (!(Test-Path php.exe)) { throw "php.exe not found" }
+
+      - name: Test (${{ matrix.compiler }})
+        shell: pwsh
+        run: |
+          $env:PATH += ";C:\ProgramData\MySQL\MySQL Server*\bin;C:\Program Files\MySQL\MySQL Server*\bin"
+          $cc = "${{ matrix.compiler }}"
+          $ccFlag = if ($cc -eq 'tcc') { '' } else { '-cc ' + $cc }
+          $proc = Start-Process php.exe -ArgumentList 'tphp.php','test/pdo_mysql/pdo_mysql_integration.php','--debug',$ccFlag,'-o','build/test_pdo_mysql_integration.exe' -NoNewWindow -PassThru -Wait
+          exit $proc.ExitCode
+
+  # ============================================================
+  # macOS aarch64 — TCC / GCC / Clang + MySQL (Homebrew)
+  # ============================================================
+  macos-mysql:
+    runs-on: macos-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-macos-aarch64.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-macos-aarch64.zip
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [tcc, gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps & MySQL
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then brew install gcc; fi
+          brew install mysql
+          brew services start mysql
+          # 等待 MySQL 就绪
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -uroot --silent 2>/dev/null; then
+              echo "MySQL is ready (empty password)"
+              break
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+          # 设置 root 密码为 root (统一与 Linux/Windows 一致)
+          mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
+          mysql -uroot -proot -e "SELECT VERSION();"
+
+      - name: Add TCC
+        run: |
+          curl -fsSL -o tcc.zip "$TCC_URL"
+          unzip -q tcc.zip
+          chmod +x tcc/tcc
+          ./tcc/tcc -v
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: Test (${{ matrix.compiler }})
+        run: |
+          ccFlag=""
+          if [ "${{ matrix.compiler }}" != "tcc" ]; then ccFlag="-cc ${{ matrix.compiler }}"; fi
+          ./php tphp.php test/pdo_mysql/pdo_mysql_integration.php --debug $ccFlag \
+            -o build/test_pdo_mysql_integration.exe

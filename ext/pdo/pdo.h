@@ -447,3 +447,210 @@ static inline t_string tphp_fn_pdo_quote(const char *s) {
     sqlite3_free(quoted);
     return result;
 }
+
+// ============================================================
+// SQLite Driver 实现（pdo_driver_t 接口）
+//
+// 将现有 sqlite3_* 调用包装为 driver 接口函数
+// 用 constructor 自动注册到全局 driver 表
+// ============================================================
+
+#include "pdo_driver.h"
+
+// ── _pdo_sqlite_open: 打开数据库 ──
+//
+// 失败处理契约（与 pdo_driver_open 配合）：
+//   - 失败时 *dbh = db（不 close），返回 -1
+//   - 错误信息可通过 sqlite3_errmsg(db) 查询
+//   - pdo_driver_open 调用 drv->errmsg(dbh) 读取后调用 drv->close(dbh) 释放
+static int _pdo_sqlite_open(const char* dsn, int flags, const char* user, const char* pass, void** dbh) {
+    (void)user; (void)pass;  // SQLite 不使用用户名/密码
+    if (dsn == NULL || dbh == NULL) return -1;
+    *dbh = NULL;
+    // 解析 "sqlite:" 前缀
+    if (strncasecmp(dsn, "sqlite:", 7) != 0) return -1;
+    const char* path = dsn + 7;
+    if (*path == '\0') return -1;
+    sqlite3* db = NULL;
+    int rc = sqlite3_open_v2(path, &db, flags | SQLITE_OPEN_URI, NULL);
+    if (rc != SQLITE_OK) {
+        // 保留 db 供 driver 读取错误信息（sqlite3_errmsg 即使在打开失败时也有效）
+        *dbh = db;
+        return -1;
+    }
+    *dbh = db;
+    return 0;
+}
+
+// ── _pdo_sqlite_close: 关闭数据库 ──
+static void _pdo_sqlite_close(void* dbh) {
+    if (dbh) sqlite3_close_v2((sqlite3*)dbh);
+}
+
+// ── _pdo_sqlite_exec: 执行无结果集 SQL ──
+static int _pdo_sqlite_exec(void* dbh, const char* sql) {
+    if (dbh == NULL || sql == NULL) return -1;
+    char* err = NULL;
+    int rc = sqlite3_exec((sqlite3*)dbh, sql, NULL, NULL, &err);
+    if (rc != SQLITE_OK) {
+        if (err) sqlite3_free(err);
+        return -1;
+    }
+    return (int)sqlite3_changes((sqlite3*)dbh);
+}
+
+// ── _pdo_sqlite_prepare: 预处理 SQL ──
+static int _pdo_sqlite_prepare(void* dbh, const char* sql, void** stmt) {
+    if (dbh == NULL || sql == NULL || stmt == NULL) return -1;
+    sqlite3_stmt* s = NULL;
+    int rc = sqlite3_prepare_v2((sqlite3*)dbh, sql, -1, &s, NULL);
+    if (rc != SQLITE_OK) return -1;
+    *stmt = s;
+    return 0;
+}
+
+// ── 绑定函数 ──
+static int _pdo_sqlite_bind_int(void* stmt, int idx, int64_t val) {
+    return sqlite3_bind_int64((sqlite3_stmt*)stmt, idx, val);
+}
+static int _pdo_sqlite_bind_text(void* stmt, int idx, const char* val, int len) {
+    return sqlite3_bind_text((sqlite3_stmt*)stmt, idx, val, len, SQLITE_TRANSIENT);
+}
+static int _pdo_sqlite_bind_blob(void* stmt, int idx, const char* data, int len) {
+    return sqlite3_bind_blob((sqlite3_stmt*)stmt, idx, data, len, SQLITE_TRANSIENT);
+}
+static int _pdo_sqlite_bind_null(void* stmt, int idx) {
+    return sqlite3_bind_null((sqlite3_stmt*)stmt, idx);
+}
+static int _pdo_sqlite_bind_param_index(void* stmt, const char* name) {
+    return (int)sqlite3_bind_parameter_index((sqlite3_stmt*)stmt, name);
+}
+
+// ── 执行 & 游标控制 ──
+static int _pdo_sqlite_step(void* stmt) {
+    return sqlite3_step((sqlite3_stmt*)stmt);
+}
+static int _pdo_sqlite_reset(void* stmt) {
+    return sqlite3_reset((sqlite3_stmt*)stmt);
+}
+static int _pdo_sqlite_clear_bindings(void* stmt) {
+    return sqlite3_clear_bindings((sqlite3_stmt*)stmt);
+}
+static int _pdo_sqlite_finalize(void* stmt) {
+    return sqlite3_finalize((sqlite3_stmt*)stmt);
+}
+
+// ── 列信息 ──
+static int _pdo_sqlite_column_count(void* stmt) {
+    return sqlite3_column_count((sqlite3_stmt*)stmt);
+}
+static int _pdo_sqlite_column_type(void* stmt, int col) {
+    return sqlite3_column_type((sqlite3_stmt*)stmt, col);
+}
+static int64_t _pdo_sqlite_column_int64(void* stmt, int col) {
+    return (int64_t)sqlite3_column_int64((sqlite3_stmt*)stmt, col);
+}
+static double _pdo_sqlite_column_double(void* stmt, int col) {
+    return sqlite3_column_double((sqlite3_stmt*)stmt, col);
+}
+static const char* _pdo_sqlite_column_text(void* stmt, int col) {
+    return (const char*)sqlite3_column_text((sqlite3_stmt*)stmt, col);
+}
+static int _pdo_sqlite_column_bytes(void* stmt, int col) {
+    return sqlite3_column_bytes((sqlite3_stmt*)stmt, col);
+}
+static const char* _pdo_sqlite_column_name(void* stmt, int col) {
+    return sqlite3_column_name((sqlite3_stmt*)stmt, col);
+}
+static const char* _pdo_sqlite_column_decltype(void* stmt, int col) {
+    return sqlite3_column_decltype((sqlite3_stmt*)stmt, col);
+}
+static int _pdo_sqlite_data_count(void* stmt) {
+    return sqlite3_data_count((sqlite3_stmt*)stmt);
+}
+
+// ── 连接信息 ──
+static int64_t _pdo_sqlite_changes(void* dbh) {
+    return (int64_t)sqlite3_changes((sqlite3*)dbh);
+}
+static int64_t _pdo_sqlite_last_insert_rowid(void* dbh) {
+    return (int64_t)sqlite3_last_insert_rowid((sqlite3*)dbh);
+}
+static int _pdo_sqlite_errcode(void* dbh) {
+    return sqlite3_errcode((sqlite3*)dbh);
+}
+static const char* _pdo_sqlite_errmsg(void* dbh) {
+    return dbh ? sqlite3_errmsg((sqlite3*)dbh) : "no database connection";
+}
+static int _pdo_sqlite_busy_timeout(void* dbh, int ms) {
+    return sqlite3_busy_timeout((sqlite3*)dbh, ms);
+}
+static void _pdo_sqlite_extended_result_codes(void* dbh, int on) {
+    sqlite3_extended_result_codes((sqlite3*)dbh, on);
+}
+
+// ── 转义 ──
+static char* _pdo_sqlite_quote(const char* s) {
+    return s ? sqlite3_mprintf("%Q", s) : NULL;
+}
+static void _pdo_sqlite_free_quote(char* s) {
+    if (s) sqlite3_free(s);
+}
+
+// ── 驱动元信息 ──
+static const char* _pdo_sqlite_driver_name(void) {
+    return "sqlite";
+}
+static const char* _pdo_sqlite_server_version(void* dbh) {
+    (void)dbh;
+    return sqlite3_libversion();
+}
+
+// ── SQLite 驱动实例（函数指针表）──
+static const pdo_driver_t pdo_sqlite_driver = {
+    .name                 = "sqlite",
+    .open                 = _pdo_sqlite_open,
+    .close                = _pdo_sqlite_close,
+    .exec                 = _pdo_sqlite_exec,
+    .prepare              = _pdo_sqlite_prepare,
+    .bind_int             = _pdo_sqlite_bind_int,
+    .bind_text            = _pdo_sqlite_bind_text,
+    .bind_blob            = _pdo_sqlite_bind_blob,
+    .bind_null            = _pdo_sqlite_bind_null,
+    .bind_param_index     = _pdo_sqlite_bind_param_index,
+    .step                 = _pdo_sqlite_step,
+    .reset                = _pdo_sqlite_reset,
+    .clear_bindings       = _pdo_sqlite_clear_bindings,
+    .finalize             = _pdo_sqlite_finalize,
+    .column_count         = _pdo_sqlite_column_count,
+    .column_type          = _pdo_sqlite_column_type,
+    .column_int64         = _pdo_sqlite_column_int64,
+    .column_double        = _pdo_sqlite_column_double,
+    .column_text          = _pdo_sqlite_column_text,
+    .column_bytes         = _pdo_sqlite_column_bytes,
+    .column_name          = _pdo_sqlite_column_name,
+    .column_decltype      = _pdo_sqlite_column_decltype,
+    .data_count           = _pdo_sqlite_data_count,
+    .changes              = _pdo_sqlite_changes,
+    .last_insert_rowid    = _pdo_sqlite_last_insert_rowid,
+    .errcode              = _pdo_sqlite_errcode,
+    .errmsg               = _pdo_sqlite_errmsg,
+    .busy_timeout         = _pdo_sqlite_busy_timeout,
+    .extended_result_codes = _pdo_sqlite_extended_result_codes,
+    .quote                = _pdo_sqlite_quote,
+    .free_quote           = _pdo_sqlite_free_quote,
+    .driver_name          = _pdo_sqlite_driver_name,
+    .server_version       = _pdo_sqlite_server_version,
+};
+
+// ── 自动注册 SQLite 驱动 ──
+//   constructor 属性确保在 main 之前执行
+//   Windows 下 _Ctor 在 DllMain 或 main 之前调用
+#ifdef _WIN32
+__attribute__((constructor))
+#else
+__attribute__((constructor))
+#endif
+static void _pdo_sqlite_register(void) {
+    pdo_register_driver(&pdo_sqlite_driver);
+}

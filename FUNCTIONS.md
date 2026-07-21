@@ -30,12 +30,14 @@
 | `include/fileinfo` (MIME 检测) | `fileinfo.h` | 6 |
 | `ext/stream` (socket stream) | `ext/stream/src/stream.h` | 21 |
 | `ext/openssl` (TLS/加密) | `ext/openssl/src/openssl.h` | 21 |
-| `ext/pdo` (SQLite 数据库) | `ext/pdo/pdo.h` + `ext/pdo/src/pdo.php` | 33 |
+| `ext/pdo` (PDO 统一 API + SQLite 驱动) | `ext/pdo/pdo.h` + `ext/pdo/src/pdo.php` | 33 |
+| `ext/pdo_mysql` (MySQL 驱动，纯 C 协议) | `ext/pdo_mysql/pdo_mysql.h` | 0（复用 PDO API） |
+| `ext/sqlite3` (函数式 SQLite) | `ext/sqlite3/sqlite3.h` + `ext/sqlite3/src/sqlite3.php` | 11 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **378+** |
+| **合计** | | **389+** |
 
 ---
 
@@ -1490,16 +1492,25 @@ echo openssl_digest("sha256", "hello");  // 2cf24dba5fb0a30e...
 
 ---
 
-## pdo — SQLite 数据库
+## pdo — 数据库（PDO 统一 API）
 
 > 文件: `ext/pdo/pdo.h` + `ext/pdo/src/pdo.php`。按需引入 `#import pdo`。
+> 同时使用 MySQL 时追加 `#import pdo_mysql`（自动按 DSN 前缀分发到对应驱动）。
 >
-> **SQLite 驱动**（仅支持此一种驱动），SQLite amalgamation 3.46.0 静态编译
-> （`include/os/sqlite_src/sqlite3.c`），零运行时依赖。
+> **已实现驱动**：
+> - **SQLite 驱动**（默认）：SQLite amalgamation 3.46.0 静态编译（`include/os/sqlite_src/sqlite3.c`），零运行时依赖。
+> - **MySQL 驱动**：纯 C 协议实现（`ext/pdo_mysql/pdo_mysql.h`，约 1644 行），零外部依赖，
+>   认证 `mysql_native_password`（SHA1），协议为文本协议（COM_QUERY），不支持 SSL/TLS/Unix socket。
+>   详见 [EXT_IMPLEMENTATION.md §13](EXT_IMPLEMENTATION.md#13-mysql-✅-已完成)。
+>
+> **Driver 抽象架构**：`ext/pdo/pdo_driver.h` 定义 `pdo_driver_t` 函数指针表接口，
+> 每个驱动实现该接口并通过 C constructor 自动注册。PDO/PDOStatement 类所有 C 调用
+> 通过 `pdo_driver_*` 包装函数分发，PHP 用户层 API 完全不变。
+>
 > **AOT 类型安全**：所有方法参数/返回值使用 tphp 具体类型（int/string/array/bool），
 > 不使用 `mixed`/`t_var`（会触发运行时类型分发，违反 AOT 编译期类型解析原则）。
-> **指针 ↔ int 桥接**：sqlite3\*/sqlite3_stmt\* 指针以 `t_int` 存储在 PHP 类字段中，
-> 方法内部用 `phpc_int_to_ptr` 转回 `C.void*` 调用 SQLite C API。
+> **指针 ↔ int 桥接**：`sqlite3*`/`mysql_conn_t*`/`sqlite3_stmt*`/`mysql_stmt_t*` 等指针
+> 以 `t_int` 存储在 PHP 类字段中，方法内部用 `phpc_int_to_ptr` 转回 `C.void*` 调用 driver C API。
 > **错误处理**：所有错误抛 `Exception`（`tp_throw_ex`），可被 `try-catch` 捕获，不静默返回 false。
 > **多态拆分**：PHP 原生使用 `mixed` 的方法按类型拆分为多个具体签名
 > （`bindValueInt`/`bindValueStr`/`bindValueNamedInt`/`bindValueNamedStr`，
@@ -1507,6 +1518,8 @@ echo openssl_digest("sha256", "hello");  // 2cf24dba5fb0a30e...
 > `fetchColumnStr`/`fetchColumnInt`）。
 > **fetch 语义**：`fetch()` 始终返回 `array`（取完返回 `[]`，用 `fetchDone()` 检测是否取完），
 > 所有列值统一转为 string（int/float/null 内部转换）。
+> **MySQL 文本协议适配**：MySQL 文本协议所有列值都是字符串，
+> `fetchColumnInt` 内部用 `strtoll` 将 TEXT 列转换为整数（适用于 `COUNT(*)` 等）。
 > `|Exception` 返回类型为纯语法提示，C 代码只生成 `|` 前的类型。
 
 ### 常量
@@ -1703,9 +1716,183 @@ $count = $pdo->query("SELECT COUNT(*) FROM t")->fetchColumnInt(0);
 echo $count;  // 2
 ```
 
-> 测试: `test/pdo/pdo_basic.php`（19 节覆盖连接/exec/prepare/位置绑定/命名绑定/execute(array)/
-> fetch 模式/fetchAll/fetchColumn/事务/lastInsertId/rowCount/quote/getAttribute/setAttribute/
-> errorCode/getColumnMeta/closeCursor 复用/错误处理/静态方法/NULL/float 列）全部通过。
+```php
+// MySQL 驱动示例（纯 C 协议实现，零外部依赖）
+#import pdo
+#import pdo_mysql
+
+$pdo = new PDO("mysql:host=127.0.0.1;port=3306;dbname=test", "root", "secret");
+
+// 建表
+$pdo->exec("CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    age INT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+// 预处理 + 位置绑定（MySQL 文本协议模拟预处理）
+$stmt = $pdo->prepare("INSERT INTO users (name, age) VALUES (?, ?)");
+$stmt->bindValueStr(1, "Alice");
+$stmt->bindValueInt(2, 30);
+$stmt->execute();
+echo $pdo->lastInsertId();  // 自增 ID
+
+// fetchColumnInt 适用于 COUNT(*)（MySQL 文本协议 + strtoll 自动转换）
+$count = $pdo->query("SELECT COUNT(*) FROM users", PDO::FETCH_NUM)->fetchColumnInt(0);
+
+// 事务
+$pdo->beginTransaction();
+$pdo->exec("UPDATE users SET age = 31 WHERE id = 1");
+$pdo->commit();
+
+// 错误处理（可 try-catch，错误消息由 MySQL 服务器返回）
+try {
+    $pdo->exec("SELECT * FROM nonexistent_table");
+} catch (Exception $e) {
+    echo $e->getMessage();  // "PDO::exec: Table 'test.nonexistent_table' doesn't exist"
+}
+```
+
+> 测试:
+> - `test/pdo/pdo_basic.php`（19 节覆盖连接/exec/prepare/位置绑定/命名绑定/execute(array)/
+>   fetch 模式/fetchAll/fetchColumn/事务/lastInsertId/rowCount/quote/getAttribute/setAttribute/
+>   errorCode/getColumnMeta/closeCursor 复用/错误处理/静态方法/NULL/float 列）全部通过。
+> - `test/pdo_mysql/pdo_mysql_integration.php`（11 节覆盖连接/建库建表/插入/
+>   FETCH_ASSOC 查询/位置绑定 Int+Str/COUNT(*) fetchColumnInt/事务/错误处理/quote/清理）
+>   全部通过（MySQL 8.0.12）。
+
+---
+
+## sqlite3 — SQLite 数据库（函数式 API）
+
+> 文件: `ext/sqlite3/sqlite3.h` + `ext/sqlite3/src/sqlite3.php`。按需引入 `#import sqlite3`。
+>
+> **函数式 API**（不使用 OO，避免类型多态开销），与 `ext/pdo` 共享同一份 SQLite amalgamation 3.46.0 静态编译
+> （`include/os/sqlite_src/sqlite3.c`），零运行时依赖。
+> **AOT 类型安全**：所有函数参数/返回值使用 tphp 具体类型（int/string/array/bool）。
+> **指针 ↔ int 桥接**：`sqlite3*` 指针以 `int` 存储在 PHP 变量中，
+> C 包装函数内部用 `(sqlite3*)(intptr_t)` 转换。
+> **错误处理**：I/O 错误抛 `Exception`（`tp_throw_ex`），可被 `try-catch` 捕获，不静默返回 false。
+> **查询结果**：`sqlite_query` 返回 `array<array<string>>`（外层是行，内层是列值字符串），
+> int/float/null/blob 统一转为 string。
+> **NULL 语义**：NULL 值返回空字符串 `""`（AOT 无 `mixed`，无法区分 NULL 和空串）。
+
+### 常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `SQLITE3_ASSOC` | 1 | `sqlite_query` 返回关联数组 |
+| `SQLITE3_NUM` | 2 | `sqlite_query` 返回索引数组 |
+| `SQLITE3_BOTH` | 3 | `sqlite_query` 返回索引+关联（默认） |
+| `SQLITE3_INTEGER` | 1 | 列类型：整数 |
+| `SQLITE3_FLOAT` | 2 | 列类型：浮点 |
+| `SQLITE3_TEXT` | 3 | 列类型：文本 |
+| `SQLITE3_BLOB` | 4 | 列类型：BLOB |
+| `SQLITE3_NULL` | 5 | 列类型：NULL |
+| `SQLITE3_OPEN_READONLY` | 1 | 只读打开 |
+| `SQLITE3_OPEN_READWRITE` | 2 | 读写打开 |
+| `SQLITE3_OPEN_CREATE` | 4 | 不存在则创建（默认组合：6 = READWRITE\|CREATE） |
+
+### 函数
+
+#### `sqlite_open`
+
+```php
+function sqlite_open(string $filename, int $flags = 6, string $enc_key = ""): int
+```
+
+打开/创建 SQLite 数据库。`$filename = ":memory:"` 创建内存数据库。
+失败抛 `Exception`，成功返回数据库句柄（`sqlite3*` 指针的 int 形式）。
+
+#### `sqlite_close`
+
+```php
+function sqlite_close(int $db): void
+```
+
+关闭数据库连接（调用 `sqlite3_close_v2`）。
+
+#### `sqlite_exec`
+
+```php
+function sqlite_exec(int $db, string $sql): bool
+```
+
+执行不返回结果的 SQL（CREATE/INSERT/UPDATE/DELETE 等）。
+失败抛 `Exception`，成功返回 `true`。
+
+#### `sqlite_query`
+
+```php
+function sqlite_query(int $db, string $sql, int $mode = 3): array
+```
+
+执行 SELECT 查询，返回所有行。
+`$mode`：`SQLITE3_ASSOC`(1) / `SQLITE3_NUM`(2) / `SQLITE3_BOTH`(3, 默认)。
+返回 `array<array<string>>`，外层是行，内层是列值（统一 string）。
+失败抛 `Exception`。
+
+#### `sqlite_query_single`
+
+```php
+function sqlite_query_single(int $db, string $sql, int $mode = 3): array
+```
+
+执行 SELECT 查询，只返回第一行。
+无结果返回空数组 `[]`（不抛异常），适合 `COUNT(*)`/`LIMIT 1`。
+失败抛 `Exception`。
+
+#### `sqlite_escape_string`
+
+```php
+function sqlite_escape_string(string $str): string
+```
+
+转义 SQL 字符串（单引号翻倍为 `''`，使用 `sqlite3_mprintf %q`）。
+返回不带引号的转义字符串（如 `O'Brien` → `O''Brien`）。
+
+#### `sqlite_changes`
+
+```php
+function sqlite_changes(int $db): int
+```
+
+返回最近一次 INSERT/UPDATE/DELETE 影响的行数。
+
+#### `sqlite_last_insert_rowid`
+
+```php
+function sqlite_last_insert_rowid(int $db): int
+```
+
+返回最近一次 INSERT 的 rowid。
+
+#### `sqlite_last_error_msg`
+
+```php
+function sqlite_last_error_msg(int $db): string
+```
+
+返回最近一次错误的消息（调用 `sqlite3_errmsg`，如 `"not an error"` 表示无错误）。
+
+#### `sqlite_last_error_code`
+
+```php
+function sqlite_last_error_code(int $db): int
+```
+
+返回最近一次错误的码（`SQLITE_OK=0` 表示无错误）。
+
+#### `sqlite_version`
+
+```php
+function sqlite_version(): string
+```
+
+返回 SQLite 库版本字符串（如 `"3.46.0"`）。
+
+> 测试: `test/sqlite3/sqlite3_basic.php`（13 节覆盖 open/exec/query(ASSOC/NUM/BOTH)/query_single/
+> changes/last_insert_rowid/error_info/escape_string/NULL/float/BLOB/错误处理/close 重开）全部通过。
 
 ---
 
