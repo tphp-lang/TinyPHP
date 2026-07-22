@@ -33,45 +33,20 @@ jobs:
       - name: Install MariaDB
         shell: pwsh
         run: |
-          # MySQL 镜像站已停止同步 MySQL 8.0, 改用 MariaDB
-          # MariaDB 默认使用 mysql_native_password, 无需插件配置
-          # MariaDB 兼容 MySQL 协议, 纯 C 客户端可直接连接
-          $mariaVer = "10.11.11"
-          $mariaZip = "mariadb-$mariaVer-winx64.zip"
-          $mirrors = @(
-            "https://archive.mariadb.org/mariadb-$mariaVer/winx64-packages/$mariaZip",
-            "https://mirror.mariadb.org/mariadb/mariadb-$mariaVer/winx64-packages/$mariaZip"
-          )
-          $downloaded = $false
-          foreach ($url in $mirrors) {
-            Write-Host "Trying: $url"
-            # 用 curl 替代 Invoke-WebRequest (下载更快, 无进度条噪音)
-            & curl -fsSL --connect-timeout 30 --max-time 600 -o $mariaZip $url
-            if ($LASTEXITCODE -eq 0 -and (Test-Path $mariaZip) -and (Get-Item $mariaZip).Length -gt 1MB) {
-              $downloaded = $true
-              Write-Host "Downloaded from: $url"
-              break
-            }
-            Write-Host "Failed: curl exit code $LASTEXITCODE"
-          }
-          if (-not $downloaded) { throw "All mirrors failed to download MariaDB" }
-          Expand-Archive -Path $mariaZip -DestinationPath C:\mariadb -Force
-          $srcDir = Get-ChildItem -Path C:\mariadb -Directory | Select-Object -First 1
-          if ($srcDir.Name -ne "current") {
-            Rename-Item $srcDir.FullName "current"
-          }
-          $mariaBin = "C:\mariadb\current\bin"
-          $env:PATH += ";$mariaBin"
-          # mariadb-install-db.exe 一步完成: 初始化数据目录 + 注册 Windows 服务 + 设置 root 密码
-          #   --service=MySQL  → 注册名为 "MySQL" 的 Windows 服务
-          #   --password=root  → root 密码设为 "root"
-          & "$mariaBin\mariadb-install-db.exe" --datadir="C:/mariadb/current/data" --service=MySQL --password=root 2>&1
+          # 使用 Chocolatey 安装 MariaDB（比直连 archive.mariadb.org 稳定，choco 有 CDN + 重试机制）
+          # MariaDB 兼容 MySQL 协议，纯 C 客户端可直接连接
+          choco install mariadb -y --no-progress --version=10.11.11
+          # 刷新 PATH（choco 安装后当前 shell 不会自动更新）
+          $env:PATH += ";C:\Program Files\MariaDB 10.11\bin"
+          $mariaBin = "C:\Program Files\MariaDB 10.11\bin"
+          # 初始化数据目录 + 注册 Windows 服务 + 设置 root 密码
+          & "$mariaBin\mariadb-install-db.exe" --datadir="C:/Program Files/MariaDB 10.11/data" --service=MySQL --password=root 2>&1
           # 启动服务
           Start-Service MySQL
           # 等待就绪
           for ($i = 1; $i -le 30; $i++) {
             try {
-              $result = & mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT 1" 2>&1
+              $result = & "$mariaBin\mysql.exe" -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT 1" 2>&1
               if ($LASTEXITCODE -eq 0) {
                 Write-Host "MariaDB is ready"
                 break
@@ -80,7 +55,7 @@ jobs:
             Write-Host "Waiting for MariaDB... ($i/30)"
             Start-Sleep -Seconds 2
           }
-          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
+          & "$mariaBin\mysql.exe" -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
 
       - name: Add TCC
         shell: pwsh
