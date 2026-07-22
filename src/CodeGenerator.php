@@ -81,6 +81,8 @@ class CodeGenerator implements ASTVisitor
     private array $annotationRegistry = [];
     /** 注解初始化函数列表（generateCEntry 中调用） */
     private array $annotationInitFns = [];
+    /** 已导入的 PDO 驱动 C init 函数列表（在 main() 入口自动调用，类似 PHP MINIT） */
+    private array $pdoDriverInits = [];
     /** 变量 → 注解常量名追踪（foreach 遍历注解数组时，记录 $v 来自哪个注解常量） */
     private array $varAnnotSource = [];
 
@@ -244,7 +246,6 @@ class CodeGenerator implements ASTVisitor
         //   void 返回类型无需注册：pdo_driver_close/reset/clear_bindings/finalize
         //                              /busy_timeout/extended_result_codes/bind_params
         'pdo_driver_find' => 't_int',
-        'pdo_mysql_init' => 't_int',
         'pdo_driver_open' => 't_int',
         'pdo_driver_exec' => 't_int',
         'pdo_driver_prepare' => 't_int',
@@ -727,6 +728,15 @@ class CodeGenerator implements ASTVisitor
                 $userIncAfter[] = $inc;
             } else {
                 $userIncBefore[] = $inc;
+            }
+        }
+        // 检测已导入的 PDO 驱动扩展，记录 C init 函数（在 main() 入口自动调用）
+        //   类似 PHP MINIT：用户只需 #import pdo_mysql，CodeGenerator 自动注入注册调用
+        //   不依赖 __attribute__((constructor))（部分 TCC 版本会死代码消除）
+        foreach ($userIncAfter as $inc) {
+            $f = str_replace('\\', '/', is_array($inc) ? ($inc['file'] ?? '') : $inc);
+            if (str_contains($f, 'pdo_mysql/pdo_mysql.h')) {
+                $this->pdoDriverInits[] = 'tphp_fn_pdo_mysql_init';
             }
         }
         foreach ($userIncBefore as $inc) {
@@ -7858,6 +7868,10 @@ class CodeGenerator implements ASTVisitor
             "int main(int argc, char* argv[]) {",
             $this->ind("tphp_rt_init();"),
         ];
+        // PDO 驱动自动注册（类似 PHP MINIT，在用户代码之前）
+        foreach ($this->pdoDriverInits as $initFn) {
+            $lines[] = $this->ind("{$initFn}();");
+        }
         // 注解常量初始化（在用户代码之前填充）
         foreach ($this->annotationInitFns as $initFn) {
             $lines[] = $this->ind("{$initFn}();");
