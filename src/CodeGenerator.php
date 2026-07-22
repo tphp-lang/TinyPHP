@@ -4268,6 +4268,36 @@ class CodeGenerator implements ASTVisitor
         };
     }
 
+    /**
+     * 检测闭包体内是否引用了 $this（不递归进入嵌套闭包）。
+     * 闭包内 $this->prop 会被编译为 self->prop，需要把 self 指针
+     * 作为隐式捕获变量传入，否则 C 编译报 'self' undeclared。
+     */
+    private function closureUsesThis(array $body): bool
+    {
+        foreach ($body as $stmt) {
+            if ($this->astContainsThis($stmt)) return true;
+        }
+        return false;
+    }
+
+    private function astContainsThis(object $node): bool
+    {
+        if ($node instanceof VariableExpr && $node->name === '$this') return true;
+        // 不递归进入嵌套闭包（嵌套闭包的 $this 由自身捕获）
+        if ($node instanceof ClosureExpr) return false;
+        foreach ((array)$node as $prop) {
+            if (is_array($prop)) {
+                foreach ($prop as $item) {
+                    if (is_object($item) && $this->astContainsThis($item)) return true;
+                }
+            } elseif (is_object($prop)) {
+                if ($this->astContainsThis($prop)) return true;
+            }
+        }
+        return false;
+    }
+
     public function visitClosure(ClosureExpr $node): string
     {
         if ($node->isGenerator) {
@@ -4278,6 +4308,10 @@ class CodeGenerator implements ASTVisitor
         $capName = "_cap_{$id}";
         $hasCapture = !empty($node->useVars);
         $ret = self::mapType($node->returnType);
+
+        // 检测闭包内是否使用 $this：若是，把 self 作为隐式捕获变量
+        // （闭包体中 $this->prop 编译为 self->prop，需要 self 指针可用）
+        $usesThis = ($this->className !== '') && $this->closureUsesThis($node->body);
 
         // 查询捕获变量的类型（外层作用域）
         $capFields = [];
@@ -4296,6 +4330,15 @@ class CodeGenerator implements ASTVisitor
             $capInits[]   = "    .{$vn} = {$vn}";
             $capDecls[]   = "    {$ct} {$vn} = _e->{$vn};";
             $capAssigns[] = "    _env_{$id}->{$vn} = {$vn};";
+        }
+        // $this 隐式捕获：把当前类 self 指针加入 _cap_N 结构
+        if ($usesThis) {
+            $selfCType = $this->className . '*';
+            $capFields[]  = "    {$selfCType} self;";
+            $capInits[]   = "    .self = self";
+            $capDecls[]   = "    {$selfCType} self = _e->self;";
+            $capAssigns[] = "    _env_{$id}->self = self;";
+            $hasCapture = true;
         }
 
         $paramDecls = array_map(fn($p) => $this->visitParam($p), $node->params);
@@ -4336,6 +4379,11 @@ class CodeGenerator implements ASTVisitor
                 $this->declaredVars[$vn] = true;
                 $ct = $savedTypes[$vn] ?? 't_int';
                 $this->varTypes[$vn] = ($ct === 'null') ? 'void*' : $ct;
+            }
+            // $this 隐式捕获：在闭包内设置 self 的类型，供 inferType 使用
+            if ($usesThis) {
+                $this->declaredVars['self'] = true;
+                $this->varTypes['self'] = $this->className . '*';
             }
         } else {
             $implLines[] = '    (void)_env;';
@@ -4419,6 +4467,9 @@ class CodeGenerator implements ASTVisitor
         $entryName = "tphp_gen_{$name}_entry";
         $hasCapture = !empty($node->useVars);
 
+        // 检测闭包内是否使用 $this：若是，把 self 作为隐式捕获变量
+        $usesThis = ($this->className !== '') && $this->closureUsesThis($node->body);
+
         // 查询捕获变量的类型（外层作用域）
         $capFields = [];
         $capInits  = [];
@@ -4437,6 +4488,16 @@ class CodeGenerator implements ASTVisitor
             $capInits[]   = "    .{$vn} = {$vn}";
             $capDecls[]   = "    {$ct} {$vn} = _e->{$vn};";
             $capAssigns[] = "    _env_{$id}->{$vn} = {$vn};";
+        }
+        // $this 隐式捕获：把当前类 self 指针加入 _cap_N 结构
+        if ($usesThis) {
+            $selfCType = $this->className . '*';
+            $capTypes['self'] = $selfCType;
+            $capFields[]  = "    {$selfCType} self;";
+            $capInits[]   = "    .self = self";
+            $capDecls[]   = "    {$selfCType} self = _e->self;";
+            $capAssigns[] = "    _env_{$id}->self = self;";
+            $hasCapture = true;
         }
 
         // 保存外层状态
@@ -4481,6 +4542,12 @@ class CodeGenerator implements ASTVisitor
                 $this->varTypes[$vn] = $capTypes[$vn];
                 $paramVars[$vn] = true;
             }
+            // $this 隐式捕获：在闭包内设置 self 的类型
+            if ($usesThis) {
+                $this->declaredVars['self'] = true;
+                $this->varTypes['self'] = $this->className . '*';
+                $paramVars['self'] = true;
+            }
         }
 
         // 解包：从 user_data 复制到局部变量
@@ -4493,6 +4560,10 @@ class CodeGenerator implements ASTVisitor
         if ($hasCapture) {
             foreach ($node->useVars as [$vn, $_]) {
                 $unpackLines[] = "    {$vn} = _p->{$vn};";
+            }
+            // $this 隐式捕获：从 _p 解包 self 指针（声明在 $capFields 中，这里只赋值）
+            if ($usesThis) {
+                $unpackLines[] = "    self = _p->self;";
             }
         }
         $unpackLines[] = '    free(_p);';
@@ -4573,6 +4644,10 @@ class CodeGenerator implements ASTVisitor
             $unpackEnv[] = "    {$capName}* _e = ({$capName}*)_env;";
             foreach ($node->useVars as [$vn, $_]) {
                 $packAssigns[] = "    _p->{$vn} = _e->{$vn};";
+            }
+            // $this 隐式捕获：从 _e 复制 self 指针到 _p
+            if ($usesThis) {
+                $packAssigns[] = "    _p->self = _e->self;";
             }
         }
         $wrapperLines = array_merge(
