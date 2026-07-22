@@ -30,24 +30,23 @@ jobs:
             mingw-w64-x86_64-clang
             mingw-w64-x86_64-make
 
-      - name: Install MySQL
+      - name: Install MariaDB
         shell: pwsh
         run: |
-          # choco 安装 MySQL 在 runner 上经常超时, 改用官方 ZIP 包手动安装
-          # dev.mysql.com 不稳定, 使用镜像源下载
-          $mysqlVer = "8.0.42"
-          $mysqlZip = "mysql-$mysqlVer-winx64.zip"
+          # MySQL 镜像站已停止同步 MySQL 8.0, 改用 MariaDB
+          # MariaDB 默认使用 mysql_native_password, 无需插件配置
+          # MariaDB 兼容 MySQL 协议, 纯 C 客户端可直接连接
+          $mariaVer = "10.11.11"
+          $mariaZip = "mariadb-$mariaVer-winx64.zip"
           $mirrors = @(
-            "https://mirrors.tuna.tsinghua.edu.cn/mysql/downloads/MySQL-8.0/$mysqlZip",
-            "https://repo.huaweicloud.com/mysql/Downloads/MySQL-8.0/$mysqlZip",
-            "https://mirrors.aliyun.com/mysql/MySQL-8.0/$mysqlZip",
-            "https://dev.mysql.com/get/Downloads/MySQL-8.0/$mysqlZip"
+            "https://archive.mariadb.org/mariadb-$mariaVer/winx64-packages/$mariaZip",
+            "https://mirror.mariadb.org/mariadb/mariadb-$mariaVer/winx64-packages/$mariaZip"
           )
           $downloaded = $false
           foreach ($url in $mirrors) {
             Write-Host "Trying: $url"
             try {
-              Invoke-WebRequest -Uri $url -OutFile $mysqlZip -TimeoutSec 120
+              Invoke-WebRequest -Uri $url -OutFile $mariaZip -TimeoutSec 180
               $downloaded = $true
               Write-Host "Downloaded from: $url"
               break
@@ -55,44 +54,40 @@ jobs:
               Write-Host "Failed: $($_.Exception.Message)"
             }
           }
-          if (-not $downloaded) { throw "All mirrors failed to download MySQL" }
-          Expand-Archive -Path $mysqlZip -DestinationPath C:\mysql -Force
-          # 重命名目录 (避免版本号变化导致路径变动)
-          $srcDir = Get-ChildItem -Path C:\mysql -Directory | Select-Object -First 1
+          if (-not $downloaded) { throw "All mirrors failed to download MariaDB" }
+          Expand-Archive -Path $mariaZip -DestinationPath C:\mariadb -Force
+          $srcDir = Get-ChildItem -Path C:\mariadb -Directory | Select-Object -First 1
           if ($srcDir.Name -ne "current") {
             Rename-Item $srcDir.FullName "current"
           }
-          $mysqlBin = "C:\mysql\current\bin"
-          $env:PATH += ";$mysqlBin"
-          # 生成 my.ini (启用 mysql_native_password 插件)
+          $mariaBin = "C:\mariadb\current\bin"
+          $env:PATH += ";$mariaBin"
+          # 生成 my.ini (MariaDB 无需 mysql_native_password=ON, 默认即为该插件)
           $myini = @"
           [mysqld]
-          mysql_native_password=ON
           port=3306
-          basedir=C:/mysql/current
-          datadir=C:/mysql/current/data
+          basedir=C:/mariadb/current
+          datadir=C:/mariadb/current/data
           "@
-          Set-Content -Path "C:\mysql\current\my.ini" -Value $myini
-          # 初始化数据目录 (不生成随机密码)
-          & "$mysqlBin\mysqld.exe" --defaults-file="C:\mysql\current\my.ini" --initialize-insecure --console
+          Set-Content -Path "C:\mariadb\current\my.ini" -Value $myini
+          # 初始化数据目录 (MariaDB 使用 mariadb-install-db)
+          & "$mariaBin\mariadb-install-db.exe" --datadir="C:/mariadb/current/data" --password=root --auth=root 2>&1
           # 安装为 Windows 服务并启动
-          & "$mysqlBin\mysqld.exe" --install MySQL --defaults-file="C:\mysql\current\my.ini"
+          & "$mariaBin\mysqld.exe" --install MySQL --defaults-file="C:\mariadb\current\my.ini"
           Start-Service MySQL
-          # 等待 MySQL 就绪
+          # 等待就绪
           for ($i = 1; $i -le 30; $i++) {
             try {
-              $result = & mysql -uroot -e "SELECT 1" 2>&1
+              $result = & mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT 1" 2>&1
               if ($LASTEXITCODE -eq 0) {
-                Write-Host "MySQL is ready (empty password)"
+                Write-Host "MariaDB is ready"
                 break
               }
             } catch {}
-            Write-Host "Waiting for MySQL... ($i/30)"
+            Write-Host "Waiting for MariaDB... ($i/30)"
             Start-Sleep -Seconds 2
           }
-          # 设置 root 密码为 mysql_native_password 认证 (纯 C 客户端不支持 caching_sha2_password)
-          mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
-          mysql -uroot -proot -e "SELECT VERSION();"
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
 
       - name: Add TCC
         shell: pwsh
@@ -260,30 +255,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps & MySQL
+      - name: Install deps & MariaDB
         run: |
           if [ "${{ matrix.compiler }}" = "gcc" ]; then brew install gcc; fi
-          brew install mysql
-          # 启用 mysql_native_password 插件 (MySQL 9.x 默认禁用, 纯 C 客户端需要)
-          MYCNF="$(brew --prefix)/etc/my.cnf"
-          if [ -f "$MYCNF" ] && grep -q "^\[mysqld\]" "$MYCNF"; then
-            echo "mysql_native_password=ON" >> "$MYCNF"
-          else
-            printf "[mysqld]\nmysql_native_password=ON\n" >> "$MYCNF"
-          fi
-          brew services start mysql
-          # 等待 MySQL 就绪 (用 TCP 连接, 避免 socket 路径差异)
+          # 使用 MariaDB 替代 MySQL (默认 mysql_native_password, 无插件配置问题)
+          brew install mariadb
+          # 直接后台启动 mysqld (brew services 在 CI 环境不可靠)
+          "$(brew --prefix)/bin/mysqld" --datadir="$(brew --prefix)/var/mysql" --port=3306 &
+          # 等待就绪 (用 TCP 连接)
           for i in {1..30}; do
             if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot --silent 2>/dev/null; then
-              echo "MySQL is ready (empty password)"
+              echo "MariaDB is ready (empty password)"
               break
             fi
-            echo "Waiting for MySQL... ($i/30)"
+            echo "Waiting for MariaDB... ($i/30)"
             sleep 2
           done
-          # 设置 root 密码为 mysql_native_password 认证 (纯 C 客户端不支持 caching_sha2_password)
-          # 用 -h 127.0.0.1 强制 TCP, 避免 mysql 客户端默认走 /tmp/mysql.sock
-          mysql -h 127.0.0.1 -P 3306 -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
+          # 设置 root 密码 (MariaDB 默认 mysql_native_password, 无需指定插件)
+          mysql -h 127.0.0.1 -P 3306 -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
           mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
 
       - name: Add TCC

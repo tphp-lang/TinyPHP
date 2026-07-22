@@ -29,7 +29,9 @@
         extern size_t  iconv(iconv_t, char**, size_t*, char**, size_t*);
         extern int     iconv_close(iconv_t);
     #else
-        #include <iconv.h>
+        // 本文件名为 iconv.h，与系统 <iconv.h> 同名。
+        // 用 #include_next 绕过当前目录，找到系统头文件 (GCC/Clang 扩展)
+        #include_next <iconv.h>
     #endif
 #else
     #include <windows.h>
@@ -157,7 +159,7 @@ static inline t_string _tphp_iconv_conv(t_string from, t_string to, t_string str
     // 输出缓冲：最坏 1 字节 → 4 字节 (UTF-8 最大)，再留余量
     size_t inleft  = (size_t)str.length;
     size_t outcap  = inleft * 4 + 16;
-    char  *inbuf   = STR_PTR(str);
+    char  *inbuf   = (char*)STR_PTR(str);
     char  *outbuf  = str_pool_alloc((int)outcap);
     if (outbuf == NULL) { iconv_close(cd); tp_throw("iconv: out of memory"); }
     char  *outp    = outbuf;
