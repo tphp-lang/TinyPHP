@@ -1475,6 +1475,9 @@ static MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_s
 
 /* ---------------------------------------------------------------------------------------------- */
 
+#if defined(__GNUC__) && !defined(__clang__)
+__attribute__((noinline))
+#endif
 mco_desc mco_desc_init(void (*func)(mco_coro* co), size_t stack_size) {
   if(stack_size != 0) {
     /* Stack size should be at least `MCO_MIN_STACK_SIZE`. */

@@ -28,6 +28,16 @@
 #include "types.h"
 #include <stdint.h>
 
+// ── Windows 兼容：strcasecmp/strncasecmp ──
+// Windows CRT 无 strcasecmp/strncasecmp，使用 _stricmp/_strnicmp 替代
+#ifdef _WIN32
+#ifndef _TPHP_STRCASE_COMPAT
+#define _TPHP_STRCASE_COMPAT
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
+#endif
+
 // ── 前向声明 ──
 typedef struct pdo_driver_t pdo_driver_t;
 

@@ -41,6 +41,16 @@
 #include <ctype.h>
 #include <stdint.h>
 
+// ── Windows 兼容：strcasecmp/strncasecmp ──
+// Windows CRT 无 strcasecmp/strncasecmp，使用 _stricmp/_strnicmp 替代
+#ifdef _WIN32
+#ifndef _TPHP_STRCASE_COMPAT
+#define _TPHP_STRCASE_COMPAT
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
+#endif
+
 // ── SQLite amalgamation 头文件 ──
 // 用路径相对包含避免被 tcc/include/sqlite3.h 顶替（macOS TCC bundle 自带 sqlite3.h）
 // 搜索路径: -I"include" → include/os/sqlite_src/sqlite3.h（本仓库修补版）

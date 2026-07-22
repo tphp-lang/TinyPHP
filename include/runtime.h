@@ -16,7 +16,12 @@
 #include "types.h"
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+// Windows 头文件将 small 宏定义为 char，与生成的 C 代码中变量名 small 冲突
+#undef small
 #endif
 #include <math.h>
 

@@ -8,6 +8,11 @@
 #include "val.h"
 #include "object/object.h"       // tp_obj_release — runtime.h 需要
 
+// Windows 下 alloca() 声明在 <malloc.h> 中（而非 <stdlib.h>）
+#ifdef _WIN32
+#include <malloc.h>
+#endif
+
 /* 前向声明 runtime.h 中的函数（与 common.h 保持一致）
  * 提前到 exception.h/try.h 之前，避免 GCC 将其隐式声明为 int 导致类型冲突 */
 static inline void tphp_rt_str_free(t_string* s);
