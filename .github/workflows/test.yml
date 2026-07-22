@@ -33,37 +33,34 @@ jobs:
       - name: Install MySQL
         shell: pwsh
         run: |
-          choco install mysql -y --no-progress
-          $env:PATH += ";C:\tools\mysql\current\bin;C:\ProgramData\MySQL\MySQL Server*\bin"
-          # MySQL 9.x (choco 默认) 默认不加载 mysql_native_password 插件,
-          # 需在 my.ini 中启用后重启服务
-          $myini = Get-ChildItem -Path "C:\tools\mysql" -Filter "my.ini" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($myini) {
-            $lines = Get-Content $myini.FullName
-            if (-not ($lines -match 'mysql_native_password')) {
-              $newLines = @()
-              $found = $false
-              foreach ($line in $lines) {
-                $newLines += $line
-                if ($line -match '^\[mysqld\]') {
-                  $newLines += "mysql_native_password=ON"
-                  $found = $true
-                }
-              }
-              if (-not $found) {
-                $newLines += "[mysqld]"
-                $newLines += "mysql_native_password=ON"
-              }
-              Set-Content $myini.FullName $newLines
-              Write-Host "Added mysql_native_password=ON to $($myini.FullName)"
-            }
+          # choco 安装 MySQL 在 runner 上经常超时, 改用官方 ZIP 包手动安装
+          $mysqlVer = "8.0.42"
+          $mysqlZip = "mysql-$mysqlVer-winx64.zip"
+          $mysqlUrl = "https://dev.mysql.com/get/Downloads/MySQL-8.0/$mysqlZip"
+          Write-Host "Downloading MySQL $mysqlVer..."
+          Invoke-WebRequest -Uri $mysqlUrl -OutFile $mysqlZip
+          Expand-Archive -Path $mysqlZip -DestinationPath C:\mysql -Force
+          # 重命名目录 (避免版本号变化导致路径变动)
+          $srcDir = Get-ChildItem -Path C:\mysql -Directory | Select-Object -First 1
+          if ($srcDir.Name -ne "current") {
+            Rename-Item $srcDir.FullName "current"
           }
-          # 重启 MySQL 服务使配置生效
-          $svc = Get-Service -Name "*mysql*" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($svc) {
-            Write-Host "Restarting service: $($svc.Name)"
-            Restart-Service $svc.Name -Force
-          }
+          $mysqlBin = "C:\mysql\current\bin"
+          $env:PATH += ";$mysqlBin"
+          # 生成 my.ini (启用 mysql_native_password 插件)
+          $myini = @"
+          [mysqld]
+          mysql_native_password=ON
+          port=3306
+          basedir=C:/mysql/current
+          datadir=C:/mysql/current/data
+          "@
+          Set-Content -Path "C:\mysql\current\my.ini" -Value $myini
+          # 初始化数据目录 (不生成随机密码)
+          & "$mysqlBin\mysqld.exe" --defaults-file="C:\mysql\current\my.ini" --initialize-insecure --console
+          # 安装为 Windows 服务并启动
+          & "$mysqlBin\mysqld.exe" --install MySQL --defaults-file="C:\mysql\current\my.ini"
+          Start-Service MySQL
           # 等待 MySQL 就绪
           for ($i = 1; $i -le 30; $i++) {
             try {
