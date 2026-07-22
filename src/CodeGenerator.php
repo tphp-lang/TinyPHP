@@ -3067,6 +3067,10 @@ class CodeGenerator implements ASTVisitor
             }
             $objKey = ($expr->object instanceof VariableExpr) ? self::varName($expr->object->name) : '';
             $objType = $this->varTypes[$objKey] ?? '';
+            // varTypes 存的类类型带 *（与 mapType 一致），hasClass/getClassPropType 期望不带 *
+            if ($objType !== '' && str_ends_with($objType, '*')) {
+                $objType = rtrim($objType, '*');
+            }
             // $this->prop → 使用当前类名作为对象类型
             if ($objType === '' && $expr->object instanceof VariableExpr
                 && $expr->object->name === '$this') {
