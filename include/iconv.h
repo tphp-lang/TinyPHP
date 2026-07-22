@@ -20,19 +20,15 @@
 
 // POSIX 使用系统 iconv；Windows 使用 Win32 API
 #ifndef _WIN32
-    // TCC (尤其 macOS) 自带的 <iconv.h> 会链式拉入 <wchar.h> → <_wchar.h> → <stdarg.h>，
-    // 而 TCC macOS 包缺失 stdarg.h 导致编译失败。改用手动前向声明避开此问题。
-    // GCC/Clang 仍使用系统 <iconv.h> 以获取完整定义。
-    #ifdef __TINYC__
-        typedef void* iconv_t;
-        extern iconv_t iconv_open(const char*, const char*);
-        extern size_t  iconv(iconv_t, char**, size_t*, char**, size_t*);
-        extern int     iconv_close(iconv_t);
-    #else
-        // 本文件名为 iconv.h，与系统 <iconv.h> 同名。
-        // 用 #include_next 绕过当前目录，找到系统头文件 (GCC/Clang 扩展)
-        #include_next <iconv.h>
-    #endif
+    // 本文件名为 iconv.h，与系统 <iconv.h> 同名。
+    // 如果用 #include <iconv.h>，GCC/Clang 会找到当前文件而非系统头文件（影子化），
+    // 导致 iconv_t 未定义。统一对所有非 Windows 编译器使用手动前向声明。
+    //   - iconv_t 在 glibc/musl/macOS 上均为 void* 的 typedef，兼容
+    //   - 仅需 iconv_open/iconv/iconv_close 三个符号
+    typedef void* iconv_t;
+    extern iconv_t iconv_open(const char*, const char*);
+    extern size_t  iconv(iconv_t, char**, size_t*, char**, size_t*);
+    extern int     iconv_close(iconv_t);
 #else
     #include <windows.h>
 #endif
