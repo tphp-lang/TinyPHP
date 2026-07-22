@@ -45,14 +45,14 @@ jobs:
           $downloaded = $false
           foreach ($url in $mirrors) {
             Write-Host "Trying: $url"
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $mariaZip -TimeoutSec 180
+            # 用 curl 替代 Invoke-WebRequest (下载更快, 无进度条噪音)
+            & curl -fsSL --connect-timeout 30 --max-time 600 -o $mariaZip $url
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $mariaZip) -and (Get-Item $mariaZip).Length -gt 1MB) {
               $downloaded = $true
               Write-Host "Downloaded from: $url"
               break
-            } catch {
-              Write-Host "Failed: $($_.Exception.Message)"
             }
+            Write-Host "Failed: curl exit code $LASTEXITCODE"
           }
           if (-not $downloaded) { throw "All mirrors failed to download MariaDB" }
           Expand-Archive -Path $mariaZip -DestinationPath C:\mariadb -Force
