@@ -1238,12 +1238,16 @@ class CodeGenerator implements ASTVisitor
         $o = [];
         $o[] = "/* ── Struct: {$cn} ──────────────────────────── */";
         $o[] = "typedef struct {$cn} {";
-        $o[] = $this->ind('t_object _obj;');   // COS-style header (cls ptr + refcount)
-        // Parent struct (COS inheritance: struct nesting)
+        // COS-style header (cls ptr + refcount)
+        //   根类: 直接持有 t_object _obj（偏移 0）
+        //   子类: _parent 作为第一个成员（已包含 _obj），确保 Child* cast 为 Parent*
+        //         时地址相同、属性偏移正确（C 标准结构体嵌套继承布局）
         $parentCN = '';
         if ($class->parentName !== null) {
             $parentCN = self::classRefName($class->parentName);
-            $o[] = $this->ind($parentCN . ' _parent;');
+            $o[] = $this->ind($parentCN . ' _parent;');   // 第一个成员(含 _obj)
+        } else {
+            $o[] = $this->ind('t_object _obj;');
         }
         // 属性字段 + 记录类型
         $propTypes = [];
