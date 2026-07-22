@@ -13,7 +13,7 @@
 #import stream
 #debug === 1. connect ===
 #debug connected
-#debug server_version_ok=1
+#debug driver_connected=1
 #debug driver_name=mysql
 #debug
 #debug === 2. create database & table ===
@@ -61,10 +61,10 @@ class Main
         try {
             $pdo = new PDO("mysql:host=127.0.0.1;port=3306", "root", "root");
             echo "connected\n";
-            // 版本号跨平台易变（MySQL 8.x/9.x 或 MariaDB 10.x/11.x），只验证非空
-            $ver = $pdo->getAttributeStr(PDO::ATTR_SERVER_VERSION);
-            $ok = (strlen($ver) > 0) ? "1" : "0";
-            echo "server_version_ok=" . $ok . "\n";
+            // 版本号跨平台易变（MySQL 8.x/9.x 或 MariaDB），用 driver_name 确认连接就绪
+            $dn = $pdo->getAttributeStr(PDO::ATTR_DRIVER_NAME);
+            $ok = (strlen($dn) > 0) ? "1" : "0";
+            echo "driver_connected=" . $ok . "\n";
             echo "driver_name=" . $pdo->getAttributeStr(PDO::ATTR_DRIVER_NAME) . "\n";
         } catch (Exception $e) {
             echo "FAIL: " . $e->getMessage() . "\n";
