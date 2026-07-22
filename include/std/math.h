@@ -28,7 +28,7 @@ static inline t_bool tphp_fn_is_nan(t_float x){return isnan(x);}
 
 // ── base_convert: 任意进制转换 (2-36进制) ──────────────────
 static t_string tphp_fn_base_convert(t_string num, t_int from, t_int to) {
-    if(from<2||from>36||to<2||to>36) return tphp_rt_str_dup(STR_LIT(""));
+    if(from<2||from>36||to<2||to>36){ tp_throw("base_convert(): invalid base (must be 2-36)"); return tphp_rt_str_dup(STR_LIT("")); }
     static const char dc[]="0123456789abcdefghijklmnopqrstuvwxyz";
     const char *p=STR_PTR(num);int nlen=num.length;
     if(nlen<=0)return tphp_rt_str_dup(STR_LIT("0"));
@@ -39,7 +39,7 @@ static t_string tphp_fn_base_convert(t_string num, t_int from, t_int to) {
     for(int i=start;i<nlen;i++){
         int v=-1;char c=p[i]|32;
         if(c>='0'&&c<='9')v=c-'0';else if(c>='a'&&c<='z')v=c-'a'+10;
-        if(v<0||v>=(int)from)return tphp_rt_str_dup(STR_LIT(""));
+        if(v<0||v>=(int)from){ tp_throw("base_convert(): invalid digit for base"); return tphp_rt_str_dup(STR_LIT("")); }
         int carry=v;
         int lastJ=0;
         for(int j=0;j<=dpos;j++){carry+=dtmp[j]*(int)from;dtmp[j]=(char)(carry%10);carry/=10;lastJ=j;}
@@ -53,7 +53,7 @@ static t_string tphp_fn_base_convert(t_string num, t_int from, t_int to) {
         otmp[opos++]=dc[rem];while(dpos>1&&dtmp[dpos-1]==0)dpos--;
         if(allZero)break;
     }
-    int total=opos+neg;char *buf=str_pool_alloc(total);if(!buf)return tphp_rt_str_dup(STR_LIT(""));
+    int total=opos+neg;char *buf=str_pool_alloc(total);if(!buf){ tp_throw("base_convert(): out of memory"); return tphp_rt_str_dup(STR_LIT("")); }
     int w=0;if(neg)buf[w++]='-';
     while(opos>0)buf[w++]=otmp[--opos];
     return (t_string){buf,total};

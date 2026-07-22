@@ -4,39 +4,35 @@
 
 static inline void tphp_fn_assert_true(t_bool cond) {
     if (unlikely(!cond)) {
-        tphp_rt_free_all();
-        fputs("\nASSERT FAIL: assert_true()\n\n", stderr);
-        exit(2);
+        tp_throw("assert_true(): assertion failed");
     }
 }
 static inline void tphp_fn_assert_false(t_bool cond) {
     if (unlikely(cond)) {
-        tphp_rt_free_all();
-        fputs("\nASSERT FAIL: assert_false()\n\n", stderr);
-        exit(2);
+        tp_throw("assert_false(): assertion failed");
     }
 }
 static inline void tphp_fn_assert_eq_int(t_int a, t_int b) {
     if (unlikely(a != b)) {
-        tphp_rt_free_all();
-        fprintf(stderr, "\nASSERT FAIL: assert_eq_int(%lld, %lld)\n\n",
+        char _msg[128];
+        snprintf(_msg, sizeof(_msg), "assert_eq_int(%lld, %lld): assertion failed",
             (long long)a, (long long)b);
-        exit(2);
+        tp_throw(_msg);
     }
 }
 static inline void tphp_fn_assert_eq_float(t_float a, t_float b) {
     if (unlikely(a != b)) {
-        tphp_rt_free_all();
-        fprintf(stderr, "\nASSERT FAIL: assert_eq_float(%g, %g)\n\n", a, b);
-        exit(2);
+        char _msg[128];
+        snprintf(_msg, sizeof(_msg), "assert_eq_float(%g, %g): assertion failed", a, b);
+        tp_throw(_msg);
     }
 }
 static inline void tphp_fn_assert_eq_str(t_string a, t_string b) {
     if (unlikely(!tphp_rt_str_eq(a, b))) {
-        tphp_rt_free_all();
-        fprintf(stderr, "\nASSERT FAIL: assert_eq_str(len=%d vs len=%d)\n\n",
+        char _msg[128];
+        snprintf(_msg, sizeof(_msg), "assert_eq_str(len=%d vs len=%d): assertion failed",
             a.length, b.length);
-        exit(2);
+        tp_throw(_msg);
     }
 }
 
@@ -88,7 +84,7 @@ static inline t_string tphp_fn_random_bytes(t_int length) {
         return (t_string){NULL, 0};
     }
     unsigned char* buf = (unsigned char*)malloc((size_t)length);
-    if (!buf) return (t_string){NULL, 0};
+    if (!buf) { tp_throw("random_bytes(): out of memory"); return (t_string){NULL, 0}; }
     if (_tphp_random_bytes(buf, (size_t)length) != 0) {
         free(buf);
         tp_throw("random_bytes(): unable to generate random bytes");

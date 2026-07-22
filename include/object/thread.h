@@ -63,10 +63,12 @@ static inline void tphp_class_Thread___construct(tphp_class_Thread *self, t_call
     self->handle = 0;
     /* 将 t_callback 复制到堆（原始值在栈上） */
     self->cb = (t_callback *)malloc(sizeof(t_callback));
-    if (self->cb) {
-        self->cb->func = fn.func;
-        self->cb->env  = fn.env;
+    if (self->cb == NULL) {
+        tp_throw("Thread::__construct(): out of memory");
+        return;
     }
+    self->cb->func = fn.func;
+    self->cb->env  = fn.env;
 }
 
 static void tphp_class_Thread___destruct(tphp_class_Thread *self) {
@@ -83,7 +85,10 @@ static void tphp_class_Thread___destruct(tphp_class_Thread *self) {
 }
 
 static inline t_bool tphp_class_Thread_start(tphp_class_Thread *self) {
-    if (self->state != 0 || self->cb == NULL) return false;
+    if (self->state != 0 || self->cb == NULL) {
+        tp_throw("Thread::start(): thread already started or no callback");
+        return false;
+    }
     void *arg = self->cb;      /* 转交所有权给子线程 */
     self->cb  = NULL;
     int r = thrd_create(&self->handle, _tphp_thread_entry, arg);
@@ -91,8 +96,9 @@ static inline t_bool tphp_class_Thread_start(tphp_class_Thread *self) {
         self->state = 1;
         return true;
     }
-    /* 创建失败 — 回收回调 */
+    /* 创建失败 — 回回收调 */
     free(arg);
+    tp_throw("Thread::start(): failed to create thread");
     return false;
 }
 
@@ -106,11 +112,15 @@ static inline t_int tphp_class_Thread_join(tphp_class_Thread *self) {
 }
 
 static inline t_bool tphp_class_Thread_detach(tphp_class_Thread *self) {
-    if (self->state != 1) return false;
+    if (self->state != 1) {
+        tp_throw("Thread::detach(): thread not running");
+        return false;
+    }
     if (thrd_detach(self->handle) == thrd_success) {
         self->state = 2;
         return true;
     }
+    tp_throw("Thread::detach(): failed to detach thread");
     return false;
 }
 
@@ -136,7 +146,7 @@ static inline t_int tphp_class_Thread_id(void) {
 
 static inline tphp_class_Thread* new_tphp_class_Thread(t_callback fn) {
     tphp_class_Thread *self = (tphp_class_Thread *)tp_obj_alloc(&_class_tphp_class_Thread);
-    if (unlikely(self == NULL)) return NULL;
+    if (unlikely(self == NULL)) { tp_throw("new Thread(): out of memory"); return NULL; }
     tphp_class_Thread___construct(self, fn);
     return self;
 }
@@ -172,20 +182,32 @@ static void tphp_class_Mutex___destruct(tphp_class_Mutex *self) {
 }
 
 static inline t_bool tphp_class_Mutex_lock(tphp_class_Mutex *self) {
-    return mtx_lock(&self->mtx) == thrd_success;
+    if (mtx_lock(&self->mtx) != thrd_success) {
+        tp_throw("Mutex::lock(): failed to acquire lock");
+        return false;
+    }
+    return true;
 }
 
 static inline t_bool tphp_class_Mutex_tryLock(tphp_class_Mutex *self) {
-    return mtx_trylock(&self->mtx) == thrd_success;
+    int r = mtx_trylock(&self->mtx);
+    if (r == thrd_success) return true;
+    if (r == thrd_busy) return false;  /* 合法语义：锁被占用 */
+    tp_throw("Mutex::tryLock(): failed to acquire lock");
+    return false;
 }
 
 static inline t_bool tphp_class_Mutex_unlock(tphp_class_Mutex *self) {
-    return mtx_unlock(&self->mtx) == thrd_success;
+    if (mtx_unlock(&self->mtx) != thrd_success) {
+        tp_throw("Mutex::unlock(): failed to release lock");
+        return false;
+    }
+    return true;
 }
 
 static inline tphp_class_Mutex* new_tphp_class_Mutex(t_bool recursive) {
     tphp_class_Mutex *self = (tphp_class_Mutex *)tp_obj_alloc(&_class_tphp_class_Mutex);
-    if (unlikely(self == NULL)) return NULL;
+    if (unlikely(self == NULL)) { tp_throw("new Mutex(): out of memory"); return NULL; }
     tphp_class_Mutex___construct(self, recursive);
     return self;
 }
@@ -221,20 +243,32 @@ static void tphp_class_CondVar___destruct(tphp_class_CondVar *self) {
 }
 
 static inline t_bool tphp_class_CondVar_wait(tphp_class_CondVar *self, tphp_class_Mutex *mutex) {
-    return cnd_wait(&self->cnd, &mutex->mtx) == thrd_success;
+    if (cnd_wait(&self->cnd, &mutex->mtx) != thrd_success) {
+        tp_throw("CondVar::wait(): failed to wait on condition");
+        return false;
+    }
+    return true;
 }
 
 static inline t_bool tphp_class_CondVar_signal(tphp_class_CondVar *self) {
-    return cnd_signal(&self->cnd) == thrd_success;
+    if (cnd_signal(&self->cnd) != thrd_success) {
+        tp_throw("CondVar::signal(): failed to signal condition");
+        return false;
+    }
+    return true;
 }
 
 static inline t_bool tphp_class_CondVar_broadcast(tphp_class_CondVar *self) {
-    return cnd_broadcast(&self->cnd) == thrd_success;
+    if (cnd_broadcast(&self->cnd) != thrd_success) {
+        tp_throw("CondVar::broadcast(): failed to broadcast condition");
+        return false;
+    }
+    return true;
 }
 
 static inline tphp_class_CondVar* new_tphp_class_CondVar(void) {
     tphp_class_CondVar *self = (tphp_class_CondVar *)tp_obj_alloc(&_class_tphp_class_CondVar);
-    if (unlikely(self == NULL)) return NULL;
+    if (unlikely(self == NULL)) { tp_throw("new CondVar(): out of memory"); return NULL; }
     tphp_class_CondVar___construct(self);
     return self;
 }
@@ -283,7 +317,7 @@ static inline void tphp_class_WaitGroup_wait(tphp_class_WaitGroup *self) {
 
 static inline tphp_class_WaitGroup* new_tphp_class_WaitGroup(void) {
     tphp_class_WaitGroup *self = (tphp_class_WaitGroup *)tp_obj_alloc(&_class_tphp_class_WaitGroup);
-    if (unlikely(self == NULL)) return NULL;
+    if (unlikely(self == NULL)) { tp_throw("new WaitGroup(): out of memory"); return NULL; }
     tphp_class_WaitGroup___construct(self);
     return self;
 }

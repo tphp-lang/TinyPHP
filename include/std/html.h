@@ -18,7 +18,7 @@ static t_string tphp_fn_htmlspecialchars(t_string s) {
     if (extra == 0) return tphp_rt_str_dup(s);
     int total = s.length + extra;
     char *buf = str_pool_alloc(total);
-    if (!buf) return tphp_rt_str_dup(STR_LIT(""));
+    if (!buf) { tp_throw("htmlspecialchars(): out of memory"); return tphp_rt_str_dup(STR_LIT("")); }
     int pos = 0;
     for (int i = 0; i < s.length; i++) {
         switch (p[i]) {
@@ -42,7 +42,7 @@ static t_string tphp_fn_nl2br(t_string s) {
     if (count == 0) return tphp_rt_str_dup(s);
     int total = s.length + count * 4;
     char *buf = str_pool_alloc(total);
-    if (!buf) return tphp_rt_str_dup(STR_LIT(""));
+    if (!buf) { tp_throw("nl2br(): out of memory"); return tphp_rt_str_dup(STR_LIT("")); }
     int pos = 0;
     for (int i = 0; i < s.length; i++) {
         if (p[i] == '\n') { memcpy(buf+pos, "<br>\n", 5); pos += 5; }
@@ -60,7 +60,7 @@ static t_string tphp_fn_base64_encode(t_string s) {
     const unsigned char *p = (const unsigned char*)STR_PTR(s);
     int outlen = ((s.length + 2) / 3) * 4;
     char *buf = str_pool_alloc(outlen);
-    if (!buf) return tphp_rt_str_dup(STR_LIT(""));
+    if (!buf) { tp_throw("base64_encode(): out of memory"); return tphp_rt_str_dup(STR_LIT("")); }
     int pos = 0, i = 0;
     while (i + 3 <= s.length) {
         buf[pos++] = b64e_tab[p[i] >> 2];
@@ -101,7 +101,7 @@ static t_string tphp_fn_base64_decode(t_string s) {
     if (len == 0) return tphp_rt_str_dup(STR_LIT(""));
     int outlen = (len * 3) / 4 + 2;
     char *buf = str_pool_alloc(outlen);
-    if (!buf) return tphp_rt_str_dup(STR_LIT(""));
+    if (!buf) { tp_throw("base64_decode(): out of memory"); return tphp_rt_str_dup(STR_LIT("")); }
     int pos = 0, i = 0;
     while (i + 4 <= len) {
         unsigned char a = b64d_tab[(unsigned char)p[i]], b = b64d_tab[(unsigned char)p[i+1]];

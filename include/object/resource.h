@@ -198,11 +198,10 @@ void tphp_rt_free_all_resources(void) {
 
 tphp_class_Resource* new_tphp_class_Resource(void) {
     tphp_class_Resource* self = (tphp_class_Resource*)tp_obj_alloc(&_class_tphp_class_Resource);
-    if (self != NULL) {
-        self->handle = -1;
-        self->type = RSRC_TYPE_UNKNOWN;
-        self->ptr = NULL;
-    }
+    if (self == NULL) { tp_throw("new Resource(): out of memory"); return NULL; }
+    self->handle = -1;
+    self->type = RSRC_TYPE_UNKNOWN;
+    self->ptr = NULL;
     return self;
 }
 
@@ -239,7 +238,7 @@ void tphp_class_Resource___destruct(tphp_class_Resource* self) {
 
 // getType — 返回资源类型 ID
 static inline t_int tphp_class_Resource_getType(tphp_class_Resource* self) {
-    if (self == NULL) return RSRC_TYPE_UNKNOWN;
+    if (self == NULL) { tp_throw("Resource::getType(): null resource"); return RSRC_TYPE_UNKNOWN; }
     return self->type;
 }
 

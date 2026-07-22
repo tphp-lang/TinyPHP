@@ -18,8 +18,8 @@
 #debug string(4) "-101"
 #debug string(1) "0"
 #debug string(4) "zzzz"
-#debug string(0) ""
-#debug string(0) ""
+#debug base_convert(5,1,10): caught
+#debug base_convert(5,10,37): caught
 #debug
 #debug ===== 4. array_chunk =====
 #debug int(3)
@@ -28,7 +28,7 @@
 #debug
 #debug ===== 5. array_combine =====
 #debug int(3)
-#debug int(0)
+#debug array_combine mismatch: caught
 #debug
 #debug ===== 6. array_count_values =====
 #debug int(3)
@@ -73,8 +73,8 @@ class Main
         var_dump(base_convert("-5", 10, 2));
         var_dump(base_convert("0", 10, 2));
         var_dump(base_convert("1679615", 10, 36));
-        var_dump(base_convert("5", 1, 10));
-        var_dump(base_convert("5", 10, 37));
+        try { var_dump(base_convert("5", 1, 10)); } catch (Exception $e) { echo "base_convert(5,1,10): caught\n"; }
+        try { var_dump(base_convert("5", 10, 37)); } catch (Exception $e) { echo "base_convert(5,10,37): caught\n"; }
 
         echo "\n===== 4. array_chunk =====\n";
         $c1 = array_chunk([1,2,3,4,5], 2);
@@ -85,8 +85,7 @@ class Main
         echo "\n===== 5. array_combine =====\n";
         $r1 = array_combine(["a","b","c"], [1,2,3]);
         var_dump(count($r1));
-        $r2 = array_combine(["a","b"], [1,2,3]);
-        var_dump(count($r2));
+        try { $r2 = array_combine(["a","b"], [1,2,3]); var_dump(count($r2)); } catch (Exception $e) { echo "array_combine mismatch: caught\n"; }
 
         echo "\n===== 6. array_count_values =====\n";
         $cv = array_count_values(["a","b","a","c","a"]);

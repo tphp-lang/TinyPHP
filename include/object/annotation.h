@@ -40,12 +40,11 @@ static const t_class _class_tphp_class_AnnotationEntry = {
 
 static inline tphp_class_AnnotationEntry* new_tphp_class_AnnotationEntry(t_array* data, t_string type, t_string name) {
     tphp_class_AnnotationEntry* self = (tphp_class_AnnotationEntry*)tp_obj_alloc(&_class_tphp_class_AnnotationEntry);
-    if (self) {
-        self->data = data;
-        self->type = type;
-        self->name = name;
-        tphp_rt_register((void*)self, 0);
-    }
+    if (self == NULL) { tp_throw("new AnnotationEntry(): out of memory"); return NULL; }
+    self->data = data;
+    self->type = type;
+    self->name = name;
+    tphp_rt_register((void*)self, 0);
     return self;
 }
 

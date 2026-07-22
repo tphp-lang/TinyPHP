@@ -26,6 +26,8 @@
 // ============================================================
 
 #include "types.h"
+#include "object/exception.h"
+#include "object/try.h"
 #include <stdint.h>
 
 // ── Windows 兼容：strcasecmp/strncasecmp ──
@@ -150,6 +152,17 @@ static inline const pdo_driver_t* pdo_find_driver(const char* name) {
         }
     }
     return NULL;
+}
+
+// ============================================================
+// 内部：抛异常辅助 ──────────────────────────────────────────
+static inline void _pdo_driver_throw(const char* msg) {
+    t_string s;
+    s.data = (char*)msg;
+    s.length = (int)strlen(msg);
+    s.is_local = false;
+    s.is_lit = false;
+    tp_throw_ex(new_tphp_class_Exception(s));
 }
 
 // ============================================================
@@ -449,19 +462,22 @@ static inline t_string tphp_fn_pdo_driver_quote(t_int drv_int, const char* s) {
     }
     char* quoted = drv->quote(s);
     if (quoted == NULL) {
+        _pdo_driver_throw("pdo_quote: out of memory");
         t_string empty = {NULL, 0, false, false};
         return empty;
     }
     int len = (int)strlen(quoted);
     char* buf = str_pool_alloc(len);
-    t_string result = {NULL, 0, false, false};
-    if (buf) {
-        memcpy(buf, quoted, len);
-        buf[len] = '\0';
-        result = (t_string){buf, len, false, false};
+    if (buf == NULL) {
+        drv->free_quote(quoted);
+        _pdo_driver_throw("pdo_quote: out of memory");
+        t_string empty = {NULL, 0, false, false};
+        return empty;
     }
+    memcpy(buf, quoted, len);
+    buf[len] = '\0';
     drv->free_quote(quoted);
-    return result;
+    return (t_string){buf, len, false, false};
 }
 
 // ── pdo_driver_server_version: 服务器版本 ──

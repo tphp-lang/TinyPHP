@@ -300,6 +300,7 @@ static inline t_string tphp_fn_pdo_str_from_ptr(const char *ptr, int len) {
     }
     char *buf = str_pool_alloc(len);
     if (buf == NULL) {
+        _pdo_throw_msg("PDO: out of memory");
         t_string empty = {NULL, 0, false, false};
         return empty;
     }
@@ -450,6 +451,7 @@ static inline t_string tphp_fn_pdo_quote(const char *s) {
     }
     char *quoted = sqlite3_mprintf("%Q", s);
     if (quoted == NULL) {
+        _pdo_throw_msg("PDO::quote: out of memory");
         t_string empty = {NULL, 0, false, false};
         return empty;
     }

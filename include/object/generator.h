@@ -170,6 +170,11 @@ mco_result mco_create(mco_coro** out_co, mco_desc* desc) {
     co->free_cb = desc->free_cb;
     co->storage_size = desc->storage_size ? desc->storage_size : MCO_DEFAULT_STORAGE_SIZE;
     co->storage = (unsigned char*)calloc(1, co->storage_size);
+    if (co->storage == NULL) {
+        free(co);
+        *out_co = NULL;
+        return MCO_OUT_OF_MEMORY;
+    }
     co->magic_number = MCO_MAGIC_NUMBER;
 
     pthread_mutex_init(&co->mutex, NULL);
@@ -337,15 +342,14 @@ static const t_class _class_tphp_class_Generator = {
 /* 构造函数：包装 mco_coro* 为 Generator 对象 */
 static inline tphp_class_Generator* new_tphp_class_Generator(mco_coro* co) {
     tphp_class_Generator* self = (tphp_class_Generator*)tp_obj_alloc(&_class_tphp_class_Generator);
-    if (self) {
-        self->co = co;
-        self->cur_key = VAR_NULL();
-        self->cur_val = VAR_NULL();
-        self->ret_val = VAR_NULL();
-        self->started = false;
-        self->done = false;
-        tphp_rt_register((void*)self, 0);
-    }
+    if (self == NULL) { tp_throw("new Generator(): out of memory"); return NULL; }
+    self->co = co;
+    self->cur_key = VAR_NULL();
+    self->cur_val = VAR_NULL();
+    self->ret_val = VAR_NULL();
+    self->started = false;
+    self->done = false;
+    tphp_rt_register((void*)self, 0);
     return self;
 }
 
@@ -392,7 +396,7 @@ void tphp_class_Generator___destruct(tphp_class_Generator* self) {
 
 /* current() — 返回当前缓存的 yield 值；若未启动则先 rewind */
 t_var tphp_class_Generator_current(tphp_class_Generator* self) {
-    if (self == NULL) return VAR_NULL();
+    if (self == NULL) { tp_throw("Generator::current(): null generator"); return VAR_NULL(); }
     if (!self->started) {
         tphp_class_Generator_rewind(self);
     }
@@ -401,7 +405,7 @@ t_var tphp_class_Generator_current(tphp_class_Generator* self) {
 
 /* key() — 返回当前缓存的 key */
 t_var tphp_class_Generator_key(tphp_class_Generator* self) {
-    if (self == NULL) return VAR_NULL();
+    if (self == NULL) { tp_throw("Generator::key(): null generator"); return VAR_NULL(); }
     if (!self->started) {
         tphp_class_Generator_rewind(self);
     }
@@ -410,7 +414,7 @@ t_var tphp_class_Generator_key(tphp_class_Generator* self) {
 
 /* valid() — 返回是否仍有可迭代的值 */
 t_int tphp_class_Generator_valid(tphp_class_Generator* self) {
-    if (self == NULL) return 0;
+    if (self == NULL) { tp_throw("Generator::valid(): null generator"); return 0; }
     if (!self->started) {
         tphp_class_Generator_rewind(self);
     }
@@ -419,7 +423,7 @@ t_int tphp_class_Generator_valid(tphp_class_Generator* self) {
 
 /* next() — 推进到下一个 yield，返回新的 yield 值 */
 t_var tphp_class_Generator_next(tphp_class_Generator* self) {
-    if (self == NULL) return VAR_NULL();
+    if (self == NULL) { tp_throw("Generator::next(): null generator"); return VAR_NULL(); }
     if (!self->started) {
         tphp_class_Generator_rewind(self);
         return self->cur_val;
@@ -431,7 +435,7 @@ t_var tphp_class_Generator_next(tphp_class_Generator* self) {
 
 /* send($v) — 发送值到 yield 表达式，返回下一个 yield 值 */
 t_var tphp_class_Generator_send(tphp_class_Generator* self, t_var v) {
-    if (self == NULL) return VAR_NULL();
+    if (self == NULL) { tp_throw("Generator::send(): null generator"); return VAR_NULL(); }
     if (!self->started) {
         /* 首次：先 rewind 到第一个 yield，再发送 */
         tphp_class_Generator_rewind(self);
@@ -444,13 +448,14 @@ t_var tphp_class_Generator_send(tphp_class_Generator* self, t_var v) {
 
 /* getReturn() — 返回生成器的 return 值 */
 t_var tphp_class_Generator_getReturn(tphp_class_Generator* self) {
-    if (self == NULL) return VAR_NULL();
+    if (self == NULL) { tp_throw("Generator::getReturn(): null generator"); return VAR_NULL(); }
     return self->ret_val;
 }
 
 /* rewind() — 首次 resume（推进到第一个 yield） */
 void tphp_class_Generator_rewind(tphp_class_Generator* self) {
-    if (self == NULL || self->started || self->done) return;
+    if (self == NULL) { tp_throw("Generator::rewind(): null generator"); return; }
+    if (self->started || self->done) return;
     self->started = true;
     if (self->co == NULL) {
         self->done = true;

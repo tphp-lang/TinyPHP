@@ -176,12 +176,21 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
 
 // 注意：参数名用 _tp_msg 而非 msg，避免与结构体字段 _tp_ex_top->msg 冲突
 // （宏参数 msg 会被展开进 _tp_ex_top->msg 中，导致 "_tp_ex_top->STR_PTR_V(x)" 般的错误）
+//   tp_throw("msg") 等价于 throw new Exception("msg")：
+//   有 try/catch 帧时创建 Exception 对象（使 catch(Exception $e) 能捕获），
+//   OOM 降级为纯字符串异常（ex_obj=NULL，由 TP_CATCH_ANY 兜底）。
 #define tp_throw(_tp_msg) \
     do { \
         if (_tp_ex_top != NULL) { \
+            tphp_class_Exception *_te = new_tphp_class_Exception((t_string){(char*)(_tp_msg), (int)strlen(_tp_msg)}); \
+            if (_te != NULL) { \
+                tphp_rt_unregister((void*)_te); \
+                _tp_ex_top->ex_obj = (void*)_te; \
+            } else { \
+                _tp_ex_top->ex_obj = NULL; \
+            } \
             free(_tp_ex_top->msg); \
             _tp_ex_top->msg = _tp_dup_msg(_tp_msg); \
-            _tp_ex_top->ex_obj  = NULL; \
             _tp_ex_top->thrown  = 1; \
             longjmp(_tp_ex_top->jmp_buf, 1); \
         } else { \

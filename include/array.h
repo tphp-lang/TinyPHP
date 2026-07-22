@@ -68,9 +68,9 @@ static inline void arr_stridx_build(t_array *a) {
     int cap = 16;
     while (cap < a->length * 2) cap *= 2;
     arr_stridx *idx = (arr_stridx*)malloc(sizeof(arr_stridx));
-    if (idx == NULL) return;
+    if (idx == NULL) { tp_throw("arr_stridx_build: out of memory"); return; }
     idx->slots = (int*)calloc((size_t)cap, sizeof(int));
-    if (idx->slots == NULL) { free(idx); return; }
+    if (idx->slots == NULL) { free(idx); tp_throw("arr_stridx_build: out of memory"); return; }
     idx->cap = cap;
     idx->count = 0;
     a->str_index = idx;
@@ -119,7 +119,7 @@ static inline void arr_stridx_insert(t_array *a, t_string key, int entry_idx) {
     if (idx->count * 4 >= idx->cap * 3) {
         int newcap = idx->cap * 2;
         int *ns = (int*)calloc((size_t)newcap, sizeof(int));
-        if (ns == NULL) return;
+        if (ns == NULL) { tp_throw("arr_stridx_insert: out of memory"); return; }
         int nmask = newcap - 1, ncount = 0;
         for (int i = 0; i < idx->cap; i++) {
             if (idx->slots[i] > 0) {
@@ -207,9 +207,9 @@ static inline void arr_intidx_build(t_array *a) {
     int cap = 16;
     while (cap < a->length * 2) cap *= 2;
     arr_intidx *idx = (arr_intidx*)malloc(sizeof(arr_intidx));
-    if (idx == NULL) return;
+    if (idx == NULL) { tp_throw("arr_intidx_build: out of memory"); return; }
     idx->slots = (int*)calloc((size_t)cap, sizeof(int));
-    if (idx->slots == NULL) { free(idx); return; }
+    if (idx->slots == NULL) { free(idx); tp_throw("arr_intidx_build: out of memory"); return; }
     idx->cap = cap;
     idx->count = 0;
     a->int_index = idx;
@@ -258,7 +258,7 @@ static inline void arr_intidx_insert(t_array *a, t_int key, int entry_idx) {
     if (idx->count * 4 >= idx->cap * 3) {
         int newcap = idx->cap * 2;
         int *ns = (int*)calloc((size_t)newcap, sizeof(int));
-        if (ns == NULL) return;
+        if (ns == NULL) { tp_throw("arr_intidx_insert: out of memory"); return; }
         int nmask = newcap - 1, ncount = 0;
         for (int i = 0; i < idx->cap; i++) {
             if (idx->slots[i] > 0) {
@@ -361,7 +361,7 @@ static inline t_array* tphp_fn_arr_create(int cap) {
     // 池中无合适大小，新分配
     size_t sz = sizeof(t_array) + (size_t)cap * sizeof(t_arr_entry);
     t_array *a = (t_array*)calloc(1, sz);
-    if (unlikely(a == NULL)) return NULL;
+    if (unlikely(a == NULL)) { tp_throw("array_create: out of memory"); return NULL; }
     a->refcount = 1;
     a->capacity = cap;
     return a;
@@ -384,7 +384,7 @@ static inline t_array* tphp_fn_arr_create_hint(int cap, int total) {
     if (c < 4) c = 4;
     size_t sz = sizeof(t_array) + (size_t)c * sizeof(t_arr_entry);
     t_array *a = (t_array*)calloc(1, sz);
-    if (unlikely(a == NULL)) return NULL;
+    if (unlikely(a == NULL)) { tp_throw("array_create: out of memory"); return NULL; }
     a->refcount = 1;
     a->capacity = c;
     return a;
@@ -408,7 +408,7 @@ static inline t_array* tphp_fn_arr_grow(t_array *a, int need) {
     if (nc < need) nc = need;
     size_t sz = sizeof(t_array) + (size_t)nc * sizeof(t_arr_entry);
     t_array *na = (t_array*)realloc(a, sz);
-    if (unlikely(na == NULL)) return a;
+    if (unlikely(na == NULL)) { tp_throw("array_grow: out of memory"); return a; }
     na->capacity = nc;
     return na;
 }
@@ -591,7 +591,7 @@ static inline t_string tphp_fn_arr_item_str(t_array *a, int idx) {
     if (v->type == TYPE_STRING) return v->value._string;
     if (v->type == TYPE_INT) {
         char *_b = str_pool_alloc(32);
-        if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
+        if (!_b) { tp_throw("arr_item_str: out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
         int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
         return (t_string){.data = _b, .length = n};
     }
@@ -656,7 +656,7 @@ static inline t_array* tphp_fn_arr_pad(t_array *a, t_int size, t_var val) {
     if (abs_size <= len) {
         // 原样返回拷贝
         t_array* out = tphp_fn_arr_create(len);
-        if (out == NULL) return NULL;
+        if (out == NULL) { tp_throw("arr_pad: out of memory"); return NULL; }
         for (int i = 0; i < len; i++) out->entries[i] = a->entries[i];
         out->length = len;
         return out;
@@ -664,7 +664,7 @@ static inline t_array* tphp_fn_arr_pad(t_array *a, t_int size, t_var val) {
     int pad = abs_size - len;
     int total = abs_size;
     t_array* out = tphp_fn_arr_create(total);
-    if (out == NULL) return NULL;
+    if (out == NULL) { tp_throw("arr_pad: out of memory"); return NULL; }
     if (size < 0) {
         // 左侧填充
         for (int i = 0; i < pad; i++) {
@@ -725,7 +725,7 @@ static inline t_string tphp_fn_arr_get_str_str(t_array *a, t_string key) {
     if (v->type == TYPE_STRING) return v->value._string;
     if (v->type == TYPE_INT) {
         char *_b = str_pool_alloc(32);
-        if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
+        if (!_b) { tp_throw("arr_get_str_str: out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
         int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
         return (t_string){.data = _b, .length = n};
     }
@@ -768,7 +768,7 @@ static inline t_string tphp_fn_arr_get_int_str(t_array *a, t_int key) {
     if (v->type == TYPE_STRING) return v->value._string;
     if (v->type == TYPE_INT) {
         char *_b = str_pool_alloc(32);
-        if (!_b) return (t_string){.data = NULL, .length = 0, .is_local = false};
+        if (!_b) { tp_throw("arr_get_int_str: out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
         int n = snprintf(_b, 32, "%lld", (long long)v->value._int);
         return (t_string){.data = _b, .length = n};
     }
@@ -905,7 +905,7 @@ static inline t_var tphp_fn_arr_product(t_array *a) {
 static inline t_array* tphp_fn_arr_reverse(t_array *a, bool preserve_keys) {
     if (unlikely(a == NULL)) return NULL;
     t_array *r = tphp_fn_arr_create(a->length);
-    if (unlikely(r == NULL)) return NULL;
+    if (unlikely(r == NULL)) { tp_throw("arr_reverse: out of memory"); return NULL; }
     for (int i = a->length - 1, j = 0; i >= 0; i--, j++) {
         r->entries[j] = a->entries[i];
         if (!preserve_keys) {
@@ -940,7 +940,7 @@ static inline t_array* tphp_fn_arr_slice(t_array *a, int offset, int length, boo
     int count = end - offset;
     if (count <= 0) return tphp_fn_arr_create(0);
     t_array *r = tphp_fn_arr_create(count);
-    if (unlikely(r == NULL)) return NULL;
+    if (unlikely(r == NULL)) { tp_throw("arr_slice: out of memory"); return NULL; }
     for (int i = 0; i < count; i++) {
         r->entries[i] = a->entries[offset + i];
         if (!preserve_keys) {
@@ -1058,7 +1058,7 @@ static inline bool _arr_val_eq(t_var a, t_var b) {
 static inline t_array* tphp_fn_arr_unique(t_array *a) {
     if (unlikely(a == NULL)) return NULL;
     t_array *r = tphp_fn_arr_create(a->length > 0 ? a->length : 4);
-    if (unlikely(r == NULL)) return NULL;
+    if (unlikely(r == NULL)) { tp_throw("arr_unique: out of memory"); return NULL; }
     if (a->length <= 16) { // small: O(n²) is fine
         for (int i = 0; i < a->length; i++) {
             bool dup = false;
@@ -1072,10 +1072,7 @@ static inline t_array* tphp_fn_arr_unique(t_array *a) {
     // Large: open-addressing hash set, power-of-2 capacity
     uint32_t cap = 16; while (cap < (uint32_t)a->length * 2) cap *= 2;
     uint32_t *used = (uint32_t*)calloc(cap, sizeof(uint32_t));
-    if (!used) {
-        for (int i = 0; i < a->length; i++) r = tphp_fn_arr_push(r, a->entries[i].val);
-        return r;
-    }
+    if (!used) { tp_throw("arr_unique: out of memory"); return NULL; }
     for (int i = 0; i < a->length; i++) {
         uint32_t h = _arr_val_hash(a->entries[i].val) & (cap - 1);
         int found = 0;
@@ -1096,9 +1093,7 @@ static inline t_array* tphp_fn_arr_unique(t_array *a) {
 
 static inline t_array* tphp_fn_range(t_int start, t_int end, t_int step) {
     if (step == 0) {
-        tphp_rt_free_all();
-        fputs("\nFatal error: range(): step must be non-zero\n\n", stderr);
-        exit(1);
+        tp_throw("range(): step must not be 0");
     }
     int count = 0;
     if (step > 0) {
@@ -1109,7 +1104,7 @@ static inline t_array* tphp_fn_range(t_int start, t_int end, t_int step) {
         else count = (int)((start - end) / (-step)) + 1;
     }
     t_array *r = tphp_fn_arr_create(count > 0 ? count : 4);
-    if (unlikely(r == NULL)) return NULL;
+    if (unlikely(r == NULL)) { tp_throw("range: out of memory"); return NULL; }
     if (count <= 0) return r;
     for (t_int v = start; count > 0; v += step, count--) {
         r = tphp_fn_arr_push(r, VAR_INT(v));
@@ -1121,12 +1116,10 @@ static inline t_array* tphp_fn_range(t_int start, t_int end, t_int step) {
 
 static inline t_array* tphp_fn_arr_fill(t_int start, t_int count, t_var val) {
     if (count < 0) {
-        tphp_rt_free_all();
-        fputs("\nFatal error: array_fill(): count must be non-negative\n\n", stderr);
-        exit(1);
+        tp_throw("arr_fill(): count must not be negative");
     }
     t_array *r = tphp_fn_arr_create(count > 0 ? count : 4);
-    if (unlikely(r == NULL)) return NULL;
+    if (unlikely(r == NULL)) { tp_throw("arr_fill: out of memory"); return NULL; }
     for (t_int i = 0; i < count; i++) {
         r = tphp_fn_arr_set_int(r, start + i, val);
     }
@@ -1214,7 +1207,7 @@ static inline t_var tphp_fn_reset(t_array* a) {
 // array_chunk($arr, $size) — 分组切片
 static inline t_array* tphp_fn_array_chunk(t_array* a, t_int size) {
     t_array* out = tphp_fn_arr_create(0);
-    if (out == NULL) return NULL;
+    if (out == NULL) { tp_throw("array_chunk: out of memory"); return NULL; }
     tphp_rt_register((void*)out, 1);
     if (size < 1) {
         tp_throw("array_chunk(): Argument #2 ($length) must be greater than 0");
@@ -1224,7 +1217,7 @@ static inline t_array* tphp_fn_array_chunk(t_array* a, t_int size) {
     int chunks = (a->length + (int)size - 1) / (int)size;
     for (int c = 0; c < chunks; c++) {
         t_array* chunk = tphp_fn_arr_create((int)size);
-        if (chunk == NULL) break;
+        if (chunk == NULL) { tp_throw("array_chunk: out of memory"); return out; }
         tphp_rt_register((void*)chunk, 1);
         int start = c * (int)size;
         int end = start + (int)size;
@@ -1244,7 +1237,7 @@ static inline t_array* tphp_fn_array_combine(t_array* keys, t_array* values) {
         return NULL;
     }
     t_array* out = tphp_fn_arr_create(keys->length);
-    if (out == NULL) return NULL;
+    if (out == NULL) { tp_throw("array_combine: out of memory"); return NULL; }
     tphp_rt_register((void*)out, 1);
     for (int i = 0; i < keys->length; i++) {
         t_var k = keys->entries[i].val;
@@ -1260,7 +1253,7 @@ static inline t_array* tphp_fn_array_combine(t_array* keys, t_array* values) {
 // array_flip($arr) — 键值互换
 static inline t_array* tphp_fn_array_flip(t_array* a) {
     t_array* out = tphp_fn_arr_create(a ? a->length : 4);
-    if (out == NULL) return NULL;
+    if (out == NULL) { tp_throw("array_flip: out of memory"); return NULL; }
     tphp_rt_register((void*)out, 1);
     if (a == NULL) return out;
     for (int i = 0; i < a->length; i++) {
@@ -1278,7 +1271,7 @@ static inline t_array* tphp_fn_array_flip(t_array* a) {
 // col 为 string 键名或 int 列索引（不支持 null 第3参数，暂支持双参）
 static inline t_array* tphp_fn_array_column_str(t_array* a, t_string col) {
     t_array* out = tphp_fn_arr_create(a ? a->length : 4);
-    if (out == NULL) return NULL;
+    if (out == NULL) { tp_throw("array_column_str: out of memory"); return NULL; }
     tphp_rt_register((void*)out, 1);
     if (a == NULL) return out;
     for (int i = 0; i < a->length; i++) {
@@ -1355,11 +1348,11 @@ static inline void tphp_fn_asort(t_array* a) {
     arr_stridx_free(a);  // sorting changes entry positions
     arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
-    if (!ptrs) return;
+    if (!ptrs) { tp_throw("asort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
     qsort(ptrs, (size_t)a->length, sizeof(t_arr_entry*), _cmp_val);
     t_arr_entry *tmp = (t_arr_entry*)malloc((size_t)a->length * sizeof(t_arr_entry));
-    if (!tmp) { free(ptrs); return; }
+    if (!tmp) { free(ptrs); tp_throw("asort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) tmp[i] = *ptrs[i];
     for (int i = 0; i < a->length; i++) a->entries[i] = tmp[i];
     free(tmp); free(ptrs);
@@ -1369,11 +1362,11 @@ static inline void tphp_fn_arsort(t_array* a) {
     arr_stridx_free(a);  // sorting changes entry positions
     arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
-    if (!ptrs) return;
+    if (!ptrs) { tp_throw("arsort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
     qsort(ptrs, (size_t)a->length, sizeof(t_arr_entry*), _cmp_val_r);
     t_arr_entry *tmp = (t_arr_entry*)malloc((size_t)a->length * sizeof(t_arr_entry));
-    if (!tmp) { free(ptrs); return; }
+    if (!tmp) { free(ptrs); tp_throw("arsort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) tmp[i] = *ptrs[i];
     for (int i = 0; i < a->length; i++) a->entries[i] = tmp[i];
     free(tmp); free(ptrs);
@@ -1383,11 +1376,11 @@ static inline void tphp_fn_ksort(t_array* a) {
     arr_stridx_free(a);  // sorting changes entry positions
     arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
-    if (!ptrs) return;
+    if (!ptrs) { tp_throw("ksort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
     qsort(ptrs, (size_t)a->length, sizeof(t_arr_entry*), _cmp_key);
     t_arr_entry *tmp = (t_arr_entry*)malloc((size_t)a->length * sizeof(t_arr_entry));
-    if (!tmp) { free(ptrs); return; }
+    if (!tmp) { free(ptrs); tp_throw("ksort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) tmp[i] = *ptrs[i];
     for (int i = 0; i < a->length; i++) a->entries[i] = tmp[i];
     free(tmp); free(ptrs);
@@ -1397,11 +1390,11 @@ static inline void tphp_fn_krsort(t_array* a) {
     arr_stridx_free(a);  // sorting changes entry positions
     arr_intidx_free(a);  // sorting changes entry positions
     t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
-    if (!ptrs) return;
+    if (!ptrs) { tp_throw("krsort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
     qsort(ptrs, (size_t)a->length, sizeof(t_arr_entry*), _cmp_key_r);
     t_arr_entry *tmp = (t_arr_entry*)malloc((size_t)a->length * sizeof(t_arr_entry));
-    if (!tmp) { free(ptrs); return; }
+    if (!tmp) { free(ptrs); tp_throw("krsort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) tmp[i] = *ptrs[i];
     for (int i = 0; i < a->length; i++) a->entries[i] = tmp[i];
     free(tmp); free(ptrs);

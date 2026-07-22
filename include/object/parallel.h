@@ -78,7 +78,7 @@ static inline void tphp_class_Parallel_for(t_int n, t_callback fn, t_int threads
         if (start >= n) break;
 
         _parallel_for_ctx *ctx = (_parallel_for_ctx*)malloc(sizeof(_parallel_for_ctx));
-        if (ctx == NULL) break;
+        if (ctx == NULL) { tp_throw("Parallel::for(): out of memory"); break; }
         ctx->cb    = fn;
         ctx->start = start;
         ctx->end   = end;
@@ -140,7 +140,7 @@ static inline t_array* tphp_class_Parallel_map(t_array *data, t_callback fn, t_i
 
     /* 堆分配结果缓冲区（不经过 arr_freelist，避免跨线程池污染） */
     t_int *results = (t_int*)malloc(sizeof(t_int) * (size_t)n);
-    if (results == NULL) return NULL;
+    if (results == NULL) { tp_throw("Parallel::map(): out of memory"); return NULL; }
 
     /* 单线程：内联执行 */
     if (nthreads <= 1) {
@@ -168,7 +168,7 @@ static inline t_array* tphp_class_Parallel_map(t_array *data, t_callback fn, t_i
                 if (start >= n) break;
 
                 _parallel_map_ctx *ctx = (_parallel_map_ctx*)malloc(sizeof(_parallel_map_ctx));
-                if (ctx == NULL) break;
+                if (ctx == NULL) { tp_throw("Parallel::map(): out of memory"); break; }
                 ctx->cb      = fn;
                 ctx->input   = data;
                 ctx->start   = start;

@@ -283,13 +283,19 @@ static inline t_string tphp_fn_stream_strerror(t_int err) {
 
 // ── 设置非阻塞模式 ──────────────────────────────────────────
 static inline t_bool tphp_fn_stream_set_blocking(t_int fd, t_bool enable) {
-    if (fd < 0) return false;
+    if (fd < 0) {
+        _stream_throw("stream_set_blocking: invalid fd");
+        return false;
+    }
 #ifdef _WIN32
     u_long mode = enable ? 0 : 1;
     return ioctlsocket((SOCKET)fd, FIONBIO, &mode) == 0 ? true : false;
 #else
     int flags = fcntl((int)fd, F_GETFL, 0);
-    if (flags < 0) return false;
+    if (flags < 0) {
+        _stream_throw("stream_set_blocking: fcntl F_GETFL failed");
+        return false;
+    }
     if (enable) {
         flags &= ~O_NONBLOCK;
     } else {
@@ -821,7 +827,10 @@ static inline t_int tphp_fn_stream_set_write_buffer(t_int fd, t_int buffer) {
 //   PHP: stream_set_timeout(resource $stream, int $seconds, int $microseconds = 0): bool
 //   用 setsockopt(SO_RCVTIMEO/SO_SNDTIMEO) 实现（仅对 socket fd 有效）
 static inline t_bool tphp_fn_stream_set_timeout(t_int fd, t_int seconds, t_int microseconds) {
-    if (fd < 0) return false;
+    if (fd < 0) {
+        _stream_throw("stream_set_timeout: invalid fd");
+        return false;
+    }
 #ifdef _WIN32
     DWORD ms = (DWORD)(seconds * 1000 + microseconds / 1000);
     if (setsockopt((SOCKET)fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms)) != 0) {

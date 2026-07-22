@@ -30,7 +30,8 @@ static t_int tphp_fn_mb_strlen(t_string s) {
 
 // ── mb_substr: UTF-8 子串 ──────────────────────────────
 static t_string tphp_fn_mb_substr(t_string s, t_int start, t_int length) {
-    if (STR_PTR(s) == NULL || s.length <= 0) return (t_string){NULL,0,false};
+    if (s.length <= 0) return (t_string){NULL,0,false};
+    if (STR_PTR(s) == NULL) { tp_throw("mb_substr(): string is not initialized"); return (t_string){NULL,0,false}; }
     const unsigned char *p = (const unsigned char*)STR_PTR(s);
     int byte_start = 0, ch_count = 0, n = s.length;
     // Find byte position of start character
@@ -58,12 +59,15 @@ static t_string tphp_fn_mb_substr(t_string s, t_int start, t_int length) {
     int len = byte_end - byte_start;
     if (len <= 0) return (t_string){NULL,0,false};
     if (byte_start == 0 && len == n) return s;
-    char *buf = str_pool_alloc(len); if (!buf) return (t_string){NULL,0,false};
+    char *buf = str_pool_alloc(len);
+    if (!buf) { tp_throw("mb_substr(): out of memory"); return (t_string){NULL,0,false}; }
     memcpy(buf, p + byte_start, (size_t)len); buf[len] = '\0';
     return (t_string){buf, len, false};
 }
 
 // ── mb_strpos: UTF-8 定位 ──────────────────────────────
 static t_int tphp_fn_mb_strpos(t_string haystack, t_string needle) {
-    return tphp_fn_strpos(haystack, needle); // UTF-8 substring search works at byte level
+    // 委托 strpos：UTF-8 子串搜索在字节级即可正确工作。
+    // strpos 内部已处理空字符串/未初始化/未找到等情况。
+    return tphp_fn_strpos(haystack, needle);
 }

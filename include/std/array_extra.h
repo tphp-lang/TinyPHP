@@ -4,7 +4,8 @@
 
 static t_array* tphp_fn_arr_flip(t_array *s) {
     t_array *d = tphp_fn_arr_create(s? s->length : 8);
-    if (!d || !s) return d; tphp_rt_register((void*)d, 1);
+    if (!d) { tp_throw("arr_flip(): out of memory"); return NULL; }
+    if (!s) return d; tphp_rt_register((void*)d, 1);
     for (int i=0; i<s->length; i++) {
         if (s->entries[i].val.type == TYPE_STRING)
             d = tphp_fn_arr_set_str(d,s->entries[i].val.value._string,s->entries[i].key);
@@ -52,7 +53,8 @@ static inline bool _arr_diff_lookup(t_array *intSet, t_array *strSet, t_var val)
 
 static t_array* tphp_fn_arr_diff(t_array *a1, t_array *a2) {
     t_array *r = tphp_fn_arr_create(8);
-    if (!r || !a1) return r; tphp_rt_register((void*)r,1);
+    if (!r) { tp_throw("arr_diff(): out of memory"); return NULL; }
+    if (!a1) return r; tphp_rt_register((void*)r,1);
     // 小数组：双循环（缓存友好，无哈希开销）
     if (!a2 || a2->length < ARR_DIFF_HASH_THRESHOLD) {
         for (int i=0; i<a1->length; i++) {
@@ -79,7 +81,8 @@ static t_array* tphp_fn_arr_diff(t_array *a1, t_array *a2) {
 
 static t_array* tphp_fn_arr_intersect(t_array *a1, t_array *a2) {
     t_array *r = tphp_fn_arr_create(8);
-    if (!r||!a1||!a2) return r; tphp_rt_register((void*)r,1);
+    if (!r) { tp_throw("arr_intersect(): out of memory"); return NULL; }
+    if (!a1||!a2) return r; tphp_rt_register((void*)r,1);
     // 小数组：双循环
     if (a2->length < ARR_DIFF_HASH_THRESHOLD) {
         for (int i=0; i<a1->length; i++) {
@@ -106,7 +109,8 @@ static t_array* tphp_fn_arr_intersect(t_array *a1, t_array *a2) {
 
 static t_array* tphp_fn_arr_column(t_array *a, t_string ck) {
     t_array *r = tphp_fn_arr_create(a?a->length:8);
-    if (!r||!a) return r; tphp_rt_register((void*)r,1);
+    if (!r) { tp_throw("arr_column(): out of memory"); return NULL; }
+    if (!a) return r; tphp_rt_register((void*)r,1);
     for (int i=0; i<a->length; i++) {
         if (a->entries[i].val.type!=TYPE_ARRAY) continue;
         t_array *rw = a->entries[i].val.value._array;
@@ -120,9 +124,9 @@ static t_array* tphp_fn_arr_column(t_array *a, t_string ck) {
 
 // ── array_chunk ──────────────────────────────────────────────
 static t_array* tphp_fn_arr_chunk(t_array *a, t_int sz) {
-    if(sz<1)return tphp_fn_arr_create(0);
+    if(sz<1){ tp_throw("arr_chunk(): size must be >= 1"); return NULL; }
     int n=a?a->length:0,chs=(n+(int)sz-1)/(int)sz;if(chs<1)chs=1;
-    t_array *r=tphp_fn_arr_create(chs);if(!r)return r;tphp_rt_register((void*)r,1);
+    t_array *r=tphp_fn_arr_create(chs);if(!r){ tp_throw("arr_chunk(): out of memory"); return NULL; }tphp_rt_register((void*)r,1);
     for(int i=0;i<n;i+=(int)sz){
         int e=i+(int)sz;if(e>n)e=n;
         t_array *c=tphp_fn_arr_create(e-i);tphp_rt_register((void*)c,1);
@@ -134,8 +138,9 @@ static t_array* tphp_fn_arr_chunk(t_array *a, t_int sz) {
 
 // ── array_combine ───────────────────────────────────────────
 static t_array* tphp_fn_arr_combine(t_array *ks, t_array *vs) {
-    if(!ks||!vs||ks->length!=vs->length)return tphp_fn_arr_create(0);
-    t_array *r=tphp_fn_arr_create(ks->length);if(!r)return r;tphp_rt_register((void*)r,1);
+    if(!ks||!vs)return tphp_fn_arr_create(0);
+    if(ks->length!=vs->length){ tp_throw("arr_combine(): arrays must have the same length"); return NULL; }
+    t_array *r=tphp_fn_arr_create(ks->length);if(!r){ tp_throw("arr_combine(): out of memory"); return NULL; }tphp_rt_register((void*)r,1);
     for(int i=0;i<ks->length;i++){
         if(ks->entries[i].val.type==TYPE_STRING)r=tphp_fn_arr_set_str(r,ks->entries[i].val.value._string,vs->entries[i].val);
         else if(ks->entries[i].val.type==TYPE_INT)r=tphp_fn_arr_set_int(r,ks->entries[i].val.value._int,vs->entries[i].val);
@@ -145,7 +150,7 @@ static t_array* tphp_fn_arr_combine(t_array *ks, t_array *vs) {
 
 // ── array_count_values ──────────────────────────────────────
 static t_array* tphp_fn_arr_count_values(t_array *a) {
-    t_array *r=tphp_fn_arr_create(a?a->length:8);if(!r||!a)return r;tphp_rt_register((void*)r,1);
+    t_array *r=tphp_fn_arr_create(a?a->length:8);if(!r){ tp_throw("arr_count_values(): out of memory"); return NULL; }if(!a)return r;tphp_rt_register((void*)r,1);
     for(int i=0;i<a->length;i++){
         t_var *v=&a->entries[i].val;t_string key;
         if(v->type==TYPE_INT){char b[32];int n=snprintf(b,sizeof(b),"%lld",(long long)v->value._int);key=(t_string){b,n};}

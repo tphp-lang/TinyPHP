@@ -80,14 +80,16 @@ static inline t_string _sqlite_column_to_string(sqlite3_stmt *stmt, int col) {
         int n = snprintf(buf, sizeof(buf), "%lld", (long long)sqlite3_column_int64(stmt, col));
         if (n <= 0) return STR_LIT("");
         char *p = str_pool_alloc(n);
-        if (p) { memcpy(p, buf, (size_t)n); p[n] = 0; }
+        if (!p) { _sqlite_throw_msg("sqlite: out of memory"); return STR_LIT(""); }
+        memcpy(p, buf, (size_t)n); p[n] = 0;
         return (t_string){p, n, false, false};
     } else if (type == SQLITE_FLOAT) {
         char buf[64];
         int n = snprintf(buf, sizeof(buf), "%g", sqlite3_column_double(stmt, col));
         if (n <= 0) return STR_LIT("");
         char *p = str_pool_alloc(n);
-        if (p) { memcpy(p, buf, (size_t)n); p[n] = 0; }
+        if (!p) { _sqlite_throw_msg("sqlite: out of memory"); return STR_LIT(""); }
+        memcpy(p, buf, (size_t)n); p[n] = 0;
         return (t_string){p, n, false, false};
     } else {
         // SQLITE_TEXT / SQLITE_BLOB — 统一按字节拷贝
@@ -95,7 +97,8 @@ static inline t_string _sqlite_column_to_string(sqlite3_stmt *stmt, int col) {
         int len = sqlite3_column_bytes(stmt, col);
         if (ptr == NULL || len <= 0) return STR_LIT("");
         char *p = str_pool_alloc(len);
-        if (p) { memcpy(p, ptr, (size_t)len); p[len] = 0; }
+        if (!p) { _sqlite_throw_msg("sqlite: out of memory"); return STR_LIT(""); }
+        memcpy(p, ptr, (size_t)len); p[len] = 0;
         return (t_string){p, len, false, false};
     }
 }
@@ -343,17 +346,18 @@ static inline t_string tphp_fn_sqlite_escape_string(t_string str) {
         return empty;
     }
     int len = (int)strlen(escaped);
+    if (len <= 0) { sqlite3_free(escaped); return (t_string){NULL, 0, false, false}; }
     char *p = str_pool_alloc(len);
-    t_string result;
-    if (p) {
-        memcpy(p, escaped, (size_t)len);
-        p[len] = 0;
-        result = (t_string){p, len, false, false};
-    } else {
-        result = (t_string){NULL, 0, false, false};
+    if (!p) {
+        sqlite3_free(escaped);
+        _sqlite_throw_msg("sqlite_escape_string: out of memory");
+        t_string empty = {NULL, 0, false, false};
+        return empty;
     }
+    memcpy(p, escaped, (size_t)len);
+    p[len] = 0;
     sqlite3_free(escaped);
-    return result;
+    return (t_string){p, len, false, false};
 }
 
 // ── sqlite_changes: 最近一次 INSERT/UPDATE/DELETE 影响行数 ──
@@ -382,12 +386,13 @@ static inline t_string tphp_fn_sqlite_last_error_msg(t_int db_int) {
     if (emsg == NULL) return STR_LIT("");
     int len = (int)strlen(emsg);
     char *p = str_pool_alloc(len);
-    if (p) {
-        memcpy(p, emsg, (size_t)len);
-        p[len] = 0;
-        return (t_string){p, len, false, false};
+    if (!p) {
+        _sqlite_throw_msg("sqlite_last_error_msg: out of memory");
+        return STR_LIT("");
     }
-    return STR_LIT("");
+    memcpy(p, emsg, (size_t)len);
+    p[len] = 0;
+    return (t_string){p, len, false, false};
 }
 
 // ── sqlite_last_error_code: 最近一次错误码 ──
@@ -406,10 +411,11 @@ static inline t_string tphp_fn_sqlite_version(void) {
     if (v == NULL) return STR_LIT("");
     int len = (int)strlen(v);
     char *p = str_pool_alloc(len);
-    if (p) {
-        memcpy(p, v, (size_t)len);
-        p[len] = 0;
-        return (t_string){p, len, false, false};
+    if (!p) {
+        _sqlite_throw_msg("sqlite_version: out of memory");
+        return STR_LIT("");
     }
-    return STR_LIT("");
+    memcpy(p, v, (size_t)len);
+    p[len] = 0;
+    return (t_string){p, len, false, false};
 }

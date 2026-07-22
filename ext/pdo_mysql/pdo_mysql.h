@@ -1121,7 +1121,7 @@ static int _pdo_mysql_open(const char* dsn, int flags, const char* user, const c
     _mysql_parse_dsn(dsn, &dsn_info);
 
     mysql_conn_t* conn = (mysql_conn_t*)malloc(sizeof(mysql_conn_t));
-    if (conn == NULL) return -1;
+    if (conn == NULL) { tp_throw("_pdo_mysql_open: out of memory"); return -1; }
     memset(conn, 0, sizeof(*conn));
     conn->fd = -1;
     conn->sequence_id = 0;
@@ -1398,7 +1398,7 @@ static int _pdo_mysql_bind_text(void* stmt, int idx, const char* val, int len) {
     int i = idx - 1;
     if (s->param_texts[i] != NULL) free(s->param_texts[i]);
     s->param_texts[i] = (char*)malloc(len + 1);
-    if (s->param_texts[i] == NULL) return -1;
+    if (s->param_texts[i] == NULL) { tp_throw("_pdo_mysql_bind_text: out of memory"); return -1; }
     memcpy(s->param_texts[i], val, len);
     s->param_texts[i][len] = '\0';
     s->param_text_lens[i] = len;
@@ -1414,7 +1414,7 @@ static int _pdo_mysql_bind_blob(void* stmt, int idx, const char* data, int len) 
     int i = idx - 1;
     if (s->param_texts[i] != NULL) free(s->param_texts[i]);
     s->param_texts[i] = (char*)malloc(len + 1);
-    if (s->param_texts[i] == NULL) return -1;
+    if (s->param_texts[i] == NULL) { tp_throw("_pdo_mysql_bind_blob: out of memory"); return -1; }
     memcpy(s->param_texts[i], data, len);
     s->param_texts[i][len] = '\0';
     s->param_text_lens[i] = len;
@@ -1811,7 +1811,7 @@ static char* _pdo_mysql_quote(const char* s) {
     if (s == NULL) return NULL;
     int len = (int)strlen(s);
     char* out = (char*)malloc(len * 2 + 3);  // 最坏每字符翻倍 + 2 引号 + \0
-    if (out == NULL) return NULL;
+    if (out == NULL) { tp_throw("_pdo_mysql_quote: out of memory"); return NULL; }
     out[0] = '\'';
     int j = 1;
     for (int i = 0; i < len; i++) {

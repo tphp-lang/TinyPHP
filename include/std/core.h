@@ -369,7 +369,7 @@ static inline t_string tphp_fn_trim(t_string s) {
     if (len <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (start == 0 && len == s.length) return s; // zero-alloc shortcut
     char *buf = str_pool_alloc(len);
-    if (buf == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (buf == NULL) { tp_throw("trim(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     memcpy(buf, STR_PTR(s) + start, (size_t)len);
     buf[len] = '\0';
     return (t_string){buf, len};
@@ -383,7 +383,7 @@ static inline t_string tphp_fn_ltrim(t_string s) {
     if (len <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (start == 0) return s; // zero-alloc
     char *buf = str_pool_alloc(len);
-    if (buf == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (buf == NULL) { tp_throw("ltrim(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     memcpy(buf, STR_PTR(s) + start, (size_t)len);
     buf[len] = '\0';
     return (t_string){buf, len};
@@ -397,7 +397,7 @@ static inline t_string tphp_fn_rtrim(t_string s) {
     if (len <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (len == s.length) return s; // zero-alloc
     char *buf = str_pool_alloc(len);
-    if (buf == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (buf == NULL) { tp_throw("rtrim(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     memcpy(buf, STR_PTR(s), (size_t)len);
     buf[len] = '\0';
     return (t_string){buf, len};
@@ -423,15 +423,19 @@ static inline t_string tphp_fn_substr(t_string s, t_int offset, t_int length) {
     if (len <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     if (start == 0 && len == slen) return s; // zero-alloc full copy
     char *buf = str_pool_alloc(len);
-    if (buf == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (buf == NULL) { tp_throw("substr(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     memcpy(buf, STR_PTR(s) + start, (size_t)len);
     buf[len] = '\0';
     return (t_string){buf, len};
 }
 
 static inline t_int tphp_fn_strpos(t_string haystack, t_string needle) {
-    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return -1;
+    // 空 needle 返回 0（PHP 语义）；空 haystack 返回 -1（未找到）
     if (needle.length <= 0) return 0;
+    if (haystack.length <= 0) return -1;
+    // length > 0 但 data 为 NULL — 不一致状态，抛异常（可被 try/catch 捕获）
+    if (STR_PTR(haystack) == NULL) { tp_throw("strpos(): haystack is not initialized"); return -1; }
+    if (STR_PTR(needle) == NULL)   { tp_throw("strpos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
     for (int i = 0; i <= haystack.length - needle.length; i++) {
         if (memcmp(STR_PTR(haystack) + i, STR_PTR(needle), (size_t)needle.length) == 0)
@@ -443,8 +447,11 @@ static inline t_int tphp_fn_strpos(t_string haystack, t_string needle) {
 // strrpos — 大小写敏感，从右往左找最后一次出现位置
 //   未找到返回 -1（非 false）；空 needle 返回 haystack.length（PHP 8+ 语义）
 static inline t_int tphp_fn_strrpos(t_string haystack, t_string needle) {
-    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return -1;
     if (needle.length <= 0) return (t_int)haystack.length;
+    if (haystack.length <= 0) return -1;
+    // length > 0 但 data 为 NULL — 不一致状态，抛异常（可被 try/catch 捕获）
+    if (STR_PTR(haystack) == NULL) { tp_throw("strrpos(): haystack is not initialized"); return -1; }
+    if (STR_PTR(needle) == NULL)   { tp_throw("strrpos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
     for (int i = haystack.length - needle.length; i >= 0; i--) {
         if (memcmp(STR_PTR(haystack) + i, STR_PTR(needle), (size_t)needle.length) == 0)
@@ -467,8 +474,10 @@ static inline int _tp_strcasecmp_at(const char *a, const char *b, int n) {
 
 // stripos — 大小写不敏感，从左往右找首次出现位置
 static inline t_int tphp_fn_stripos(t_string haystack, t_string needle) {
-    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return -1;
     if (needle.length <= 0) return 0;
+    if (haystack.length <= 0) return -1;
+    if (STR_PTR(haystack) == NULL) { tp_throw("stripos(): haystack is not initialized"); return -1; }
+    if (STR_PTR(needle) == NULL)   { tp_throw("stripos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
     for (int i = 0; i <= haystack.length - needle.length; i++) {
         if (_tp_strcasecmp_at(STR_PTR(haystack) + i, STR_PTR(needle), needle.length) == 0)
@@ -479,8 +488,10 @@ static inline t_int tphp_fn_stripos(t_string haystack, t_string needle) {
 
 // strripos — 大小写不敏感，从右往左找最后一次出现位置
 static inline t_int tphp_fn_strripos(t_string haystack, t_string needle) {
-    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return -1;
     if (needle.length <= 0) return (t_int)haystack.length;
+    if (haystack.length <= 0) return -1;
+    if (STR_PTR(haystack) == NULL) { tp_throw("strripos(): haystack is not initialized"); return -1; }
+    if (STR_PTR(needle) == NULL)   { tp_throw("strripos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
     for (int i = haystack.length - needle.length; i >= 0; i--) {
         if (_tp_strcasecmp_at(STR_PTR(haystack) + i, STR_PTR(needle), needle.length) == 0)
@@ -490,6 +501,10 @@ static inline t_int tphp_fn_strripos(t_string haystack, t_string needle) {
 }
 
 static inline t_bool tphp_fn_str_contains(t_string haystack, t_string needle) {
+    if (needle.length <= 0) return true;
+    if (haystack.length <= 0) return false;
+    if (STR_PTR(haystack) == NULL) { tp_throw("str_contains(): haystack is not initialized"); return false; }
+    if (STR_PTR(needle) == NULL)   { tp_throw("str_contains(): needle is not initialized");   return false; }
     return tphp_fn_strpos(haystack, needle) >= 0;
 }
 
@@ -514,7 +529,7 @@ static inline t_string tphp_fn_str_replace(t_string search, t_string replace, t_
     int new_len = subject.length + count * (replace.length - search.length);
     if (new_len <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     char *buf = str_pool_alloc(new_len);
-    if (buf == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (buf == NULL) { tp_throw("str_replace(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     int pos = 0, si = 0;
     while (si < subject.length) {
         if (si <= subject.length - search.length &&
@@ -579,7 +594,7 @@ static inline t_string tphp_fn_strtolower(t_string s) {
     }
     if (!changed) return s; // zero-alloc
     char *buf = str_pool_alloc(s.length);
-    if (buf == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (buf == NULL) { tp_throw("strtolower(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     for (int i = 0; i < s.length; i++) {
         unsigned char c = (unsigned char)STR_PTR(s)[i];
         buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
@@ -597,7 +612,7 @@ static inline t_string tphp_fn_strtoupper(t_string s) {
     }
     if (!changed) return s; // zero-alloc
     char *buf = str_pool_alloc(s.length);
-    if (buf == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (buf == NULL) { tp_throw("strtoupper(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     for (int i = 0; i < s.length; i++) {
         unsigned char c = (unsigned char)STR_PTR(s)[i];
         buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : (char)c;
@@ -621,15 +636,19 @@ static inline t_string tphp_fn_chr(t_int n) {
 
 // ── str_starts_with / str_ends_with — PHP 8.0+ ──────────────
 static inline t_bool tphp_fn_str_starts_with(t_string haystack, t_string needle) {
-    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return false;
     if (needle.length == 0) return true;
+    if (haystack.length <= 0) return false;
+    if (STR_PTR(haystack) == NULL) { tp_throw("str_starts_with(): haystack is not initialized"); return false; }
+    if (STR_PTR(needle) == NULL)   { tp_throw("str_starts_with(): needle is not initialized");   return false; }
     if (needle.length > haystack.length) return false;
     return memcmp(STR_PTR(haystack), STR_PTR(needle), (size_t)needle.length) == 0;
 }
 
 static inline t_bool tphp_fn_str_ends_with(t_string haystack, t_string needle) {
-    if (STR_PTR(haystack) == NULL || STR_PTR(needle) == NULL) return false;
     if (needle.length == 0) return true;
+    if (haystack.length <= 0) return false;
+    if (STR_PTR(haystack) == NULL) { tp_throw("str_ends_with(): haystack is not initialized"); return false; }
+    if (STR_PTR(needle) == NULL)   { tp_throw("str_ends_with(): needle is not initialized");   return false; }
     if (needle.length > haystack.length) return false;
     return memcmp(STR_PTR(haystack) + haystack.length - needle.length,
                   STR_PTR(needle), (size_t)needle.length) == 0;
@@ -657,7 +676,7 @@ static inline t_string tphp_fn_ucfirst(t_string s) {
     if (STR_PTR(s) == NULL || s.length == 0) return s;
     if (STR_PTR(s)[0] < 'a' || STR_PTR(s)[0] > 'z') return s; // 已是零分配
     char *d = str_pool_alloc(s.length);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("ucfirst(): out of memory"); return s; }
     d[0] = (char)(STR_PTR(s)[0] - 32);
     if (s.length > 1) memcpy(d + 1, STR_PTR(s) + 1, (size_t)(s.length - 1));
     d[s.length] = '\0';
@@ -669,7 +688,7 @@ static inline t_string tphp_fn_lcfirst(t_string s) {
     if (STR_PTR(s) == NULL || s.length == 0) return s;
     if (STR_PTR(s)[0] < 'A' || STR_PTR(s)[0] > 'Z') return s;
     char *d = str_pool_alloc(s.length);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("lcfirst(): out of memory"); return s; }
     d[0] = (char)(STR_PTR(s)[0] + 32);
     if (s.length > 1) memcpy(d + 1, STR_PTR(s) + 1, (size_t)(s.length - 1));
     d[s.length] = '\0';
@@ -680,7 +699,7 @@ static inline t_string tphp_fn_lcfirst(t_string s) {
 static inline t_string tphp_fn_strrev(t_string s) {
     if (STR_PTR(s) == NULL || s.length <= 0) return s;
     char *d = str_pool_alloc(s.length);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("strrev(): out of memory"); return s; }
     for (int i = 0; i < s.length; i++) d[i] = STR_PTR(s)[s.length - 1 - i];
     d[s.length] = '\0';
     return (t_string){d, s.length};
@@ -695,9 +714,9 @@ static inline t_string tphp_fn_str_repeat(t_string s, t_int n) {
     }
     if (n == 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     int total = s.length * (int)n;
-    if (total <= 0 || total > 0x3FFFFF) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (total <= 0 || total > 0x3FFFFF) { tp_throw("str_repeat(): result too large"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     char *d = str_pool_alloc(total);
-    if (d == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (d == NULL) { tp_throw("str_repeat(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     for (int i = 0; i < (int)n; i++)
         memcpy(d + i * s.length, STR_PTR(s), (size_t)s.length);
     d[total] = '\0';
@@ -736,7 +755,7 @@ static inline t_string tphp_fn_str_pad(t_string s, t_int len, t_string pad, t_in
     int plen = (STR_PTR(pad) != NULL && pad.length > 0) ? pad.length : 1;
     if (len <= slen) return s; // 零分配返回原串
     char *d = str_pool_alloc(len);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("str_pad(): out of memory"); return s; }
     int gap = len - slen;
     if (type == 1) { // LEFT
         for (int i = 0; i < gap; i++) d[i] = (STR_PTR(pad) != NULL) ? STR_PTR(pad)[i % plen] : ' ';
@@ -775,7 +794,7 @@ static inline t_int tphp_fn_rand_int(t_int min, t_int max);
 static inline t_string tphp_fn_str_shuffle(t_string s) {
     if (STR_PTR(s) == NULL || s.length <= 0) return s;
     char *d = str_pool_alloc(s.length);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("str_shuffle(): out of memory"); return s; }
     memcpy(d, STR_PTR(s), (size_t)s.length);
     // Fisher-Yates
     for (int i = s.length - 1; i > 0; i--) {
@@ -798,7 +817,7 @@ static inline t_string tphp_fn_addslashes(t_string s) {
     if (extra == 0) return s; // 零分配
     int newlen = s.length + extra;
     char *d = str_pool_alloc(newlen);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("addslashes(): out of memory"); return s; }
     int pos = 0;
     for (int i = 0; i < s.length; i++) {
         char c = STR_PTR(s)[i];
@@ -820,7 +839,7 @@ static inline t_string tphp_fn_stripslashes(t_string s) {
     }
     if (newlen == s.length) return s; // 零分配
     char *d = str_pool_alloc(newlen);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("stripslashes(): out of memory"); return s; }
     int pos = 0;
     for (int i = 0; i < s.length; i++) {
         if (STR_PTR(s)[i] == '\\' && i + 1 < s.length) { i++; } // 跳过 \\
@@ -835,7 +854,7 @@ static inline t_string tphp_fn_bin2hex(t_string s) {
     if (STR_PTR(s) == NULL || s.length == 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     static const char hexc[] = "0123456789abcdef";
     char *d = str_pool_alloc(s.length * 2);
-    if (d == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (d == NULL) { tp_throw("bin2hex(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     for (int i = 0; i < s.length; i++) {
         d[i*2]   = hexc[(unsigned char)STR_PTR(s)[i] >> 4];
         d[i*2+1] = hexc[(unsigned char)STR_PTR(s)[i] & 0xF];
@@ -888,7 +907,7 @@ static inline t_string tphp_fn_urlencode(t_string s) {
     }
     if (extra == 0) return s; // 零分配
     char *d = str_pool_alloc(s.length + extra);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("urlencode(): out of memory"); return s; }
     static const char hx[] = "0123456789ABCDEF";
     int pos = 0;
     for (int i = 0; i < s.length; i++) {
@@ -917,7 +936,7 @@ static inline t_string tphp_fn_urldecode(t_string s) {
     }
     if (extra == 0) return s; // zero-alloc
     char *d = str_pool_alloc(s.length);
-    if (d == NULL) return s;
+    if (d == NULL) { tp_throw("urldecode(): out of memory"); return s; }
     int pos = 0;
     for (int i = 0; i < s.length; i++) {
         if (STR_PTR(s)[i] == '%' && i + 2 < s.length) {
@@ -1180,11 +1199,11 @@ static inline t_string tphp_fn_implode(t_string glue, t_array* a) {
         if (partLen < 0) partLen = 0;
         totalLen += partLen;
         if (i > 0 && glueLen > 0) totalLen += glueLen;
-        if (unlikely(totalLen > 0x7FFFFF)) return (t_string){.data = NULL, .length = 0, .is_local = false};
+        if (unlikely(totalLen > 0x7FFFFF)) { tp_throw("implode(): result too large"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     }
     if (totalLen <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
     char* buf = str_pool_alloc(totalLen);
-    if (unlikely(buf == NULL)) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (unlikely(buf == NULL)) { tp_throw("implode(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     int pos = 0;
     for (int i = 0; i < a->length; i++) {
         t_var *v = &a->entries[i].val;
@@ -1234,8 +1253,9 @@ static inline t_array* tphp_fn_explode(t_string delim, t_string s) {
             int pieceLen = i - start;
             if (pieceLen > 0) {
                 char* piece = str_pool_alloc(pieceLen);
-                if (piece) { memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
-                    out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen}))); }
+                if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
+                memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
+                out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
             }
             start = i + delim.length; i = start - 1;
         }
@@ -1243,8 +1263,9 @@ static inline t_array* tphp_fn_explode(t_string delim, t_string s) {
     int pieceLen = s.length - start;
     if (pieceLen > 0) {
         char* piece = str_pool_alloc(pieceLen);
-        if (piece) { memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
-            out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen}))); }
+        if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
+        memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
+        out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
     }
     return out;
 }
@@ -1379,7 +1400,7 @@ static inline t_string tphp_fn_random_bytes(t_int length) {
         return (t_string){NULL, 0};
     }
     unsigned char* buf = (unsigned char*)malloc((size_t)length);
-    if (!buf) return (t_string){NULL, 0};
+    if (!buf) { tp_throw("random_bytes(): out of memory"); return (t_string){NULL, 0}; }
     if (_tphp_random_bytes(buf, (size_t)length) != 0) {
         free(buf);
         tp_throw("random_bytes(): unable to generate random bytes");

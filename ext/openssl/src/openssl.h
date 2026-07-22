@@ -411,7 +411,10 @@ static inline t_int tphp_fn_openssl_ssl_write(t_int ssl, t_string data) {
 
 // ── SSL_shutdown：优雅关闭 TLS ────────────────────────────
 static inline t_bool tphp_fn_openssl_ssl_shutdown(t_int ssl) {
-    if (ssl == 0) return false;
+    if (ssl == 0) {
+        _openssl_throw("openssl_ssl_shutdown: ssl is NULL");
+        return false;
+    }
     _tphp_ssl_ctx_t* c = (_tphp_ssl_ctx_t*)(intptr_t)ssl;
     mbedtls_ssl_close_notify(&c->ssl);
     return true;
@@ -420,7 +423,8 @@ static inline t_bool tphp_fn_openssl_ssl_shutdown(t_int ssl) {
 // ── SSL_get_cipher_name：获取当前加密套件名 ──────────────────
 static inline t_string tphp_fn_openssl_ssl_get_cipher_name(t_int ssl) {
     if (ssl == 0) {
-        return tphp_rt_str_dup((t_string){.data = (char*)"", .length = 0, .is_local = false, .is_lit = false});
+        _openssl_throw("openssl_ssl_get_cipher_name: ssl is NULL");
+        return (t_string){0};
     }
     _tphp_ssl_ctx_t* c = (_tphp_ssl_ctx_t*)(intptr_t)ssl;
     int suite = mbedtls_ssl_get_ciphersuite_id_from_ssl(&c->ssl);
@@ -435,7 +439,8 @@ static inline t_string tphp_fn_openssl_ssl_get_cipher_name(t_int ssl) {
 //   需用 mbedtls_ssl_is_handshake_over() 判断握手状态
 static inline t_string tphp_fn_openssl_ssl_get_version(t_int ssl) {
     if (ssl == 0) {
-        return tphp_rt_str_dup((t_string){.data = (char*)"", .length = 0, .is_local = false, .is_lit = false});
+        _openssl_throw("openssl_ssl_get_version: ssl is NULL");
+        return (t_string){0};
     }
     _tphp_ssl_ctx_t* c = (_tphp_ssl_ctx_t*)(intptr_t)ssl;
     if (!mbedtls_ssl_is_handshake_over(&c->ssl)) {
