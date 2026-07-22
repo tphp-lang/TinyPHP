@@ -731,11 +731,14 @@ class CodeGenerator implements ASTVisitor
             }
         }
         // 检测已导入的 PDO 驱动扩展，记录 C init 函数（在 main() 入口自动调用）
-        //   类似 PHP MINIT：用户只需 #import pdo_mysql，CodeGenerator 自动注入注册调用
-        //   不依赖 __attribute__((constructor))（部分 TCC 版本会死代码消除）
+        //   类似 PHP MINIT：用户只需 #import pdo/pdo_mysql/pdo_sqlite，
+        //   CodeGenerator 自动注入对应驱动的注册调用，不依赖 __attribute__((constructor))
+        //   多驱动共存无冲突：pdo_register_driver 有去重逻辑，按 DSN 前缀分发
         foreach ($userIncAfter as $inc) {
             $f = str_replace('\\', '/', is_array($inc) ? ($inc['file'] ?? '') : $inc);
-            if (str_contains($f, 'pdo_mysql/pdo_mysql.h')) {
+            if (str_contains($f, 'pdo/pdo.h')) {
+                $this->pdoDriverInits[] = 'tphp_fn_pdo_sqlite_init';
+            } elseif (str_contains($f, 'pdo_mysql/pdo_mysql.h')) {
                 $this->pdoDriverInits[] = 'tphp_fn_pdo_mysql_init';
             }
         }

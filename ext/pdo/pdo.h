@@ -644,8 +644,8 @@ static const pdo_driver_t pdo_sqlite_driver = {
 };
 
 // ── 自动注册 SQLite 驱动 ──
-//   constructor 属性确保在 main 之前执行
-//   Windows 下 _Ctor 在 DllMain 或 main 之前调用
+//   constructor + static 在部分 TCC 版本下会被死代码消除，
+//   因此同时提供 constructor 和显式注册函数（CodeGenerator 在 main() 入口自动调用）
 #ifdef _WIN32
 __attribute__((constructor))
 #else
@@ -653,4 +653,11 @@ __attribute__((constructor))
 #endif
 static void _pdo_sqlite_register(void) {
     pdo_register_driver(&pdo_sqlite_driver);
+}
+
+// 显式注册（供 CodeGenerator 在 main() 入口自动调用，确保跨编译器一致）
+//   返回 1 表示注册成功（或已注册），0 表示失败
+static inline int tphp_fn_pdo_sqlite_init(void) {
+    pdo_register_driver(&pdo_sqlite_driver);
+    return 1;
 }
