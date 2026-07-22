@@ -784,10 +784,9 @@ static int _mysql_parse_ok_err(mysql_conn_t* conn, const char* buf, int buf_len)
         // 不解析剩余信息
         _mysql_set_error(conn, 0, "");
         return 1;
-    } else if (first == 0xFE && buf_len < 0xFFFFFF) {
-        // EOF packet（用作 OK 的情况，CLIENT_DEPRECATE_EOF 模式下 0xFE 表示 OK）
-        // 我们不设置 CLIENT_DEPRECATE_EOF，所以 0xFE 一定是 EOF
-        // 但 MySQL 5.7+ 在认证后可能用 OK 形式返回，这里把 0xFE 当作 OK 处理
+    } else if (first == 0xFE && buf_len < 9) {
+        // EOF packet（标准 EOF 长度 <= 5 字节：1 + 2 警告 + 2 状态，保守用 < 9）
+        // 注意：0xFE 且长度 >= 9 是 AuthSwitchRequest，不应当作 EOF/OK
         conn->affected_rows = 0;
         conn->last_insert_id = 0;
         _mysql_set_error(conn, 0, "");
@@ -1156,13 +1155,49 @@ static int _pdo_mysql_open(const char* dsn, int flags, const char* user, const c
         return -1;
     }
 
-    // 4. 读取 OK/ERR packet
+    // 4. 读取 OK/ERR/AuthSwitchRequest packet
     char resp_buf[1024];
     int resp_len;
     if (_mysql_recv_packet(conn, resp_buf, sizeof(resp_buf), &resp_len) != 0) {
         // _mysql_recv_packet 已 set_error
         *dbh = conn;  // 保留 conn 供 driver 读取错误
         return -1;
+    }
+    // 检测 AuthSwitchRequest（0xFE 开头且长度 > 1，标准 EOF 长度 <= 5）
+    if (resp_len >= 2 && (unsigned char)resp_buf[0] == 0xFE) {
+        // AuthSwitchRequest: 0xFE + NUL-terminated plugin_name + plugin_data
+        const char* plugin_name = resp_buf + 1;
+        int pn_len = 0;
+        while (pn_len < resp_len - 1 && plugin_name[pn_len] != '\0') pn_len++;
+        if (pn_len == 21 && strncmp(plugin_name, "mysql_native_password", 21) == 0) {
+            // mysql_native_password 切换：读取新 salt，重新认证
+            int data_off = 1 + pn_len + 1;  // 0xFE + plugin_name + NUL
+            if (data_off + 20 <= resp_len) {
+                uint8_t new_salt[20];
+                memcpy(new_salt, resp_buf + data_off, 20);
+                uint8_t auth_resp[20];
+                mysql_native_password(pass ? pass : "", new_salt, 20, auth_resp);
+                if (_mysql_send_packet(conn, (const char*)auth_resp, 20) != 0) {
+                    *dbh = conn;
+                    return -1;
+                }
+                // 读取切换后的 OK/ERR
+                if (_mysql_recv_packet(conn, resp_buf, sizeof(resp_buf), &resp_len) != 0) {
+                    *dbh = conn;
+                    return -1;
+                }
+            }
+        } else {
+            // 不支持的认证插件（如 caching_sha2_password，需要 RSA/SHA256）
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "unsupported auth plugin '%.*s' (only mysql_native_password is supported; "
+                     "run: ALTER USER 'root'@'%%' IDENTIFIED WITH mysql_native_password BY 'password')",
+                     pn_len, plugin_name);
+            _mysql_set_error(conn, 0, msg);
+            *dbh = conn;
+            return -1;
+        }
     }
     int ok = _mysql_parse_ok_err(conn, resp_buf, resp_len);
     if (ok <= 0) {
