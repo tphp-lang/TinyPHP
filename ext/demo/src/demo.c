@@ -1,4 +1,5 @@
 #include "../demo.h"
+#include <stdio.h>
 
 // 纯phpc是不需要tphp任何内部封装前缀的函数，就是常规的 c 语法
 

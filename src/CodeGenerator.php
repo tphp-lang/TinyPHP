@@ -8147,6 +8147,16 @@ class CodeGenerator implements ASTVisitor
         $vn   = $node->array instanceof VariableExpr ? self::varName($node->array->name) : '';
         $vt   = $this->varTypes[$vn] ?? 't_int';
 
+        // 链式访问：内部表达式可能返回非指针类型（如 t_int，源于混合数组的类型追踪局限），
+        // 但 getter 函数期望 t_array* 参数。添加显式 cast 满足 Clang 类型检查，
+        // 运行时 getter 会检查 t_var.type 标签，类型不匹配时返回 0/NULL（保持既有行为）
+        if ($node->array instanceof ArrayAccessExpr) {
+            $innerType = $this->inferType($node->array);
+            if ($innerType !== 't_array*' && !str_contains($innerType, '*')) {
+                $arr = "(t_array*)(intptr_t)({$arr})";
+            }
+        }
+
         // 字符串键：per-key 类型 → get_str_int/str；无记录用 get_str_str
         $idxType = $this->inferType($node->index);
         if ($idxType === 't_string' || $node->index instanceof StringLiteralExpr) {
@@ -8307,9 +8317,10 @@ class CodeGenerator implements ASTVisitor
             // 整数键：用 inferType 判断元素转 str 的方式
             $type = $this->inferType($expr);
             return match ($type) {
-                't_string' => $code,
-                't_float'  => "tphp_rt_str_from_float({$code})",
-                default    => "tphp_rt_str_from_int({$code})",
+                't_string'  => $code,
+                't_float'   => "tphp_rt_str_from_float({$code})",
+                't_array*'  => "tphp_rt_str_from_int((t_int)(intptr_t)({$code}))",
+                default     => "tphp_rt_str_from_int({$code})",
             };
         }
         if ($expr instanceof CastExpr) {

@@ -27,7 +27,17 @@
 //   注：c_float/php_float 已移除（t_float 就是 double，转换无意义）
 
 #define tphp_fn_c_int(v)      ((int32_t)(v))
+// c_str: SSO 字符串的 is_local 分支返回参数栈地址，Clang 报 -Wreturn-stack-address。
+// 实际安全：返回的 const char* 仅在当前表达式内使用（如传给 strcpy/printf），
+// inline 后参数生命周期覆盖整个表达式。用 pragma 抑制 Clang 误报。
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-stack-address"
+#endif
 static inline const char* tphp_fn_c_str(t_string v) { return STR_PTR(v); }
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 // ── 2. 基础类型：C → PHP ──────────────────────────────────
 
