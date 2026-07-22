@@ -255,17 +255,18 @@ jobs:
           brew install mariadb
           # 直接后台启动 mysqld (brew services 在 CI 环境不可靠)
           "$(brew --prefix)/bin/mysqld" --datadir="$(brew --prefix)/var/mysql" --port=3306 &
-          # 等待就绪 (用 TCP 连接)
+          # 等待就绪 (用 socket 连接, MariaDB root 默认 unix_socket 认证)
           for i in {1..30}; do
-            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot --silent 2>/dev/null; then
-              echo "MariaDB is ready (empty password)"
+            if mysqladmin ping -uroot --silent 2>/dev/null; then
+              echo "MariaDB is ready"
               break
             fi
             echo "Waiting for MariaDB... ($i/30)"
             sleep 2
           done
-          # 设置 root 密码 (MariaDB 默认 mysql_native_password, 无需指定插件)
-          mysql -h 127.0.0.1 -P 3306 -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
+          # MariaDB root 默认使用 unix_socket 认证 (只允许本地 socket 连接)
+          # 改为 mysql_native_password + 密码, 使纯 C 客户端可通过 TCP 连接
+          mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('root'); FLUSH PRIVILEGES;"
           mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
 
       - name: Add TCC
