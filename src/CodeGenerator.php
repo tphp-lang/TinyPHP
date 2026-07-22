@@ -535,9 +535,9 @@ class CodeGenerator implements ASTVisitor
         'stream_isatty'               => ['cName' => 'tphp_fn_stream_isatty', 'modes' => ['direct']],
         'stream_select'               => ['cName' => 'tphp_fn_stream_select', 'modes' => ['direct', 'direct', 'direct', 'direct', 'direct'], 'defaults' => [4 => '0']],
         'stream_context_create'       => ['cName' => 'tphp_fn_stream_context_create', 'modes' => ['direct'], 'defaults' => [0 => '(t_array*)NULL']],
-        'stream_socket_server'        => ['cName' => 'tphp_fn_stream_socket_server', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '12', 2 => '(t_array*)NULL']],
+        'stream_socket_server'        => ['cName' => 'tphp_fn_stream_socket_server', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [1 => '12', 2 => '0']],
         'stream_socket_accept'        => ['cName' => 'tphp_fn_stream_socket_accept', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '-1']],
-        'stream_socket_client'        => ['cName' => 'tphp_fn_stream_socket_client', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '2', 3 => '(t_array*)NULL']],
+        'stream_socket_client'        => ['cName' => 'tphp_fn_stream_socket_client', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [1 => '-1', 2 => '2', 3 => '0']],
         'stream_socket_recvfrom'      => ['cName' => 'tphp_fn_stream_socket_recvfrom', 'modes' => ['direct', 'direct', 'direct'], 'defaults' => [2 => '0']],
         'stream_socket_sendto'        => ['cName' => 'tphp_fn_stream_socket_sendto', 'modes' => ['direct', 'direct', 'direct', 'direct'], 'defaults' => [2 => '0', 3 => '(t_string){0}']],
         'stream_socket_get_name'      => ['cName' => 'tphp_fn_stream_socket_get_name', 'modes' => ['direct', 'direct']],
@@ -786,6 +786,48 @@ class CodeGenerator implements ASTVisitor
         }
 
         // ── SEC_CONSTS ──
+        // PHP 预定义常量（无条件的编译期 #define，零运行时开销）
+        $isWin = PHP_OS_FAMILY === 'Windows';
+        $phpOs = $isWin ? 'WINNT' : (PHP_OS_FAMILY === 'Darwin' ? 'Darwin' : 'Linux');
+        $phpOsFamily = PHP_OS_FAMILY === 'Darwin' ? 'Darwin' : PHP_OS_FAMILY; // Windows/Linux/Darwin
+        $eol = $isWin ? '\r\n' : '\n';
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_EOL STR_LIT("' . $eol . '")');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_OS STR_LIT("' . $phpOs . '")');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_OS_FAMILY STR_LIT("' . $phpOsFamily . '")');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_SAPI STR_LIT("cli")');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_VERSION STR_LIT("' . (defined('TPHP_VERSION') ? TPHP_VERSION : '0.0.0') . '")');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_EXTRA_VERSION STR_LIT("-beta.3")');
+        // 整数常量
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_INT_MAX INT64_MAX');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_INT_MIN INT64_MIN');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_INT_SIZE 8');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_MAJOR_VERSION 0');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_MINOR_VERSION 2');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_RELEASE_VERSION 0');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_VERSION_ID 20000');
+        // 浮点常量
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_FLOAT_MAX DBL_MAX');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_FLOAT_MIN DBL_MIN');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_FLOAT_EPSILON DBL_EPSILON');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_FLOAT_DIG DBL_DIG');
+        // 错误级别常量
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_ERROR 1');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_WARNING 2');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_PARSE 4');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_NOTICE 8');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_CORE_ERROR 16');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_CORE_WARNING 32');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_COMPILE_ERROR 64');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_COMPILE_WARNING 128');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_USER_ERROR 256');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_USER_WARNING 512');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_USER_NOTICE 1024');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_STRICT 2048');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_RECOVERABLE_ERROR 4096');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_DEPRECATED 8192');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_USER_DEPRECATED 16384');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_E_ALL 32767');
+
         if ($needBcrypt) {
             $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PASSWORD_BCRYPT 1');
             $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PASSWORD_BCRYPT_DEFAULT_COST 10');
@@ -984,6 +1026,22 @@ class CodeGenerator implements ASTVisitor
         $this->sections = [];
         $this->inGenerator = false;
         $this->symbols = new SymbolTable();
+        // PHP 预定义常量类型注册（确保 VAR_* 包装器选择正确类型）
+        //   字符串常量（默认即 t_string，显式注册以示清晰）
+        foreach (['PHP_EOL','PHP_OS','PHP_OS_FAMILY','PHP_SAPI','PHP_VERSION','PHP_EXTRA_VERSION'] as $c) {
+            $this->symbols->addConst($c, 't_string');
+        }
+        //   整数常量
+        foreach (['PHP_INT_MAX','PHP_INT_MIN','PHP_INT_SIZE','PHP_MAJOR_VERSION','PHP_MINOR_VERSION','PHP_RELEASE_VERSION','PHP_VERSION_ID',
+                  'E_ERROR','E_WARNING','E_PARSE','E_NOTICE','E_CORE_ERROR','E_CORE_WARNING',
+                  'E_COMPILE_ERROR','E_COMPILE_WARNING','E_USER_ERROR','E_USER_WARNING','E_USER_NOTICE',
+                  'E_STRICT','E_RECOVERABLE_ERROR','E_DEPRECATED','E_USER_DEPRECATED','E_ALL'] as $c) {
+            $this->symbols->addConst($c, 't_int');
+        }
+        //   浮点常量
+        foreach (['PHP_FLOAT_MAX','PHP_FLOAT_MIN','PHP_FLOAT_EPSILON','PHP_FLOAT_DIG'] as $c) {
+            $this->symbols->addConst($c, 't_float');
+        }
         // 内置 Exception 类
         $this->symbols->addClass('tphp_class_Exception');
         $this->symbols->addClassName('Exception', 'tphp_class_Exception');
@@ -2352,6 +2410,10 @@ class CodeGenerator implements ASTVisitor
                 // 变量：推导类型决定是否需要转换
                 $vn = self::varName($e->name);
                 $vt = $this->varTypes[$vn] ?? '';
+                // 常量引用（不以 $ 开头）→ 查 SymbolTable 常量类型
+                if (!str_starts_with($e->name, '$') && $vt === '') {
+                    $vt = $this->symbols->getConstType($e->name) ?? '';
+                }
                 if ($vt === 't_var') {
                     // t_var 变量用 var_dump 输出
                     $parts[] = 'tphp_fn_var_dump(' . $this->wrapVar($e) . ');';

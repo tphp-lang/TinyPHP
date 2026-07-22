@@ -454,7 +454,7 @@ static inline t_int tphp_fn_stream_context_create(t_array* options) {
 // ── stream_socket_server ────────────────────────────────────
 //   address: "tcp://0.0.0.0:8080" / "udp://..." / "unix:///path"
 //   flags: STREAM_SERVER_BIND | STREAM_SERVER_LISTEN
-static inline t_int tphp_fn_stream_socket_server(t_string address, t_int flags, t_array* context) {
+static inline t_int tphp_fn_stream_socket_server(t_string address, t_int flags, t_int context) {
     (void)context;
     tphp_fn_stream_init();
 
@@ -580,7 +580,7 @@ static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_
 
 // ── stream_socket_client ────────────────────────────────────
 //   address: "tcp://host:port" / "udp://host:port"
-static inline t_int tphp_fn_stream_socket_client(t_string address, t_int timeout_ms, t_int flags, t_array* context) {
+static inline t_int tphp_fn_stream_socket_client(t_string address, t_int timeout_ms, t_int flags, t_int context) {
     (void)context;
     (void)flags;
     tphp_fn_stream_init();

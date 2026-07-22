@@ -372,6 +372,12 @@ class Lexer
             return;
         }
 
+        // PHP 关闭标签 ? > — 跳过（TinyPHP 不支持 HTML 模式，忽略其后所有内容）
+        if ($ch === '?' && $this->peek(1) === '>') {
+            $this->pos = strlen($this->source); // 直接跳到文件末尾
+            return;
+        }
+
         // 单字符运算符
         $opChars = [
             '+' => TokenType::PLUS,

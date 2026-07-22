@@ -1519,9 +1519,28 @@ t_string tphp_fn_preg_replace(t_string pattern, t_string replacement,
 
     if (match_count == 0) { free(match_starts); free(match_ends); free(match_caps); return subject; }
 
+    // 计算 result_len（必须考虑 $N 反向引用展开为捕获组内容，否则缓冲区分配不足）
     int result_len = text_len;
     for (int i = 0; i < match_count; i++) {
-        result_len += repl_len - (match_ends[i] - match_starts[i]);
+        int match_len = match_ends[i] - match_starts[i];
+        int repl_expanded_len = 0;
+        int *caps_i = (cap_sz > 0) ? (match_caps + (size_t)i * cap_sz) : NULL;
+        for (int j = 0; j < repl_len; j++) {
+            if (repl[j] == '$' && j + 1 < repl_len && repl[j+1] >= '1' && repl[j+1] <= '9') {
+                int g = repl[j+1] - '0';
+                if (g < r->total_groups && caps_i != NULL) {
+                    int gs = caps_i[g * 2];
+                    int ge = caps_i[g * 2 + 1];
+                    if (gs >= 0 && ge >= gs) {
+                        repl_expanded_len += ge - gs;
+                    }
+                }
+                j++; // 跳过数字
+            } else {
+                repl_expanded_len++;
+            }
+        }
+        result_len += repl_expanded_len - match_len;
     }
     if (result_len < 0) result_len = text_len;
 
