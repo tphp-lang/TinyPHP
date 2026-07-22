@@ -61,9 +61,9 @@ class Main
         try {
             $pdo = new PDO("mysql:host=127.0.0.1;port=3306", "root", "root");
             echo "connected\n";
-            // 版本号易变（8.0.x / 8.4.x），只验证以 "8." 开头，输出固定标记
+            // 版本号跨平台易变（MySQL 8.x/9.x 或 MariaDB 10.x/11.x），只验证非空
             $ver = $pdo->getAttributeStr(PDO::ATTR_SERVER_VERSION);
-            $ok = (strlen($ver) >= 2 && substr($ver, 0, 2) == "8.") ? "1" : "0";
+            $ok = (strlen($ver) > 0) ? "1" : "0";
             echo "server_version_ok=" . $ok . "\n";
             echo "driver_name=" . $pdo->getAttributeStr(PDO::ATTR_DRIVER_NAME) . "\n";
         } catch (Exception $e) {
