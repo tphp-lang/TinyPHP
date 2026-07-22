@@ -19,6 +19,7 @@ static inline void tphp_rt_str_free(t_string* s);
 static inline t_string tphp_rt_str_dup(t_string s);
 static inline t_bool tphp_rt_str_eq(t_string a, t_string b);
 static inline void tphp_rt_register(void *ptr, int type);
+static inline void tphp_rt_unregister(void *ptr);
 static inline void tphp_rt_free_all(void);
 
 #include "object/exception.h"    // tphp_class_Exception — try.h 需要

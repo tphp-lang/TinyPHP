@@ -5638,7 +5638,7 @@ class CodeGenerator implements ASTVisitor
             return $this->generateClosureCall($node->callee, $node->args);
         }
 
-        // 对 t_var 参数自动包裹 VAR_XXX
+        // 对 t_var 参数自动包裹 VAR_XXX；父子类参数自动 upcast
         $args = [];
         foreach ($node->args as $i => $a) {
             $code = $a->accept($this);
@@ -5646,6 +5646,17 @@ class CodeGenerator implements ASTVisitor
             $pt = $this->getMethodParamType($node, $i);
             if ($pt === 't_var') {
                 $code = $this->wrapTvarAssign($a, $code);
+            } elseif ($pt !== '' && self::isClassCType($pt) && $a instanceof VariableExpr) {
+                // 父子类 upcast：实参是子类，参数声明是父类时生成 (ParentType*)arg
+                $argVarKey = self::varName($a->name);
+                $argType = $this->varTypes[$argVarKey] ?? '';
+                if (self::isClassCType($argType)) {
+                    $argCn = rtrim($argType, '*');
+                    $ptCn  = rtrim($pt, '*');
+                    if ($argCn !== $ptCn && $this->isSubclassOf($argCn, $ptCn)) {
+                        $code = "({$pt}){$code}";
+                    }
+                }
             }
             $args[] = $code;
         }
@@ -8746,6 +8757,13 @@ class CodeGenerator implements ASTVisitor
         }
         if ($cn !== '') {
             $mInfo = $this->symbols->getClassMethod($cn, $call->name);
+            // 继承方法：本类无定义时上溯父类链查找参数类型
+            if ($mInfo === null) {
+                $parentCN = $this->resolveMethodClass($cn, $call->name);
+                if ($parentCN !== '') {
+                    $mInfo = $this->symbols->getClassMethod($parentCN, $call->name);
+                }
+            }
             if ($mInfo !== null) {
                 return $mInfo->paramTypes[$idx] ?? '';
             }
@@ -8969,6 +8987,19 @@ class CodeGenerator implements ASTVisitor
         }
         $this->methodClassCache[$cacheKey] = '';
         return '';
+    }
+
+    /** 判断 childCName 是否是 parentCName 的子类（含多层继承） */
+    private function isSubclassOf(string $childCName, string $parentCName): bool
+    {
+        $cur = $childCName;
+        while ($cur !== '' && $this->symbols->hasClass($cur)) {
+            $parent = $this->symbols->getClassParent($cur);
+            if ($parent === '') break;
+            if ($parent === $parentCName) return true;
+            $cur = $parent;
+        }
+        return false;
     }
 
     /** Resolve property prefix for COS inheritance: _parent._parent. */
