@@ -34,8 +34,37 @@ jobs:
         shell: pwsh
         run: |
           choco install mysql -y --no-progress
-          # MySQL 服务应已自动启动, 等待就绪
-          $env:PATH += ";C:\ProgramData\MySQL\MySQL Server*\bin;C:\Program Files\MySQL\MySQL Server*\bin"
+          $env:PATH += ";C:\tools\mysql\current\bin;C:\ProgramData\MySQL\MySQL Server*\bin"
+          # MySQL 9.x (choco 默认) 默认不加载 mysql_native_password 插件,
+          # 需在 my.ini 中启用后重启服务
+          $myini = Get-ChildItem -Path "C:\tools\mysql" -Filter "my.ini" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($myini) {
+            $lines = Get-Content $myini.FullName
+            if (-not ($lines -match 'mysql_native_password')) {
+              $newLines = @()
+              $found = $false
+              foreach ($line in $lines) {
+                $newLines += $line
+                if ($line -match '^\[mysqld\]') {
+                  $newLines += "mysql_native_password=ON"
+                  $found = $true
+                }
+              }
+              if (-not $found) {
+                $newLines += "[mysqld]"
+                $newLines += "mysql_native_password=ON"
+              }
+              Set-Content $myini.FullName $newLines
+              Write-Host "Added mysql_native_password=ON to $($myini.FullName)"
+            }
+          }
+          # 重启 MySQL 服务使配置生效
+          $svc = Get-Service -Name "*mysql*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($svc) {
+            Write-Host "Restarting service: $($svc.Name)"
+            Restart-Service $svc.Name -Force
+          }
+          # 等待 MySQL 就绪
           for ($i = 1; $i -le 30; $i++) {
             try {
               $result = & mysql -uroot -e "SELECT 1" 2>&1
@@ -47,7 +76,7 @@ jobs:
             Write-Host "Waiting for MySQL... ($i/30)"
             Start-Sleep -Seconds 2
           }
-          # 设置 root 密码为 root (统一与 Linux/macOS 一致)
+          # 设置 root 密码为 mysql_native_password 认证 (纯 C 客户端不支持 caching_sha2_password)
           mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
           mysql -uroot -proot -e "SELECT VERSION();"
 
@@ -68,7 +97,6 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          $env:PATH += ";C:\ProgramData\MySQL\MySQL Server*\bin;C:\Program Files\MySQL\MySQL Server*\bin"
           $cc = "${{ matrix.compiler }}"
           $ccFlag = if ($cc -eq 'tcc') { '' } else { '-cc ' + $cc }
           $proc = Start-Process php.exe -ArgumentList '.github/scripts/run_tests.php',$ccFlag -NoNewWindow -PassThru -Wait
