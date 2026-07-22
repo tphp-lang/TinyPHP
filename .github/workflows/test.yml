@@ -62,18 +62,11 @@ jobs:
           }
           $mariaBin = "C:\mariadb\current\bin"
           $env:PATH += ";$mariaBin"
-          # 生成 my.ini (MariaDB 无需 mysql_native_password=ON, 默认即为该插件)
-          $myini = @"
-          [mysqld]
-          port=3306
-          basedir=C:/mariadb/current
-          datadir=C:/mariadb/current/data
-          "@
-          Set-Content -Path "C:\mariadb\current\my.ini" -Value $myini
-          # 初始化数据目录 (MariaDB 使用 mariadb-install-db)
-          & "$mariaBin\mariadb-install-db.exe" --datadir="C:/mariadb/current/data" --password=root --auth=root 2>&1
-          # 安装为 Windows 服务并启动
-          & "$mariaBin\mysqld.exe" --install MySQL --defaults-file="C:\mariadb\current\my.ini"
+          # mariadb-install-db.exe 一步完成: 初始化数据目录 + 注册 Windows 服务 + 设置 root 密码
+          #   --service=MySQL  → 注册名为 "MySQL" 的 Windows 服务
+          #   --password=root  → root 密码设为 "root"
+          & "$mariaBin\mariadb-install-db.exe" --datadir="C:/mariadb/current/data" --service=MySQL --password=root 2>&1
+          # 启动服务
           Start-Service MySQL
           # 等待就绪
           for ($i = 1; $i -le 30; $i++) {
