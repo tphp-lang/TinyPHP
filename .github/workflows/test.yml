@@ -112,7 +112,7 @@ jobs:
         compiler: [tcc, gcc, clang]
     services:
       mysql:
-        image: mysql:8
+        image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: root
         ports:
@@ -177,7 +177,7 @@ jobs:
         compiler: [tcc, gcc, clang]
     services:
       mysql:
-        image: mysql:8
+        image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: root
         ports:
@@ -247,6 +247,13 @@ jobs:
         run: |
           if [ "${{ matrix.compiler }}" = "gcc" ]; then brew install gcc; fi
           brew install mysql
+          # 启用 mysql_native_password 插件 (MySQL 9.x 默认禁用, 纯 C 客户端需要)
+          MYCNF="$(brew --prefix)/etc/my.cnf"
+          if [ -f "$MYCNF" ] && grep -q "^\[mysqld\]" "$MYCNF"; then
+            echo "mysql_native_password=ON" >> "$MYCNF"
+          else
+            printf "[mysqld]\nmysql_native_password=ON\n" >> "$MYCNF"
+          fi
           brew services start mysql
           # 等待 MySQL 就绪
           for i in {1..30}; do
@@ -257,7 +264,7 @@ jobs:
             echo "Waiting for MySQL... ($i/30)"
             sleep 2
           done
-          # 设置 root 密码为 root (统一与 Linux/Windows 一致)
+          # 设置 root 密码为 mysql_native_password 认证 (纯 C 客户端不支持 caching_sha2_password)
           mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
           mysql -uroot -proot -e "SELECT VERSION();"
 
