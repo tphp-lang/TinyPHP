@@ -3,7 +3,8 @@
 // CI test runner — 收集全部测试结果
 // 用法: php run_tests.php [cc_flag]
 
-$ccFlag = $argv[1] ?? '';
+// 合并所有 argv 参数（shell word splitting 会把 "-cc gcc" 拆成两个参数）
+$ccFlag = implode(' ', array_slice($argv, 1));
 $testDir = getenv('GITHUB_WORKSPACE') ?: dirname(__DIR__, 2);
 $phpExe  = PHP_OS_FAMILY === 'Windows' ? 'php.exe' : './php';
 $tphp    = $testDir . DIRECTORY_SEPARATOR . 'tphp.php';
