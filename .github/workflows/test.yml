@@ -5,7 +5,8 @@ on:
 
 jobs:
   # ============================================================
-  # Windows x86_64 — TCC / GCC / Clang
+  # Windows x86_64 — TCC / GCC / Clang + MySQL (Chocolatey)
+  #   GitHub Actions Windows runner 不支持 services, 改用 choco 安装
   # ============================================================
   windows-x86_64:
     runs-on: windows-latest
@@ -29,6 +30,27 @@ jobs:
             mingw-w64-x86_64-clang
             mingw-w64-x86_64-make
 
+      - name: Install MySQL
+        shell: pwsh
+        run: |
+          choco install mysql -y --no-progress
+          # MySQL 服务应已自动启动, 等待就绪
+          $env:PATH += ";C:\ProgramData\MySQL\MySQL Server*\bin;C:\Program Files\MySQL\MySQL Server*\bin"
+          for ($i = 1; $i -le 30; $i++) {
+            try {
+              $result = & mysql -uroot -e "SELECT 1" 2>&1
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "MySQL is ready (empty password)"
+                break
+              }
+            } catch {}
+            Write-Host "Waiting for MySQL... ($i/30)"
+            Start-Sleep -Seconds 2
+          }
+          # 设置 root 密码为 root (统一与 Linux/macOS 一致)
+          mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
+          mysql -uroot -proot -e "SELECT VERSION();"
+
       - name: Add TCC
         shell: pwsh
         run: |
@@ -46,13 +68,14 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
+          $env:PATH += ";C:\ProgramData\MySQL\MySQL Server*\bin;C:\Program Files\MySQL\MySQL Server*\bin"
           $cc = "${{ matrix.compiler }}"
           $ccFlag = if ($cc -eq 'tcc') { '' } else { '-cc ' + $cc }
           $proc = Start-Process php.exe -ArgumentList '.github/scripts/run_tests.php',$ccFlag -NoNewWindow -PassThru -Wait
           exit $proc.ExitCode
 
   # ============================================================
-  # Linux x86_64 — TCC / GCC / Clang
+  # Linux x86_64 — TCC / GCC / Clang + MySQL 8 (services container)
   # ============================================================
   linux-x86_64:
     runs-on: ubuntu-latest
@@ -62,13 +85,25 @@ jobs:
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev
+          sudo apt install -y gcc make libc6-dev default-mysql-client
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
       - name: Add TCC
@@ -84,6 +119,18 @@ jobs:
           unzip -q php.zip
           chmod +x php
 
+      - name: Verify MySQL
+        run: |
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent 2>/dev/null; then
+              echo "MySQL is ready"
+              break
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
+
       - name: Test
         run: |
           ccFlag=""
@@ -91,7 +138,7 @@ jobs:
           ./php .github/scripts/run_tests.php $ccFlag
 
   # ============================================================
-  # Linux aarch64 — TCC / GCC / Clang
+  # Linux aarch64 — TCC / GCC / Clang + MySQL 8 (services container)
   # ============================================================
   linux-aarch64:
     runs-on: ubuntu-24.04-arm
@@ -101,13 +148,25 @@ jobs:
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev
+          sudo apt install -y gcc make libc6-dev default-mysql-client
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
       - name: Add TCC
@@ -123,6 +182,18 @@ jobs:
           unzip -q php.zip
           chmod +x php
 
+      - name: Verify MySQL
+        run: |
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent 2>/dev/null; then
+              echo "MySQL is ready"
+              break
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
+
       - name: Test
         run: |
           ccFlag=""
@@ -130,7 +201,7 @@ jobs:
           ./php .github/scripts/run_tests.php $ccFlag
 
   # ============================================================
-  # macOS aarch64 — TCC / GCC / Clang
+  # macOS aarch64 — TCC / GCC / Clang + MySQL (Homebrew)
   # ============================================================
   macos-aarch64:
     runs-on: macos-latest
@@ -143,9 +214,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      - name: Install deps & MySQL
         run: |
           if [ "${{ matrix.compiler }}" = "gcc" ]; then brew install gcc; fi
+          brew install mysql
+          brew services start mysql
+          # 等待 MySQL 就绪
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -uroot --silent 2>/dev/null; then
+              echo "MySQL is ready (empty password)"
+              break
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+          # 设置 root 密码为 root (统一与 Linux/Windows 一致)
+          mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
+          mysql -uroot -proot -e "SELECT VERSION();"
 
       - name: Add TCC
         run: |

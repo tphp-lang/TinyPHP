@@ -19,9 +19,6 @@ $iter = new RecursiveIteratorIterator(
 );
 foreach ($iter as $file) {
     if ($file->getExtension() !== 'php') continue;
-    // 排除需要外部服务的集成测试（由专用工作流 mysql_test.yml 运行）
-    $relPath = str_replace('\\', '/', substr($file->getPathname(), strlen($testDir) + 1));
-    if (str_starts_with($relPath, 'test/pdo_mysql/')) continue;
     $content = file_get_contents($file->getPathname());
     if ($content === false) continue;
     if (str_contains($content, '@skip')) {
