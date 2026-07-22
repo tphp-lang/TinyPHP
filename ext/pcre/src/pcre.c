@@ -3,11 +3,7 @@
 // Adapted for TinyPHP: t_string/t_array types, str_pool_alloc, TCC compat
 
 #include "pcre.h"
-#include <runtime.h>
-#include <array.h>
-#include <val.h>
-#include <stdlib.h>
-#include <string.h>
+#include "common.h"             // 统一引入所有运行时依赖 (types/array/val/runtime/...)
 #include "ext_str.h"
 #include "compat/tinycthread.h"   // mtx_t — tp_cache 线程安全锁
 
