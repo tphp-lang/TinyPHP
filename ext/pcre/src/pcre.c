@@ -7,6 +7,15 @@
 // generator.h/resource.h/file.h 等含非 static 方法定义的头文件（导致链接时重复定义）
 #include "val.h"
 #include "object/object.h"       // tp_obj_release — runtime.h 需要
+
+/* 前向声明 runtime.h 中的函数（与 common.h 保持一致）
+ * 提前到 exception.h/try.h 之前，避免 GCC 将其隐式声明为 int 导致类型冲突 */
+static inline void tphp_rt_str_free(t_string* s);
+static inline t_string tphp_rt_str_dup(t_string s);
+static inline t_bool tphp_rt_str_eq(t_string a, t_string b);
+static inline void tphp_rt_register(void *ptr, int type);
+static inline void tphp_rt_free_all(void);
+
 #include "object/exception.h"    // tphp_class_Exception — try.h 需要
 #include "object/try.h"          // tp_throw — array.h 需要
 #include "array.h"               // tphp_fn_arr_* — runtime.h 需要
