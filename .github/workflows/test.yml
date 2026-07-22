@@ -34,11 +34,28 @@ jobs:
         shell: pwsh
         run: |
           # choco 安装 MySQL 在 runner 上经常超时, 改用官方 ZIP 包手动安装
+          # dev.mysql.com 不稳定, 使用镜像源下载
           $mysqlVer = "8.0.42"
           $mysqlZip = "mysql-$mysqlVer-winx64.zip"
-          $mysqlUrl = "https://dev.mysql.com/get/Downloads/MySQL-8.0/$mysqlZip"
-          Write-Host "Downloading MySQL $mysqlVer..."
-          Invoke-WebRequest -Uri $mysqlUrl -OutFile $mysqlZip
+          $mirrors = @(
+            "https://mirrors.tuna.tsinghua.edu.cn/mysql/downloads/MySQL-8.0/$mysqlZip",
+            "https://repo.huaweicloud.com/mysql/Downloads/MySQL-8.0/$mysqlZip",
+            "https://mirrors.aliyun.com/mysql/MySQL-8.0/$mysqlZip",
+            "https://dev.mysql.com/get/Downloads/MySQL-8.0/$mysqlZip"
+          )
+          $downloaded = $false
+          foreach ($url in $mirrors) {
+            Write-Host "Trying: $url"
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $mysqlZip -TimeoutSec 120
+              $downloaded = $true
+              Write-Host "Downloaded from: $url"
+              break
+            } catch {
+              Write-Host "Failed: $($_.Exception.Message)"
+            }
+          }
+          if (-not $downloaded) { throw "All mirrors failed to download MySQL" }
           Expand-Archive -Path $mysqlZip -DestinationPath C:\mysql -Force
           # 重命名目录 (避免版本号变化导致路径变动)
           $srcDir = Get-ChildItem -Path C:\mysql -Directory | Select-Object -First 1
