@@ -1849,8 +1849,17 @@ static const pdo_driver_t pdo_mysql_driver = {
     .server_version       = _pdo_mysql_server_version,
 };
 
-// ── 自动注册 MySQL 驱动 ──
+// ── 注册 MySQL 驱动 ──
+//   constructor + static 在部分 TCC 版本下会被死代码消除，
+//   因此同时提供 constructor 和显式注册函数（PHP 层调用 pdo_mysql_init()）
 __attribute__((constructor))
 static void _pdo_mysql_register(void) {
     pdo_register_driver(&pdo_mysql_driver);
+}
+
+// 显式注册（供 PHP 层调用，确保跨编译器一致）
+//   返回 1 表示注册成功（或已注册），0 表示失败
+static inline int tphp_fn_pdo_mysql_init(void) {
+    pdo_register_driver(&pdo_mysql_driver);
+    return 1;
 }

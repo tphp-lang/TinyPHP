@@ -244,6 +244,7 @@ class CodeGenerator implements ASTVisitor
         //   void 返回类型无需注册：pdo_driver_close/reset/clear_bindings/finalize
         //                              /busy_timeout/extended_result_codes/bind_params
         'pdo_driver_find' => 't_int',
+        'pdo_mysql_init' => 't_int',
         'pdo_driver_open' => 't_int',
         'pdo_driver_exec' => 't_int',
         'pdo_driver_prepare' => 't_int',

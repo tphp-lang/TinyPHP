@@ -59,6 +59,8 @@ class Main
         // ── 1. 连接测试 ──
         echo "=== 1. connect ===\n";
         try {
+            // 显式注册 MySQL 驱动（部分 TCC 版本不执行 __attribute__((constructor))）
+            pdo_mysql_init();
             $pdo = new PDO("mysql:host=127.0.0.1;port=3306", "root", "root");
             echo "connected\n";
             // 版本号易变（8.0.x / 8.4.x），只验证以 "8." 开头，输出固定标记
