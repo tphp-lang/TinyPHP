@@ -795,7 +795,7 @@ static inline t_array* tphp_fn_parse_url(t_string u) {
     int sch = -1;
     for (int i = 0; i < len-2; i++) { if (STR_PTR(u)[i]==':' && STR_PTR(u)[i+1]=='/' && STR_PTR(u)[i+2]=='/') { sch=i; break; } }
     if (sch > 0) {
-        t_string _sc = {STR_PTR(u), sch};
+        t_string _sc = {(char*)STR_PTR(u), sch};
         out = tphp_fn_arr_set_str(out, (t_string){"scheme",6}, VAR_STRING(_sc));
         pos = sch + 3;
     }
@@ -809,7 +809,7 @@ static inline t_array* tphp_fn_parse_url(t_string u) {
     }
     if (host_end < 0) host_end = len;
     if (host_end > pos) {
-        t_string _h = {STR_PTR(u)+pos, host_end-pos};
+        t_string _h = {(char*)STR_PTR(u)+pos, host_end-pos};
         out = tphp_fn_arr_set_str(out, (t_string){"host",4}, VAR_STRING(_h));
     }
 
@@ -817,7 +817,7 @@ static inline t_array* tphp_fn_parse_url(t_string u) {
     if (port_n >= 0) {
         int pe = (path_s >= 0) ? path_s : ((q_s >= 0) ? q_s : len);
         if (pe > port_n + 1) {
-            t_string ps = {STR_PTR(u)+port_n+1, pe-port_n-1};
+            t_string ps = {(char*)STR_PTR(u)+port_n+1, pe-port_n-1};
             out = tphp_fn_arr_set_str(out, (t_string){"port",4}, VAR_STRING(ps));
         }
     }
@@ -825,13 +825,13 @@ static inline t_array* tphp_fn_parse_url(t_string u) {
     if (path_s >= 0 && path_s < len) {
         int pe = (q_s >= 0 && q_s < len) ? q_s : len;
         if (pe > path_s) {
-            t_string _pa = {STR_PTR(u)+path_s, pe-path_s};
+            t_string _pa = {(char*)STR_PTR(u)+path_s, pe-path_s};
             out = tphp_fn_arr_set_str(out, (t_string){"path",4}, VAR_STRING(_pa));
         }
     }
 
     if (q_s >= 0 && q_s < len-1) {
-        t_string _q = {STR_PTR(u)+q_s+1, len-q_s-1};
+        t_string _q = {(char*)STR_PTR(u)+q_s+1, len-q_s-1};
         out = tphp_fn_arr_set_str(out, (t_string){"query",5}, VAR_STRING(_q));
     }
 

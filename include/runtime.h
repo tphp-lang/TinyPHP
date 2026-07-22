@@ -309,7 +309,7 @@ static inline void tphp_rt_str_free(t_string* s) {
     if (unlikely(s == NULL || s->length <= 0)) return;
     if (s->is_lit)   { s->data = NULL; s->length = 0; return; }   // .rodata literal — never free()
     if (s->is_local) { s->length = 0; s->is_local = false; return; }
-    const char *d = STR_PTR_P(s);
+    char *d = STR_MUT_P(s);
     if (d == NULL) { s->length = 0; return; }
     // 主池内的指针不释放
     if (d >= str_pool_buf && d < str_pool_buf + STR_POOL_SIZE) { s->data = NULL; s->length = 0; return; }
@@ -396,7 +396,7 @@ static inline void tphp_rt_free_all(void) {
             switch (n->type) {
                 case 0: tp_obj_release(n->ptr); break;
                 case 1: tphp_fn_arr_free((t_array *)n->ptr);    break;
-                case 2: { t_string *s = (t_string *)n->ptr; free(STR_PTR_P(s)); free(s); } break;
+                case 2: { t_string *s = (t_string *)n->ptr; free(STR_MUT_P(s)); free(s); } break;
                 case 3: free(n->ptr); break; /* closure capture env / generic heap */
             }
         }

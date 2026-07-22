@@ -299,7 +299,7 @@ static inline t_bool _filter_validate_url(t_string s, t_int flags) {
     }
     if (host_end <= host_start) return false; // host 不能为空
     // host 必须是合法域名或 IP
-    t_string host = {STR_PTR(s) + host_start, host_end - host_start};
+    t_string host = {(char*)STR_PTR(s) + host_start, host_end - host_start};
     if (!_filter_validate_domain(host) && !_filter_validate_ipv4(host)) return false;
     if ((flags & TPHP_CONST_FILTER_FLAG_PATH_REQUIRED) && !has_path) return false;
     if ((flags & TPHP_CONST_FILTER_FLAG_QUERY_REQUIRED) && !has_query) return false;

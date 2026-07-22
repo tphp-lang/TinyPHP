@@ -60,7 +60,7 @@ static const t_class _class_tphp_class_Thread = {
 static inline void tphp_class_Thread___construct(tphp_class_Thread *self, t_callback fn) {
     self->state  = 0;
     self->ret    = 0;
-    self->handle = NULL;
+    self->handle = 0;
     /* 将 t_callback 复制到堆（原始值在栈上） */
     self->cb = (t_callback *)malloc(sizeof(t_callback));
     if (self->cb) {
