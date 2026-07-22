@@ -29,6 +29,10 @@
 
 /** tphp_rt_init — 初始化运行时（Windows 下设置控制台 UTF-8，预热数组池） */
 static inline void tphp_rt_init(void) {
+    // 禁用 stdout/stderr 缓冲：CI 中 stdout 被重定向（全缓冲），
+    // 若程序异常退出（segfault），缓冲区未刷新会导致输出丢失
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 #ifdef _WIN32
     SetConsoleOutputCP(65001); // CP_UTF8
     SetConsoleCP(65001);
