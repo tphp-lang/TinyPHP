@@ -307,9 +307,14 @@ static inline t_int tphp_fn_stream_set_read_buffer(t_int fd, t_int buffer) {
 }
 
 // ── isatty ─────────────────────────────────────────────────
+//   Windows: SOCKET 是 HANDLE（大值），不是 CRT file descriptor（小整数）。
+//   _isatty() 期望 CRT fd，对 socket 值会越界访问 CRT 内部 ioinfo 表导致崩溃。
+//   改用 GetFileType() 直接检查 HANDLE 类型（socket 返回 FILE_TYPE_PIPE，非 TTY）。
 static inline t_bool tphp_fn_stream_isatty(t_int fd) {
 #ifdef _WIN32
-    return _isatty((int)fd) ? true : false;
+    HANDLE h = (HANDLE)(SOCKET)fd;
+    if (h == NULL || h == INVALID_HANDLE_VALUE) return false;
+    return GetFileType(h) == FILE_TYPE_CHAR ? true : false;
 #else
     return isatty((int)fd) ? true : false;
 #endif
