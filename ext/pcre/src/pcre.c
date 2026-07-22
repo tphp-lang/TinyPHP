@@ -3,9 +3,16 @@
 // Adapted for TinyPHP: t_string/t_array types, str_pool_alloc, TCC compat
 
 #include "pcre.h"
-#include "common.h"             // 统一引入所有运行时依赖 (types/array/val/runtime/...)
+// 最小头文件集：仅引入 pcre.c 实际需要的运行时依赖，避免 common.h 拉入
+// generator.h/resource.h/file.h 等含非 static 方法定义的头文件（导致链接时重复定义）
+#include "val.h"
+#include "object/object.h"       // tp_obj_release — runtime.h 需要
+#include "object/exception.h"    // tphp_class_Exception — try.h 需要
+#include "object/try.h"          // tp_throw — array.h 需要
+#include "array.h"               // tphp_fn_arr_* — runtime.h 需要
+#include "runtime.h"             // str_pool_alloc, tphp_rt_str_*
 #include "ext_str.h"
-#include "compat/tinycthread.h"   // mtx_t — tp_cache 线程安全锁
+#include "compat/tinycthread.h"  // mtx_t — tp_cache 线程安全锁
 
 #define tp_mk_str(s) ext_mk_str(s)
 #define tp_mk_substr(src, start, end) ext_mk_substr(src, start, end)

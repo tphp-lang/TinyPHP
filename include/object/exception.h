@@ -11,10 +11,10 @@ typedef struct {
     t_string message;
 } tphp_class_Exception;
 
-// Forward declarations
-void tphp_class_Exception___construct(tphp_class_Exception* self, t_string msg);
-void tphp_class_Exception___destruct(tphp_class_Exception* self);
-t_string tphp_class_Exception_getMessage(tphp_class_Exception* self);
+// Forward declarations (static inline: 每个 TU 独立副本，避免链接时重复定义)
+static inline void tphp_class_Exception___construct(tphp_class_Exception* self, t_string msg);
+static inline void tphp_class_Exception___destruct(tphp_class_Exception* self);
+static inline t_string tphp_class_Exception_getMessage(tphp_class_Exception* self);
 
 // Class descriptor
 static void* _vtable_tphp_class_Exception[1] = { NULL };
@@ -39,13 +39,13 @@ static inline tphp_class_Exception* new_tphp_class_Exception(t_string msg) {
 }
 
 // Methods
-void tphp_class_Exception___construct(tphp_class_Exception* self, t_string msg) {
+static inline void tphp_class_Exception___construct(tphp_class_Exception* self, t_string msg) {
     (void)self; (void)msg; // handled by allocator
 }
-void tphp_class_Exception___destruct(tphp_class_Exception* self) {
+static inline void tphp_class_Exception___destruct(tphp_class_Exception* self) {
     if (self) self->message = (t_string){NULL, 0};
 }
-t_string tphp_class_Exception_getMessage(tphp_class_Exception* self) {
+static inline t_string tphp_class_Exception_getMessage(tphp_class_Exception* self) {
     if (self == NULL) return (t_string){NULL, 0};
     return self->message;
 }
