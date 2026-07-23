@@ -3636,7 +3636,11 @@ class CodeGenerator implements ASTVisitor
         if ($idxType === 't_string' || $node->target->index instanceof StringLiteralExpr) {
             return "{$arr} = tphp_fn_arr_set_str({$arr}, {$idx}, {$val});";
         }
-        return "{$arr} = tphp_fn_arr_set_int({$arr}, {$idx}, {$val});";
+        if ($idxType === 't_int' || $idxType === 't_bool' || $idxType === 't_float') {
+            return "{$arr} = tphp_fn_arr_set_int({$arr}, (t_int)({$idx}), {$val});";
+        }
+        // key 类型不确定（t_var 等），运行时统一分发
+        return "{$arr} = tphp_fn_arr_set_var({$arr}, {$idx}, {$val});";
     }
 
     /**
@@ -5517,8 +5521,11 @@ class CodeGenerator implements ASTVisitor
                     $idxType = $this->inferType($arg->index);
                     if ($idxType === 't_string' || $arg->index instanceof StringLiteralExpr) {
                         $lines[] = "tphp_fn_arr_unset_str({$arrCode}, {$idxCode})";
-                    } else {
+                    } elseif ($idxType === 't_int' || $idxType === 't_bool' || $idxType === 't_float') {
                         $lines[] = "tphp_fn_arr_unset_int({$arrCode}, (t_int)({$idxCode}))";
+                    } else {
+                        // key 类型不确定（t_var 等），运行时统一分发
+                        $lines[] = "tphp_fn_arr_unset_var({$arrCode}, {$idxCode})";
                     }
                     continue;
                 }

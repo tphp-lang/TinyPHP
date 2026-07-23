@@ -542,6 +542,127 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
     return a;
 }
 
+/** 删除整数键元素：释放值的引用，用末尾元素填补空洞，维护哈希索引。
+ *  不保持顺序（O(1) 删除），适合不需要顺序的场景。 */
+static inline void tphp_fn_arr_unset_int(t_array *a, t_int key) {
+    if (unlikely(a == NULL || key < 0 || key >= a->length)) return;
+    int idx = -1;
+    // 快路径: 连续整数键直接下标
+    if (a->entries[key].key.type == TYPE_INT &&
+        a->entries[key].key.value._int == key) {
+        idx = (int)key;
+    } else if (a->int_index != NULL) {
+        idx = arr_intidx_lookup(a, key);
+    } else {
+        for (int i = 0; i < a->length; i++) {
+            if (a->entries[i].key.type == TYPE_INT &&
+                a->entries[i].key.value._int == key) { idx = i; break; }
+        }
+    }
+    if (idx < 0) return;
+    _arr_val_release(a->entries[idx].val);
+    // 用末尾元素填补（不保持顺序）
+    int last = a->length - 1;
+    if (idx != last) {
+        a->entries[idx] = a->entries[last];
+        // 维护被移动元素的哈希索引
+        if (a->int_index != NULL && a->entries[idx].key.type == TYPE_INT) {
+            arr_intidx_delete(a, a->entries[idx].key.value._int);
+            arr_intidx_insert(a, a->entries[idx].key.value._int, idx);
+        } else if (a->str_index != NULL && a->entries[idx].key.type == TYPE_STRING) {
+            arr_stridx_delete(a, a->entries[idx].key.value._string);
+            arr_stridx_insert(a, a->entries[idx].key.value._string, idx);
+        }
+    } else if (a->int_index != NULL) {
+        arr_intidx_delete(a, key);
+    }
+    a->length--;
+}
+
+/** 删除字符串键元素：释放值的引用，用末尾元素填补空洞，维护哈希索引。 */
+static inline void tphp_fn_arr_unset_str(t_array *a, t_string key) {
+    if (unlikely(a == NULL)) return;
+    int idx = -1;
+    if (a->str_index != NULL) {
+        idx = arr_stridx_lookup(a, key);
+    } else {
+        for (int i = 0; i < a->length; i++) {
+            if (a->entries[i].key.type == TYPE_STRING &&
+                tphp_rt_str_eq(a->entries[i].key.value._string, key)) { idx = i; break; }
+        }
+    }
+    if (idx < 0) return;
+    _arr_val_release(a->entries[idx].val);
+    arr_stridx_delete(a, key);
+    // 用末尾元素填补（不保持顺序）
+    int last = a->length - 1;
+    if (idx != last) {
+        a->entries[idx] = a->entries[last];
+        // 维护被移动元素的哈希索引
+        if (a->str_index != NULL && a->entries[idx].key.type == TYPE_STRING) {
+            arr_stridx_delete(a, a->entries[idx].key.value._string);
+            arr_stridx_insert(a, a->entries[idx].key.value._string, idx);
+        } else if (a->int_index != NULL && a->entries[idx].key.type == TYPE_INT) {
+            arr_intidx_delete(a, a->entries[idx].key.value._int);
+            arr_intidx_insert(a, a->entries[idx].key.value._int, idx);
+        }
+    }
+    a->length--;
+}
+
+/** 统一 unset：key 为 t_var 类型，运行时按 PHP 规则转换后分发。
+ *  PHP 数组键类型转换规则：
+ *    int/string → 原样使用
+ *    bool       → true=1, false=0
+ *    null       → "" (空字符串)
+ *    float      → 截断为 int
+ *    array/object → 非法键，抛异常
+ */
+static inline void tphp_fn_arr_unset_var(t_array *a, t_var key) {
+    if (unlikely(a == NULL)) return;
+    switch (key.type) {
+        case TYPE_INT:
+            tphp_fn_arr_unset_int(a, key.value._int);
+            break;
+        case TYPE_STRING:
+            tphp_fn_arr_unset_str(a, key.value._string);
+            break;
+        case TYPE_BOOL:
+            tphp_fn_arr_unset_int(a, key.value._bool ? 1 : 0);
+            break;
+        case TYPE_NULL:
+            tphp_fn_arr_unset_str(a, (t_string){.data = NULL, .length = 0, .is_local = false});
+            break;
+        case TYPE_FLOAT:
+            tphp_fn_arr_unset_int(a, (t_int)key.value._float);
+            break;
+        default:
+            tp_throw("unset: illegal array key type (array/object)");
+            break;
+    }
+}
+
+/** 统一 set：key 为 t_var 类型，运行时按 PHP 规则转换后分发。
+ *  与 tphp_fn_arr_unset_var 对称，处理混合类型 key 的赋值场景。 */
+static inline t_array* tphp_fn_arr_set_var(t_array *a, t_var key, t_var val) {
+    if (unlikely(a == NULL)) return a;
+    switch (key.type) {
+        case TYPE_INT:
+            return tphp_fn_arr_set_int(a, key.value._int, val);
+        case TYPE_STRING:
+            return tphp_fn_arr_set_str(a, key.value._string, val);
+        case TYPE_BOOL:
+            return tphp_fn_arr_set_int(a, key.value._bool ? 1 : 0, val);
+        case TYPE_NULL:
+            return tphp_fn_arr_set_str(a, (t_string){.data = NULL, .length = 0, .is_local = false}, val);
+        case TYPE_FLOAT:
+            return tphp_fn_arr_set_int(a, (t_int)key.value._float, val);
+        default:
+            tp_throw("set: illegal array key type (array/object)");
+            return a;
+    }
+}
+
 /** spread 展开: 将 src 的所有元素追加到 dst
  *  int 键重新索引（append），string 键保留并覆盖 — PHP spread 语义
  *  提取为函数避免 TCC 对 ({...}) 内嵌 for+realloc 生成错误代码 */
