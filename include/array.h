@@ -443,7 +443,7 @@ static inline t_array* tphp_fn_arr_push(t_array *a, t_var val) {
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_INT;
     a->entries[a->length].key.value._int = a->length;
-    a->entries[a->length].val = val;
+    a->entries[a->length].val = _arr_val_retain(val);
     a->length++;
     return a;
 }
@@ -456,14 +456,16 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
     if (key < a->length &&
         a->entries[key].key.type == TYPE_INT &&
         a->entries[key].key.value._int == key) {
-        a->entries[key].val = val;
+        _arr_val_release(a->entries[key].val);
+        a->entries[key].val = _arr_val_retain(val);
         return a;
     }
     // 快路径 2: 哈希索引 O(1)（稀疏整数键，如 ID→对象映射）
     if (a->int_index != NULL) {
         int idx = arr_intidx_lookup(a, key);
         if (idx >= 0) {
-            a->entries[idx].val = val;
+            _arr_val_release(a->entries[idx].val);
+            a->entries[idx].val = _arr_val_retain(val);
             return a;
         }
     } else if (a->length >= ARR_HASH_THRESHOLD) {
@@ -471,7 +473,8 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
         arr_intidx_build(a);
         int idx = arr_intidx_lookup(a, key);
         if (idx >= 0) {
-            a->entries[idx].val = val;
+            _arr_val_release(a->entries[idx].val);
+            a->entries[idx].val = _arr_val_retain(val);
             return a;
         }
     } else {
@@ -479,7 +482,8 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
         for (int i = 0; i < a->length; i++) {
             if (likely(a->entries[i].key.type == TYPE_INT) &&
                 a->entries[i].key.value._int == key) {
-                a->entries[i].val = val;
+                _arr_val_release(a->entries[i].val);
+                a->entries[i].val = _arr_val_retain(val);
                 return a;
             }
         }
@@ -488,7 +492,7 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_INT;
     a->entries[a->length].key.value._int = key;
-    a->entries[a->length].val = val;
+    a->entries[a->length].val = _arr_val_retain(val);
     int new_idx = a->length;
     a->length++;
     // 维护索引：已存在则插入，达到阈值则构建
@@ -507,7 +511,8 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
     if (a->str_index != NULL) {
         int idx = arr_stridx_lookup(a, key);
         if (idx >= 0) {
-            a->entries[idx].val = val;
+            _arr_val_release(a->entries[idx].val);
+            a->entries[idx].val = _arr_val_retain(val);
             return a;
         }
     } else {
@@ -515,7 +520,8 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
         for (int i = 0; i < a->length; i++) {
             if (a->entries[i].key.type == TYPE_STRING &&
                 tphp_rt_str_eq(a->entries[i].key.value._string, key)) {
-                a->entries[i].val = val;
+                _arr_val_release(a->entries[i].val);
+                a->entries[i].val = _arr_val_retain(val);
                 return a;
             }
         }
@@ -524,7 +530,7 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_STRING;
     a->entries[a->length].key.value._string = tphp_rt_str_dup(key);
-    a->entries[a->length].val = val;
+    a->entries[a->length].val = _arr_val_retain(val);
     int new_idx = a->length;
     a->length++;
     // Maintain index: update if exists, build if threshold reached
