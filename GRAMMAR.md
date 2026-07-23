@@ -908,7 +908,7 @@ TinyPHP 注解采用**纯编译期消费**策略（方向 A）：注解在编译
 | 消费时机 | 编译期 | AOT 零开销，注解信息编译期已知 |
 | 运行时元数据 | 无 | 避免二进制体积膨胀和运行时查找开销 |
 | 参数形式 | 仅位置参数 | 与全局命名参数禁用一致；命名参数在 AOT 下无意义 |
-| 索引形式 | 仅静态索引 `ROUTE[0]` | 编译期展开为零开销直接调用；动态索引 `ROUTE[$i]` 不支持 |
+| 索引形式 | 静态索引 `ROUTE[0]` + foreach 动态分发 | 静态索引编译期展开为零开销直接调用；foreach 遍历生成运行时 dispatch 函数 |
 | 跨命名空间 | 与普通常量作用域一致 | 短名匹配（同命名空间 + 全局回退）；`use const` 导入解析为 FQ 名精确匹配 |
 
 ### 14.2 语法
@@ -998,7 +998,8 @@ class Demo {
 | `ROUTE[0]->call(12)`（static_method） | `tphp_class_Main_staticMethod(12)` | 零 |
 | `ROUTE[0]->call(12)`（function） | `tphp_fn_funcName(12)` | 零 |
 | `ROUTE[0]->newInstance("x")`（class） | `new_tphp_class_Demo(STR_LIT("x"))` | 零 |
-| `ROUTE[$i]->call(12)`（动态索引） | **不支持**（编译期无法确定目标） | — |
+| `foreach (ROUTE as $v) { $v->call(12); }` | `_annot_ROUTE_dispatch_call($v, 1, args)`（运行时分发） | 运行时 if-else 链 |
+| `foreach (ROUTE as $v) { $v->newInstance(); }` | `((ClassType*)_annot_ROUTE_dispatch_new($v, 0, NULL))` | 运行时 if-else 链 |
 
 ### 14.6 扫描顺序与限定名规则
 
@@ -1056,7 +1057,7 @@ class MyChild { ... }
 | 特性 | 原因 |
 |------|------|
 | 运行时反射 `ReflectionAttribute` | AOT 无运行时元数据 |
-| 动态索引 `ROUTE[$i]->call()` | 编译期无法确定目标 |
+| 任意动态索引 `ROUTE[$i]->call()` | 编译期无法确定目标（仅 foreach 变量 `$v` 支持运行时分发） |
 | 注解继承（子类继承父类注解） | 编译期收集不递归父类 |
 | 注解作用于属性/参数 | 当前仅支持 class/method/function |
 

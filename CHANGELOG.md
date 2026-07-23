@@ -8,6 +8,11 @@
 
 ### 修复
 
+- **对象唯一 ID 机制**（`object.h` / `tls.h` / `core.h`）：`t_object` 新增独立 `id` 字段（uint32_t），由线程本地全局计数器 `_tphp_obj_id_counter` 递增生成，替代原来用 `refcount & 0xFFFF` 作为对象 ID 的做法。`var_dump` 输出 `object(Class)#<id>` 时改用 `obj->id`，符合标准 PHP 每个对象实例拥有唯一 ID 的行为。原方案在数组 retain 引入后 refcount 不再恒为 1，导致 `var_dump` 输出的 ID 不稳定。
+- **数组元素引用计数系统性修复**（`array.h`）：`tphp_fn_arr_push` / `tphp_fn_arr_set_int` / `tphp_fn_arr_set_str` 在存储数组/对象类型值时调用 `_arr_val_retain` 增加引用计数，覆盖已有键时先 `_arr_val_release` 旧值再 retain 新值。修复 `PDOStatement::fetchAll` 中 `result[] = row` 后 `row` 被重赋值 free 导致 `result` 残留悬垂指针的 use-after-free（表现为 `fetchall_count=3` 但 `fetchall_0=` 空）。
+- **数组重赋值自赋值 guard 双重释放**（`CodeGenerator.php`）：当数组变量同时作为函数参数且为赋值目标时（如 `$result = exif_parse_ifd(..., $result, ...)`），函数内部可能 `realloc` 了 `$var` 指向的内存，旧指针已失效，此时不能再 `tphp_fn_arr_free` 旧指针。新增 `exprIsCallWithVarArg` 检测赋值表达式是否为函数调用且参数列表包含被赋值变量，命中时跳过旧指针释放，避免双重释放导致的堆损坏（`STATUS_HEAP_CORRUPTION` / `Segmentation fault`）。
+- **注解 `newInstance()` 类型推断**（`CodeGenerator.php`）：`foreach (ROUTE as $v) { $v->newInstance(); }` 中 `$v` 来自 foreach 遍历注解数组时，通过 `varAnnotSource` 追踪来源注解常量，正确推导 `newInstance()` 返回的类指针类型。修复 Linux/macOS 上 `Call to undefined method t_int::hello()` / `void::hello()` 转译错误。
+- **`stream_socket_accept` 错误处理契约**（`stream.h`）：真正的错误（accept 失败等）抛异常供用户 try-catch 捕获，EAGAIN/超时等非错误返回 `-1`，符合 AOT 错误处理原则（用户可通过异常捕获真正的错误，而非静默返回 false）。
 - **macOS `-framework` 链接支持**：TCC 不识别 macOS 的 `-framework X` 语法（会把 `X` 当作输入文件，报错 `file 'OpenGL' not found`）。`tphp.php` 在 #flag 处理中自动把 `-framework X` 转换为 `-Wl,-framework,X`（透传给系统 `ld`），`-F path` 同理转换为 `-Wl,-F,path`。`-Wl,` 开头的 token 分离到 `$lateLinkFlags`（链接器选项放在源文件之后，遵循单遍扫描顺序）
 
 ## [0.2.0-beta.3] — 2026-07-19

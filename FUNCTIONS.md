@@ -134,7 +134,7 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
 |------|--------|------|------|
 | `echo $expr` | `echo $expr` | `fwrite(stdout)` + 每次调用 `fflush`，二进制安全，不解析 `%` 格式化符；O(n) 零堆分配 | PHP 支持 `echo $a, $b` 多参数语法，tphp 单参数（多参数由编译器展开为多次调用） |
-| `var_dump(mixed $value, mixed ...$rest): void` | `var_dump(mixed $value): void` | type switch → `fprintf`/`fwrite` 递归输出，O(节点数)，零中间缓冲 | 单参数；浮点 `%g`（6 位有效数字）非 PHP `%.14G`（14 位）；对象仅输出 `object(ClassName)` 无属性列表 |
+| `var_dump(mixed $value, mixed ...$rest): void` | `var_dump(mixed $value): void` | type switch → `fprintf`/`fwrite` 递归输出，O(节点数)，零中间缓冲 | 单参数；浮点 `%g`（6 位有效数字）非 PHP `%.14G`（14 位）；对象输出 `object(ClassName)#<id>`（id 为全局递增唯一标识，符合标准 PHP 行为），无属性列表 |
 | `print_r(mixed $value, bool $return = false): string\|true` | `print_r(mixed $value): void` | 递归格式化，O(节点数)，流式写入 stdout | **无 `$return` 参数**，始终返回 void；对象仅输出 `ClassName Object` 无属性；无循环引用检测（递归数组会栈溢出） |
 | `exit(int\|string $status): void` | `exit(int $code): void` | `exit(code)` 单次 libc 调用，O(1) | 仅接受 int（PHP 还接受 string 消息）；无 shutdown 回调 |
 | `isset(mixed $var, mixed ...$rest): bool` | `isset(mixed $var): bool` | 指针类型 → `ptr != NULL`；值类型 → 编译期 `true`；O(1) | 单参数；语义为指针 NULL 检查（值类型如 int/string 永远返回 true） |
