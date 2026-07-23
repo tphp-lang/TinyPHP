@@ -29,6 +29,9 @@ static inline void tphp_rt_free_all(void);
 /* 前向声明 object.h 中的引用计数函数（common.h 中 object.h 在 array.h 之前 include） */
 static inline void* tp_obj_retain(void *obj);
 static inline void* tp_obj_release(void *obj);
+/* 前向声明本文件后面定义的数组引用计数函数（_arr_val_retain/release 在文件开头使用） */
+static inline t_array* tphp_fn_arr_retain(t_array *a);
+static inline void tphp_fn_arr_free(t_array *a);
 
 /* ============================================================
  * 引用计数辅助：t_var 值的 retain/release
@@ -417,8 +420,6 @@ static inline t_array* tphp_fn_arr_retain(t_array *a) {
     if (a) a->refcount++;
     return a;
 }
-
-static inline void tphp_fn_arr_free(t_array *a);  // forward decl, implemented below
 
 // === Internal: grow (1.5x factor, yyjson-style) ===
 
