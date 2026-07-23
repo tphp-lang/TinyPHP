@@ -17,9 +17,11 @@
 // ── Object header (16 bytes packed) ───────────────────────
 //   cls:      direct pointer to class descriptor (no lookup needed)
 //   refcount: -1=immortal, 0=stack/auto, >=1=N references
+//   id:       对象唯一标识（var_dump 输出 #N），独立于 refcount
 typedef struct _t_object {
     const struct _t_class *cls;
     int32_t                refcount;
+    uint32_t               id;
 } t_object;
 
 // ── Class descriptor (per-class static data) ──────────────
@@ -34,6 +36,11 @@ typedef struct _t_class {
 } t_class;
 
 // ── Object lifecycle ──────────────────────────────────────
+
+// 全局对象 ID 计数器（thread-local，var_dump 输出 #N 用，独立于 refcount）
+#if !TPHP_USE_WIN_TLS && !TPHP_USE_PTHREAD_TLS
+static _Thread_local uint32_t _tphp_obj_id_counter = 0;
+#endif
 
 // ── Object freelist pool (LIFO, eliminates calloc/free for hot paths)
 // OBJ_FREELIST_MAX 和 _obj_pool_slot 已在 types.h 中定义（供 tls.h 使用）
@@ -78,6 +85,7 @@ static inline void* tp_obj_alloc(const t_class *cls) {
     }
     obj->cls = cls;
     obj->refcount = 1;
+    obj->id = ++_tphp_obj_id_counter;
     return obj;
 }
 

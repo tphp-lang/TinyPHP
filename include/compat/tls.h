@@ -56,6 +56,7 @@ typedef struct tphp_tls {
     int                   arr_freelist_count;
     _obj_pool_slot        _obj_freelist[OBJ_FREELIST_MAX];
     int                   _obj_freelist_count;
+    uint32_t              _tphp_obj_id_counter;
 } tphp_tls_t;
 
 /* ── TLS key 管理 ──
@@ -137,5 +138,6 @@ static inline void tphp_tls_destroy(void) {
 #define arr_freelist_count  (tphp_tls_get()->arr_freelist_count)
 #define _obj_freelist       (tphp_tls_get()->_obj_freelist)
 #define _obj_freelist_count (tphp_tls_get()->_obj_freelist_count)
+#define _tphp_obj_id_counter (tphp_tls_get()->_tphp_obj_id_counter)
 
 #endif /* TPHP_USE_WIN_TLS || TPHP_USE_PTHREAD_TLS */

@@ -10,15 +10,15 @@
 #debug ===== Annotation ROUTE =====
 #debug array(5) {
 #debug   [0]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#4
 #debug   [1]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#5
 #debug   [2]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#6
 #debug   [3]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#7
 #debug   [4]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#8
 #debug }
 #debug --- ROUTE foreach entries ---
 #debug [0] Main->test method
@@ -37,9 +37,9 @@
 #debug   [0]=>
 #debug   object(AnnotationEntry)#1
 #debug   [1]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#2
 #debug   [2]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#3
 #debug }
 #debug --- GET_NAME foreach entries ---
 #debug [0] Main->multiTest method

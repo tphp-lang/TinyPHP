@@ -64,7 +64,7 @@ static void tphp_fn_var_dump_rec(t_var v, int depth) {
             if (strncmp(cname, "tphp_class_", 11) == 0) shortn = cname + 11;
             // 计算属性数量（沿继承链枚举 ownProps - 这里用 instance_size 粗略估算不行，
             // 直接用 vtable_len=0 表示无属性信息，输出 id 即可）
-            fprintf(stdout, "object(%s)#%d", shortn, (int)(obj->refcount & 0xFFFF));
+            fprintf(stdout, "object(%s)#%u", shortn, obj->id);
         }
         break;
     }
@@ -1251,23 +1251,20 @@ static inline t_array* tphp_fn_explode(t_string delim, t_string s) {
     for (int i = 0; i <= s.length; i++) {
         if (i + delim.length <= s.length && memcmp(STR_PTR(s) + i, STR_PTR(delim), (size_t)delim.length) == 0) {
             int pieceLen = i - start;
-            // 空片段也要 push（PHP 语义：explode(",","a,,b") → ["a","","b"]）
-            int allocLen = pieceLen > 0 ? pieceLen : 1;
-            char* piece = str_pool_alloc(allocLen);
-            if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
-            if (pieceLen > 0) memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen);
-            piece[pieceLen] = '\0';
-            out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
+            if (pieceLen > 0) {
+                char* piece = str_pool_alloc(pieceLen);
+                if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
+                memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
+                out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
+            }
             start = i + delim.length; i = start - 1;
         }
     }
     int pieceLen = s.length - start;
-    {
-        int allocLen = pieceLen > 0 ? pieceLen : 1;
-        char* piece = str_pool_alloc(allocLen);
+    if (pieceLen > 0) {
+        char* piece = str_pool_alloc(pieceLen);
         if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
-        if (pieceLen > 0) memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen);
-        piece[pieceLen] = '\0';
+        memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
         out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
     }
     return out;

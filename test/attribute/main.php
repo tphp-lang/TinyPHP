@@ -3,13 +3,13 @@
 #debug ===== ROUTE =====
 #debug array(4) {
 #debug   [0]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#3
 #debug   [1]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#4
 #debug   [2]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#5
 #debug   [3]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#6
 #debug }
 #debug string(10) "Main->test"
 #debug string(6) "method"
@@ -31,7 +31,7 @@
 #debug   [0]=>
 #debug   object(AnnotationEntry)#1
 #debug   [1]=>
-#debug   object(AnnotationEntry)#1
+#debug   object(AnnotationEntry)#2
 #debug }
 #debug string(11) "Main->test3"
 #debug string(6) "method"

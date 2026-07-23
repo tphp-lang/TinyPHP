@@ -2799,13 +2799,23 @@ class CodeGenerator implements ASTVisitor
             $w = $this->varWrite($var, $prevType);
             if (self::isClassCType($prevType) || self::isEnumCType($prevType)) {
                 $tmp = '_tmp_' . (++$this->tmpVarCounter);
-                $code = "{$prevType} {$tmp} = {$expr}; tp_obj_release((void*){$var}); {$var} = {$tmp};";
+                // self-assignment guard: $obj = $obj->method() 时 method 可能返回 this
+                $code = "{$prevType} {$tmp} = {$expr}; if ({$tmp} != (void*){$var}) tp_obj_release((void*){$var}); {$var} = {$tmp};";
             } elseif ($prevType === 't_string') {
                 $code = "tphp_rt_str_free(&{$var}); {$w} = {$expr};";
             } elseif ($prevType === 't_array*') {
                 // 数组重赋值：先求值新值，释放旧数组，再赋值
+                // self-assignment guard: $result = func(..., $result, ...) 时 func 可能返回同一个指针
                 $tmp = '_tmp_' . (++$this->tmpVarCounter);
-                $code = "t_array* {$tmp} = {$expr}; if ({$var} != NULL) tphp_fn_arr_free({$var}); {$var} = {$tmp};";
+                // 当 $var 同时作为函数参数时（如 $result = exif_parse_ifd(..., $result, ...)），
+                // 函数内部可能 realloc 了 $var 指向的内存，旧指针已失效，不能 free
+                // 否则会导致双重释放（realloc 已释放 + guard 再次 free）
+                $varInArgs = $this->exprIsCallWithVarArg($node->expr, $var);
+                if ($varInArgs) {
+                    $code = "t_array* {$tmp} = {$expr}; {$var} = {$tmp};";
+                } else {
+                    $code = "t_array* {$tmp} = {$expr}; if ({$tmp} != {$var} && {$var} != NULL) tphp_fn_arr_free({$var}); {$var} = {$tmp};";
+                }
             } else {
                 $code = "{$w} = {$expr};";
             }
@@ -3675,6 +3685,24 @@ class CodeGenerator implements ASTVisitor
             if ($parentCN !== '') $cnClean = $parentCN;
         }
         return $cnClean !== '' ? "{$cnClean}_{$node->name}" : null;
+    }
+
+    /**
+     * 检测表达式是否为函数/方法调用，且参数列表中直接包含对 $varName 的引用。
+     * 用于数组重赋值时判断是否需要跳过旧指针释放：
+     *   $result = func(..., $result, ...) → true（函数可能 realloc 了 $result，旧指针已失效）
+     *   $arr = other_func()              → false（$arr 不在参数中，旧指针仍有效）
+     */
+    private function exprIsCallWithVarArg(?ExprNode $expr, string $varName): bool
+    {
+        if (!$expr instanceof CallExpr) return false;
+        $target = '$' . $varName;
+        foreach ($expr->args as $arg) {
+            if ($arg instanceof VariableExpr && $arg->name === $target) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 从数组字面量推导元素类型（取第一个非空元素的类型） */

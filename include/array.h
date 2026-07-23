@@ -443,7 +443,7 @@ static inline t_array* tphp_fn_arr_push(t_array *a, t_var val) {
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_INT;
     a->entries[a->length].key.value._int = a->length;
-    a->entries[a->length].val = _arr_val_retain(val);
+    a->entries[a->length].val = val;
     a->length++;
     return a;
 }
@@ -456,16 +456,14 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
     if (key < a->length &&
         a->entries[key].key.type == TYPE_INT &&
         a->entries[key].key.value._int == key) {
-        _arr_val_release(a->entries[key].val);
-        a->entries[key].val = _arr_val_retain(val);
+        a->entries[key].val = val;
         return a;
     }
     // 快路径 2: 哈希索引 O(1)（稀疏整数键，如 ID→对象映射）
     if (a->int_index != NULL) {
         int idx = arr_intidx_lookup(a, key);
         if (idx >= 0) {
-            _arr_val_release(a->entries[idx].val);
-            a->entries[idx].val = _arr_val_retain(val);
+            a->entries[idx].val = val;
             return a;
         }
     } else if (a->length >= ARR_HASH_THRESHOLD) {
@@ -473,8 +471,7 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
         arr_intidx_build(a);
         int idx = arr_intidx_lookup(a, key);
         if (idx >= 0) {
-            _arr_val_release(a->entries[idx].val);
-            a->entries[idx].val = _arr_val_retain(val);
+            a->entries[idx].val = val;
             return a;
         }
     } else {
@@ -482,8 +479,7 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
         for (int i = 0; i < a->length; i++) {
             if (likely(a->entries[i].key.type == TYPE_INT) &&
                 a->entries[i].key.value._int == key) {
-                _arr_val_release(a->entries[i].val);
-                a->entries[i].val = _arr_val_retain(val);
+                a->entries[i].val = val;
                 return a;
             }
         }
@@ -492,7 +488,7 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_INT;
     a->entries[a->length].key.value._int = key;
-    a->entries[a->length].val = _arr_val_retain(val);
+    a->entries[a->length].val = val;
     int new_idx = a->length;
     a->length++;
     // 维护索引：已存在则插入，达到阈值则构建
@@ -511,8 +507,7 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
     if (a->str_index != NULL) {
         int idx = arr_stridx_lookup(a, key);
         if (idx >= 0) {
-            _arr_val_release(a->entries[idx].val);
-            a->entries[idx].val = _arr_val_retain(val);
+            a->entries[idx].val = val;
             return a;
         }
     } else {
@@ -520,8 +515,7 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
         for (int i = 0; i < a->length; i++) {
             if (a->entries[i].key.type == TYPE_STRING &&
                 tphp_rt_str_eq(a->entries[i].key.value._string, key)) {
-                _arr_val_release(a->entries[i].val);
-                a->entries[i].val = _arr_val_retain(val);
+                a->entries[i].val = val;
                 return a;
             }
         }
@@ -530,7 +524,7 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_STRING;
     a->entries[a->length].key.value._string = tphp_rt_str_dup(key);
-    a->entries[a->length].val = _arr_val_retain(val);
+    a->entries[a->length].val = val;
     int new_idx = a->length;
     a->length++;
     // Maintain index: update if exists, build if threshold reached
@@ -841,8 +835,9 @@ static inline void tphp_fn_arr_free(t_array *a) {
         // 释放 string key（堆分配的）
         if (a->entries[i].key.type == TYPE_STRING)
             tphp_rt_str_free(&a->entries[i].key.value._string);
-        // 释放元素值（递归释放嵌套数组/对象引用计数）
-        _arr_val_release(a->entries[i].val);
+        // 递归释放嵌套数组
+        if (a->entries[i].val.type == TYPE_ARRAY && a->entries[i].val.value._array != NULL)
+            tphp_fn_arr_free(a->entries[i].val.value._array);
     }
     // 回收到复用池（而非 free），减少后续 malloc
     arr_pool_put(a);
@@ -852,7 +847,6 @@ static inline void tphp_fn_arr_free(t_array *a) {
 
 static inline bool tphp_fn_arr_shift(t_array *a, t_var *out) {
     if (unlikely(a == NULL || a->length == 0)) return false;
-    // 转移所有权到 out（不额外 retain，因为元素将被移除）
     if (out != NULL) *out = a->entries[0].val;
     // Free string key of first entry
     if (a->entries[0].key.type == TYPE_STRING)
@@ -867,42 +861,6 @@ static inline bool tphp_fn_arr_shift(t_array *a, t_var *out) {
     return true;
 }
 
-// === Unset (remove element by key) ===
-//   释放元素值（嵌套数组/对象引用计数）
-
-static inline void tphp_fn_arr_unset_int(t_array *a, t_int key) {
-    if (unlikely(a == NULL)) return;
-    for (int i = 0; i < a->length; i++) {
-        if (a->entries[i].key.type == TYPE_INT && a->entries[i].key.value._int == key) {
-            _arr_val_release(a->entries[i].val);
-            arr_stridx_free(a);
-            arr_intidx_free(a);
-            memmove(&a->entries[i], &a->entries[i + 1],
-                    (size_t)(a->length - i - 1) * sizeof(t_arr_entry));
-            a->length--;
-            return;
-        }
-    }
-}
-
-static inline void tphp_fn_arr_unset_str(t_array *a, t_string key) {
-    if (unlikely(a == NULL)) return;
-    for (int i = 0; i < a->length; i++) {
-        if (a->entries[i].key.type == TYPE_STRING &&
-            a->entries[i].key.value._string.length == key.length &&
-            memcmp(STR_PTR(a->entries[i].key.value._string), STR_PTR(key), (size_t)key.length) == 0) {
-            tphp_rt_str_free(&a->entries[i].key.value._string);
-            _arr_val_release(a->entries[i].val);
-            arr_stridx_free(a);
-            arr_intidx_free(a);
-            memmove(&a->entries[i], &a->entries[i + 1],
-                    (size_t)(a->length - i - 1) * sizeof(t_arr_entry));
-            a->length--;
-            return;
-        }
-    }
-}
-
 // === Unshift (prepend, shift right) ===
 
 static inline int tphp_fn_arr_unshift(t_array *a, t_var val) {
@@ -912,7 +870,7 @@ static inline int tphp_fn_arr_unshift(t_array *a, t_var val) {
             (size_t)a->length * sizeof(t_arr_entry));
     a->entries[0].key.type = TYPE_INT;
     a->entries[0].key.value._int = 0;
-    a->entries[0].val = _arr_val_retain(val);
+    a->entries[0].val = val;
     // Re-key int keys of shifted entries
     for (int i = 1; i <= a->length; i++) {
         if (a->entries[i].key.type == TYPE_INT)
