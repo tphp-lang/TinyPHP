@@ -2802,6 +2802,10 @@ class CodeGenerator implements ASTVisitor
                 $code = "{$prevType} {$tmp} = {$expr}; tp_obj_release((void*){$var}); {$var} = {$tmp};";
             } elseif ($prevType === 't_string') {
                 $code = "tphp_rt_str_free(&{$var}); {$w} = {$expr};";
+            } elseif ($prevType === 't_array*') {
+                // 数组重赋值：先求值新值，释放旧数组，再赋值
+                $tmp = '_tmp_' . (++$this->tmpVarCounter);
+                $code = "t_array* {$tmp} = {$expr}; if ({$var} != NULL) tphp_fn_arr_free({$var}); {$var} = {$tmp};";
             } else {
                 $code = "{$w} = {$expr};";
             }
@@ -3521,6 +3525,10 @@ class CodeGenerator implements ASTVisitor
         $propType = $this->getPropType($node->target);
         if ($propType === 't_string') {
             return "tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup({$val});";
+        }
+        if ($propType === 't_array*') {
+            // 属性持有数组引用：retain 新值，释放旧值（防止外层作用域释放后属性悬空）
+            return "tphp_fn_arr_retain({$val}); if ({$target} != NULL) tphp_fn_arr_free({$target}); {$target} = {$val};";
         }
         return "{$target} = {$val};";
     }
@@ -4326,18 +4334,25 @@ class CodeGenerator implements ASTVisitor
         $capInits  = [];
         $capDecls  = [];
         $capAssigns = []; // heap allocation assignments: _env_N->var = var;
+        $hasObjCapture = false;  // 是否捕获了对象类型（需要 retain/release）
         foreach ($node->useVars as [$vn, $_]) {
             $ct = $this->varTypes[$vn] ?? 't_int';
             // null 类型 → void*，t_var 保持原样，对象类型加 *
+            $isObj = false;
             if ($ct === 'null') {
                 $ct = 'void*';
-            } elseif (str_contains($ct, 'tphp_class_') && !str_ends_with($ct, '*')) {
-                $ct .= '*';
+            } elseif (str_contains($ct, 'tphp_class_')) {
+                if (!str_ends_with($ct, '*')) $ct .= '*';
+                $isObj = true;
+                $hasObjCapture = true;
             }
             $capFields[]  = "    {$ct} {$vn};";
             $capInits[]   = "    .{$vn} = {$vn}";
             $capDecls[]   = "    {$ct} {$vn} = _e->{$vn};";
-            $capAssigns[] = "    _env_{$id}->{$vn} = {$vn};";
+            // 对象类型: retain 增加引用计数，防止外层作用域释放后闭包内悬空
+            $capAssigns[] = $isObj
+                ? "    _env_{$id}->{$vn} = {$vn}; tp_obj_retain((void*){$vn});"
+                : "    _env_{$id}->{$vn} = {$vn};";
         }
         // $this 隐式捕获：把当前类 self 指针加入 _cap_N 结构
         if ($usesThis) {
@@ -4345,8 +4360,15 @@ class CodeGenerator implements ASTVisitor
             $capFields[]  = "    {$selfCType} self;";
             $capInits[]   = "    .self = self";
             $capDecls[]   = "    {$selfCType} self = _e->self;";
-            $capAssigns[] = "    _env_{$id}->self = self;";
+            // self 是对象指针，需要 retain
+            $capAssigns[] = "    _env_{$id}->self = self; tp_obj_retain((void*)self);";
             $hasCapture = true;
+            $hasObjCapture = true;
+        }
+
+        // 有对象捕获时，env 第一个字段是析构函数指针（type=5 释放时调用）
+        if ($hasObjCapture) {
+            array_unshift($capFields, "    void (*dtor)(void*);");
         }
 
         $paramDecls = array_map(fn($p) => $this->visitParam($p), $node->params);
@@ -4419,6 +4441,25 @@ class CodeGenerator implements ASTVisitor
 
         $this->sectionBlock(self::SEC_CLOSURES, implode("\n", $implLines));
 
+        // 生成 env 析构函数（释放捕获的对象引用）
+        if ($hasObjCapture) {
+            $dtorName = "_env_dtor_{$id}";
+            // 前置声明：析构函数在 SEC_CLOSURES 中定义，但可能在 SEC_CLSIMPL/SEC_FUNCIMPL 中被引用
+            $this->sectionLine(self::SEC_FWDDECLS, "static void {$dtorName}(void* env);");
+            $dtorLines = ["static void {$dtorName}(void* env) {", "    {$capName}* e = ({$capName}*)env;"];
+            foreach ($node->useVars as [$vn, $_]) {
+                $ct = $this->varTypes[$vn] ?? 't_int';
+                if (str_contains($ct, 'tphp_class_')) {
+                    $dtorLines[] = "    if (e->{$vn}) tp_obj_release((void*)e->{$vn});";
+                }
+            }
+            if ($usesThis) {
+                $dtorLines[] = "    if (e->self) tp_obj_release((void*)e->self);";
+            }
+            $dtorLines[] = "}";
+            $this->sectionBlock(self::SEC_CLOSURES, implode("\n", $dtorLines));
+        }
+
         // 记录闭包签名：用于 generateClosureCall 生成正确的函数指针转换
         $sig = [
             'ret'    => $ret,
@@ -4448,9 +4489,10 @@ class CodeGenerator implements ASTVisitor
         $envDecl = $hasCapture
             ? "    {$capName}* _env_{$id} = ({$capName}*)calloc(1, sizeof({$capName}));\n"
               . "    if (_env_{$id} != NULL) {\n"
+              . ($hasObjCapture ? "        _env_{$id}->dtor = _env_dtor_{$id};\n" : "")
               . implode("\n", $capAssigns) . "\n"
               . "    }\n"
-              . "    tphp_rt_register((void*)_env_{$id}, 3);\n"
+              . "    tphp_rt_register((void*)_env_{$id}, " . ($hasObjCapture ? '5' : '3') . ");\n"
               . "    (t_callback){ .func = (void*){$name}, .env = _env_{$id} };"
             : "    (t_callback){ .func = (void*){$name}, .env = NULL };";
 
@@ -5440,6 +5482,18 @@ class CodeGenerator implements ASTVisitor
         if ($node->callee === null && $node->name === 'unset') {
             $lines = [];
             foreach ($node->args as $arg) {
+                // 数组元素 unset: unset($arr[$key]) → 调用 C 运行时删除函数
+                if ($arg instanceof ArrayAccessExpr) {
+                    $arrCode = $arg->array->accept($this);
+                    $idxCode = $arg->index->accept($this);
+                    $idxType = $this->inferType($arg->index);
+                    if ($idxType === 't_string' || $arg->index instanceof StringLiteralExpr) {
+                        $lines[] = "tphp_fn_arr_unset_str({$arrCode}, {$idxCode})";
+                    } else {
+                        $lines[] = "tphp_fn_arr_unset_int({$arrCode}, (t_int)({$idxCode}))";
+                    }
+                    continue;
+                }
                 if (!$arg instanceof VariableExpr) continue;
                 $code = $arg->accept($this);
                 $type = $this->inferType($arg);
@@ -8145,6 +8199,12 @@ class CodeGenerator implements ASTVisitor
             return ($bt === 'string') ? "tphp_rt_parse_int(({$code})->value)" : "({$code})->value";
         }
 
+        // 兜底：根据推断类型选择转换方式
+        //   t_string 是 struct，直接 (t_int) 强转会取指针地址而非解析字符串内容
+        $inferredType = $this->inferType($expr);
+        if ($inferredType === 't_string') {
+            return "tphp_rt_parse_int({$code})";
+        }
         return "(t_int)({$code})";
     }
 
@@ -8345,6 +8405,19 @@ class CodeGenerator implements ASTVisitor
                 // 未知字符串键：先查数组元素类型，再默认 string
                 // （arrElementTypes 比 varType 更精确：varType 可能是 t_array*）
                 $keyType ??= $this->arrElementTypes[$arrName] ?? 't_string';
+            } elseif ($node->array instanceof PropertyAccessExpr) {
+                // 属性数组字符串键访问：$this->prop["key"] 或 $obj->prop["key"]
+                //   查 propArrElementTypes 获取元素类型（与整数键分支 8395 行一致）
+                //   未注册时默认 t_string（而非 t_int），因为关联数组通常存字符串值
+                $propKey = $this->propArrElemKey($node->array);
+                if ($propKey !== null && isset($this->propArrElementTypes[$propKey])) {
+                    $keyType = $this->propArrElementTypes[$propKey];
+                    if ((str_contains($keyType, 'tphp_class_') || str_contains($keyType, 'tphp_enum_')) && !str_ends_with($keyType, '*')) {
+                        $keyType .= '*';
+                    }
+                } else {
+                    $keyType = 't_string';
+                }
             }
             return match ($keyType) {
                 't_int'   => "tphp_fn_arr_get_str_int({$arr}, {$idx})",

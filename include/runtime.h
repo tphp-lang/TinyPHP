@@ -407,6 +407,13 @@ static inline void tphp_rt_free_all(void) {
                 case 1: tphp_fn_arr_free((t_array *)n->ptr);    break;
                 case 2: { t_string *s = (t_string *)n->ptr; free(STR_MUT_P(s)); free(s); } break;
                 case 3: free(n->ptr); break; /* closure capture env / generic heap */
+                case 5: {
+                    /* closure env with dtor: 第一个字段是 void(*dtor)(void*) */
+                    void (*dtor)(void*) = *(void (**)(void*))n->ptr;
+                    if (dtor) dtor(n->ptr);
+                    free(n->ptr);
+                    break;
+                }
             }
         }
         free(n);

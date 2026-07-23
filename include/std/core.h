@@ -1251,20 +1251,23 @@ static inline t_array* tphp_fn_explode(t_string delim, t_string s) {
     for (int i = 0; i <= s.length; i++) {
         if (i + delim.length <= s.length && memcmp(STR_PTR(s) + i, STR_PTR(delim), (size_t)delim.length) == 0) {
             int pieceLen = i - start;
-            if (pieceLen > 0) {
-                char* piece = str_pool_alloc(pieceLen);
-                if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
-                memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
-                out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
-            }
+            // 空片段也要 push（PHP 语义：explode(",","a,,b") → ["a","","b"]）
+            int allocLen = pieceLen > 0 ? pieceLen : 1;
+            char* piece = str_pool_alloc(allocLen);
+            if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
+            if (pieceLen > 0) memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen);
+            piece[pieceLen] = '\0';
+            out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
             start = i + delim.length; i = start - 1;
         }
     }
     int pieceLen = s.length - start;
-    if (pieceLen > 0) {
-        char* piece = str_pool_alloc(pieceLen);
+    {
+        int allocLen = pieceLen > 0 ? pieceLen : 1;
+        char* piece = str_pool_alloc(allocLen);
         if (piece == NULL) { tp_throw("explode(): out of memory"); return out; }
-        memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen); piece[pieceLen] = '\0';
+        if (pieceLen > 0) memcpy(piece, STR_PTR(s) + start, (size_t)pieceLen);
+        piece[pieceLen] = '\0';
         out = tphp_fn_arr_push(out, VAR_STRING(((t_string){piece, pieceLen})));
     }
     return out;

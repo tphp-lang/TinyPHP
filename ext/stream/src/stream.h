@@ -556,8 +556,13 @@ static inline t_int tphp_fn_stream_socket_server(t_string address, t_int flags, 
 }
 
 // ── stream_socket_accept ────────────────────────────────────
-//   返回客户端 fd
+//   返回客户端 fd；超时/无待处理连接返回 -1（正常状态，非错误）
 //   timeout_ms: -1 表示使用默认（阻塞）
+//   设计（AOT 错误契约 + 事件循环友好）：
+//     - select 超时(sr==0) → 返回 -1（无待处理连接，正常）
+//     - select 出错(sr<0)  → 抛 Exception（真错误）
+//     - accept() EAGAIN/EWOULDBLOCK → 返回 -1（非阻塞无连接，正常）
+//     - accept() 其他失败 → 抛 Exception（真错误）
 static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_ms) {
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
@@ -571,8 +576,15 @@ static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_
         tv.tv_sec = (long)(timeout_ms / 1000);
         tv.tv_usec = (long)((timeout_ms % 1000) * 1000);
         int sr = select((int)server_fd + 1, &rfds, NULL, NULL, &tv);
-        if (sr <= 0) {
-            _stream_throw("stream_socket_accept: timeout or error");
+        if (sr == 0) {
+            // 超时：无待处理连接，正常返回 -1（事件循环友好）
+            return -1;
+        }
+        if (sr < 0) {
+            int err = STREAM_ERRNO;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "stream_socket_accept: select() failed (errno=%d)", err);
+            _stream_throw(buf);
             return -1;
         }
     }
@@ -580,6 +592,10 @@ static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_
     int fd = (int)accept((int)server_fd, (struct sockaddr*)&addr, &addr_len);
     if (fd < 0) {
         int err = STREAM_ERRNO;
+        // EAGAIN/EWOULDBLOCK：非阻塞模式下无待处理连接，正常返回 -1
+        if (err == STREAM_EWOULDBLOCK || err == STREAM_EINPROGRESS) {
+            return -1;
+        }
         char buf[128];
         snprintf(buf, sizeof(buf), "stream_socket_accept: accept() failed (errno=%d)", err);
         _stream_throw(buf);
