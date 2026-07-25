@@ -1,7 +1,6 @@
 <?php
 // 对应 PHP ext/standard/tests/array/list_keyed.phpt (keyed array destructuring)
 // ["x" => $a, "y" => $b] = $arr: 按字符串键名解构（顺序无关）
-// @skip tphp 编译失败：生成的 C 代码报 "error: switch expected"（keyed destructure 在某些场景下 CodeGenerator 生成非法 C），待 Task 8 修复
 
 #debug ===== 1. basic keyed destructure =====
 #debug int(100)

@@ -1,11 +1,15 @@
 <?php
-// 多 catch 子句 + 按类型捕获验证
+// 多 catch 子句 + 按类型捕获验证 + catch (A | B $e) 多异常捕获
 #debug 1. caught My: [my error] len=8
 #debug 2. caught Other: other error
 #debug 3. caught base: base error
 #debug 4. caught via base: my error
 #debug 5. caught: my error
 #debug finally
+#debug 6. multi-catch My: my error
+#debug 7. multi-catch Other: other error
+#debug 8. multi-catch base: base error
+#debug 9. multi-catch third: third error
 #debug === multi-catch verify done ===
 
 // 自定义异常子类
@@ -18,6 +22,14 @@ class MyException extends Exception
 }
 
 class OtherException extends Exception
+{
+    public function __construct(string $msg)
+    {
+        $this->message = $msg;
+    }
+}
+
+class ThirdException extends Exception
 {
     public function __construct(string $msg)
     {
@@ -40,6 +52,11 @@ class Main
     public function throwBase(): void|Exception
     {
         throw new Exception("base error");
+    }
+
+    public function throwThird(): void|Exception
+    {
+        throw new ThirdException("third error");
     }
 
     public function main(): void
@@ -97,6 +114,40 @@ class Main
             echo "caught: " . $e . "\n";
         } finally {
             echo "finally\n";
+        }
+
+        // 6. catch (MyException | OtherException $e) — 捕获 MyException
+        echo "6. ";
+        try {
+            $this->throwMy();
+        } catch (MyException | OtherException $e) {
+            echo "multi-catch My: " . $e . "\n";
+        }
+
+        // 7. catch (MyException | OtherException $e) — 捕获 OtherException
+        echo "7. ";
+        try {
+            $this->throwOther();
+        } catch (MyException | OtherException $e) {
+            echo "multi-catch Other: " . $e . "\n";
+        }
+
+        // 8. catch (MyException | OtherException $e) — 不匹配时 fallback 到 Exception
+        echo "8. ";
+        try {
+            $this->throwBase();
+        } catch (MyException | OtherException $e) {
+            echo "should not match\n";
+        } catch (Exception $e) {
+            echo "multi-catch base: " . $e . "\n";
+        }
+
+        // 9. catch (MyException | OtherException | ThirdException $e) — 三类型捕获 ThirdException
+        echo "9. ";
+        try {
+            $this->throwThird();
+        } catch (MyException | OtherException | ThirdException $e) {
+            echo "multi-catch third: " . $e . "\n";
         }
 
         echo "=== multi-catch verify done ===\n";

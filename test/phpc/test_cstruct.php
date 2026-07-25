@@ -1,21 +1,8 @@
 <?php
-// 测试 #cstruct 声明 + C 结构体字段原生访问
+// 测试 struct C.Foo {} 声明 + C 结构体字段原生访问
 // 验证 $p->x / $p->y 直接访问 C 结构体字段，无需 C getter/setter
 // 覆盖:单结构体(Point) + 多字段结构体(Rect) + 字段运算 + phpc_auto 自动释放
 #include "include/demo.h"
-
-#cstruct Point {
-    C.double x;
-    C.double y;
-}
-
-#cstruct Rect {
-    C.int id;
-    C.double x;
-    C.double y;
-    C.double w;
-    C.double h;
-}
 
 #debug === CStruct Test ===
 #debug
@@ -43,11 +30,24 @@
 #debug
 #debug === All passed ===
 
+struct C.Point {
+    C.double x;
+    C.double y;
+}
+
+struct C.Rect {
+    C.int id;
+    C.double x;
+    C.double y;
+    C.double w;
+    C.double h;
+}
+
 class Main {
     public function main(): void {
         echo "=== CStruct Test ===\n\n";
 
-        // ── Point:基础 #cstruct 测试 ──
+        // ── Point:基础 struct C.Foo 测试 ──
         // phpc C 指针类型必须显式声明（C.Point*），tphp 类型可自动推导
         C.Point* $p = C->point_create(3.0, 4.0);
         echo "1. create: " . $p->x . "," . $p->y . "\n";
@@ -87,7 +87,7 @@ class Main {
         echo "13. new area: " . $area2 . "\n";
         C->rect_free($r);
 
-        // ── phpc_auto 配合 #cstruct 自动释放 ──
+        // ── phpc_auto 配合 struct C.Foo 自动释放 ──
         echo "\n=== Auto Free ===\n\n";
         // phpc_auto 注册 Point 指针,程序结束自动 free(无需 point_free)
         // phpc_auto 返回 void*,需显式声明类型
