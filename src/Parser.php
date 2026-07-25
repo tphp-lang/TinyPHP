@@ -71,6 +71,11 @@ class Parser
     /** @var array<array{active: bool, matched: bool, parentActive: bool}> 条件编译状态栈 */
     private array $ctStack = [];
 
+    /** 匿名类合成名计数器（_AnonClass${N}，借鉴 vlang _VAnonStruct${counter} 命名约定） */
+    private int $anonClassCounter = 0;
+    /** @var ClassNode[] 解析匿名类时收集，parseProgram 末尾合并到 extraClasses */
+    private array $anonClasses = [];
+
     /** @param Token[] $tokens */
     public function __construct(
         array $tokens,
@@ -126,8 +131,10 @@ class Parser
             $this->consume(TokenType::SEMICOLON, 'Expected ;');
         }
 
-        // 预处理指令（任意顺序：include/flag/callback/cstruct/debug 可混合出现）
+        // 预处理指令（任意顺序：include/flag/callback/debug 可混合出现）
         // 支持 #if/#elseif/#else/#endif 条件编译包裹
+        //   #cstruct 指令已移除（Task 6.1）— 改用 struct C.Foo {} 声明
+        //   Lexer 会在遇到 #cstruct 时直接报错，Parser 不会收到 HASH_CSTRUCT token
         $includes = [];
         $ccFlags = [];
         $callbacks = [];
@@ -138,7 +145,7 @@ class Parser
             if ($this->tryCtDirective()) continue;
             if (!$this->check(TokenType::HASH_INCLUDE) && !$this->check(TokenType::HASH_IMPORT)
                 && !$this->check(TokenType::CC_FLAG) && !$this->check(TokenType::HASH_CALLBACK)
-                && !$this->check(TokenType::HASH_CSTRUCT) && !$this->check(TokenType::HASH_DEBUG)) {
+                && !$this->check(TokenType::HASH_DEBUG)) {
                 break;
             }
             // 非命中分支内：消费指令但不收集
@@ -154,8 +161,6 @@ class Parser
                 $ccFlags[] = $this->previous()->literal;
             } elseif ($this->match(TokenType::HASH_CALLBACK)) {
                 $callbacks[] = $this->previous()->literal;
-            } elseif ($this->match(TokenType::HASH_CSTRUCT)) {
-                $cstructs[] = $this->previous()->literal;
             } elseif ($this->match(TokenType::HASH_DEBUG)) {
                 if ($this->debugMode) {
                     $debugs[] = $this->previous()->lexeme;
@@ -221,6 +226,10 @@ class Parser
             } elseif ($this->check(TokenType::TRAIT_KW)) {
                 $cls = $this->parseTraitDecl();
                 $extraClasses[] = $cls;
+            } elseif ($this->check(TokenType::STRUCT_KW)) {
+                // struct C.Name { C.Type field; ... } — vlang 风格 C 结构体声明
+                //   复用 #cstruct 的 cstructs 数组，CodeGenerator 无需改动
+                $cstructs[] = $this->parseCStructDecl();
             } elseif ($this->check(TokenType::ENUM_KW)) {
                 // 允许 enum 在主声明循环中（与 class/interface 交错声明）
                 $this->advance();
@@ -239,8 +248,6 @@ class Parser
                 $this->error('#flag must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_CALLBACK)) {
                 $this->error('#callback must be placed at the top of the file (before namespace/use/class/function declarations)');
-            } elseif ($this->check(TokenType::HASH_CSTRUCT)) {
-                $this->error('#cstruct must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_IMPORT)) {
                 $this->error('#import must be placed at the top of the file (before namespace/use/class/function declarations)');
             } elseif ($this->check(TokenType::HASH_DEBUG)) {
@@ -252,7 +259,19 @@ class Parser
             }
         }
 
-        return new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums, $includes, $ccFlags, $callbacks, $debugs, $cstructs);
+        $useImports = [
+            'classes'   => $this->classImports,
+            'functions' => $this->functionImports,
+            'consts'    => $this->constImports,
+            'enums'     => $this->enumImports,
+        ];
+
+        // 合并匿名类（new class { ... } 表达式位置收集的合成类）
+        if (!empty($this->anonClasses)) {
+            $extraClasses = array_merge($extraClasses, $this->anonClasses);
+        }
+
+        return new ProgramNode($mainClass, $extraClasses, $functions, $constants, $enums, $includes, $ccFlags, $callbacks, $debugs, $cstructs, $useImports);
     }
 
     // ============================================================
@@ -640,12 +659,27 @@ class Parser
 
     // ============================================================
     // function_decl → FUNCTION IDENTIFIER LPAREN params? RPAREN COLON? type? LBRACE stmt* RBRACE
+    //                | FUNCTION 'C' '.' IDENTIFIER LPAREN params? RPAREN COLON type SEMICOLON
+    //   后者为 vlang 风格 C 函数签名声明：仅类型信息，不生成 C 代码
     // ============================================================
     private function parseFunction(array $attributes = []): FunctionNode
     {
         $this->consume(TokenType::FUNCTION, 'Expected function keyword');
 
-        $name = $this->consume(TokenType::IDENTIFIER, 'Expected function name')->lexeme;
+        // 检测 C 函数签名声明: function C.name(...): ret;
+        //   借鉴 vlang 的 fn C.foo() 语法 — 仅声明 C 函数签名，不生成实现
+        $isCDecl = false;
+        if ($this->check(TokenType::IDENTIFIER)
+            && $this->peek()->lexeme === 'C'
+            && $this->peek(1)->type === TokenType::DOT) {
+            $isCDecl = true;
+            $this->advance(); // 消费 'C'
+            $this->advance(); // 消费 '.'
+            $memberName = $this->consume(TokenType::IDENTIFIER, 'Expected C function name')->lexeme;
+            $name = 'C.' . $memberName;
+        } else {
+            $name = $this->consume(TokenType::IDENTIFIER, 'Expected function name')->lexeme;
+        }
 
         $this->consume(TokenType::LPAREN, 'Expected (');
         $params = [];
@@ -657,6 +691,16 @@ class Parser
         $returnType = 'void';
         if ($this->match(TokenType::COLON)) {
             $returnType = $this->parseType();
+        }
+
+        // C 函数签名声明：以 `;` 结尾，无函数体
+        if ($isCDecl) {
+            $this->consume(TokenType::SEMICOLON, 'Expected ; for C function declaration');
+            return new FunctionNode(
+                $name, $params, $returnType, [],
+                $this->currentNamespace, false, $attributes,
+                isCDeclaration: true,
+            );
         }
 
         $this->consume(TokenType::LBRACE, 'Expected {');
@@ -672,22 +716,59 @@ class Parser
     }
 
     // ============================================================
+    // struct C.Name { C.Type field; C.Type field; ... } — vlang 风格 C 结构体声明
+    //   或 struct C.Name; (不透明类型，无字段)
+    //   复用 #cstruct 的 cstructs 数组格式：
+    //     ['name' => 'Name', 'fields' => [['type' => 'C.double', 'name' => 'x'], ...]]
+    //   不透明类型: ['name' => 'Name', 'fields' => []]
+    // ============================================================
+    private function parseCStructDecl(): array
+    {
+        $this->consume(TokenType::STRUCT_KW, 'Expected struct');
+
+        // 期望 C.Name
+        $cToken = $this->consume(TokenType::IDENTIFIER, 'Expected C namespace before .');
+        if ($cToken->lexeme !== 'C') {
+            $this->error("Expected 'C' namespace in struct declaration, got '{$cToken->lexeme}' (syntax: struct C.Name { ... })");
+        }
+        $this->consume(TokenType::DOT, 'Expected . after C');
+        $name = $this->consume(TokenType::IDENTIFIER, 'Expected struct name')->lexeme;
+
+        // 可选字段列表
+        $fields = [];
+        if ($this->match(TokenType::LBRACE)) {
+            while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+                $fieldType = $this->parseType(); // C.double, C.int, C.char* 等
+                $fieldName = $this->consume(TokenType::IDENTIFIER, 'Expected field name')->lexeme;
+                $this->consume(TokenType::SEMICOLON, 'Expected ; after field declaration');
+                $fields[] = ['type' => $fieldType, 'name' => $fieldName];
+            }
+            $this->consume(TokenType::RBRACE, 'Expected }');
+        } else {
+            // 不透明类型: struct C.Foo;
+            $this->consume(TokenType::SEMICOLON, 'Expected ; for opaque struct declaration');
+        }
+
+        return ['name' => $name, 'fields' => $fields];
+    }
+
+    // ============================================================
     // class_decl → (final)? (readonly)? CLASS_KW IDENTIFIER (extends NAME)? (implements NAME,...)?
     //   readonly 与 final 可互换顺序: final readonly class / readonly final class
     // ============================================================
     private function parseClassDecl(array $attributes = []): ClassNode
     {
-        $this->match(TokenType::FINAL_KW);
+        $isFinal = $this->match(TokenType::FINAL_KW);
         $isReadOnly = $this->match(TokenType::READONLY_KW);
         // final 可出现在 readonly 之后: readonly final class
-        if (!$isReadOnly) {
-            $this->match(TokenType::FINAL_KW);
+        if (!$isFinal) {
+            $isFinal = $this->match(TokenType::FINAL_KW);
         }
         $this->consume(TokenType::CLASS_KW, 'Expected class keyword');
-        return $this->parseClassDeclBody(false, $isReadOnly, $attributes);
+        return $this->parseClassDeclBody(false, $isReadOnly, $attributes, $isFinal);
     }
 
-    private function parseClassDeclBody(bool $isAbstract, bool $isReadonly = false, array $attributes = []): ClassNode
+    private function parseClassDeclBody(bool $isAbstract, bool $isReadonly = false, array $attributes = [], bool $isFinal = false): ClassNode
     {
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected class name')->lexeme;
         $parentName = null;
@@ -702,11 +783,26 @@ class Parser
         }
 
         $this->consume(TokenType::LBRACE, 'Expected {');
+        [$methods, $properties, $classConsts, $traits, $traitAdaptations] = $this->parseClassMembers($name);
+        $this->consume(TokenType::RBRACE, 'Expected }');
 
+        return new ClassNode($name, $methods, $this->currentNamespace, $properties, $classConsts, $parentName, $isAbstract, $implements, $traits, $isReadonly, $isFinal, attributes: $attributes, traitAdaptations: $traitAdaptations);
+    }
+
+    /**
+     * 解析类成员体（{ ... } 内的成员），直到 RBRACE 或 EOF
+     *
+     * @param string $className 当前类名（用于 classConst 命名空间归属）
+     * @return array{0:MethodNode[], 1:PropertyDeclNode[], 2:ConstNode[], 3:string[], 4:array}
+     *   [methods, properties, classConsts, traits, traitAdaptations]
+     */
+    private function parseClassMembers(string $className): array
+    {
         $methods = [];
         $properties = [];
         $classConsts = [];
         $traits = [];
+        $traitAdaptations = ['insteadof' => [], 'as' => []];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
             // 解析方法前的 #[...] 属性前缀
             $methodAttrs = $this->parseAttributeUses();
@@ -721,19 +817,58 @@ class Parser
                 continue;
             }
             // use TraitName; → compile-time flattening
+            // use A, B { B::foo insteadof A; A::bar as baz; } → 带适配规则
             if ($this->match(TokenType::USE)) {
                 do {
                     $tname = $this->parseQualifiedName();
                     $traits[] = $tname;
                 } while ($this->match(TokenType::COMMA));
-                $this->consume(TokenType::SEMICOLON, 'Expected ;');
+
+                // 检查是否有适配规则块 {...}
+                if ($this->match(TokenType::LBRACE)) {
+                    while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+                        // 解析单条规则：TraitName::method (insteadof Other | as [vis] alias)
+                        $ruleTrait = $this->parseQualifiedName();
+                        $this->consume(TokenType::DOUBLE_COLON, 'Expected ::');
+                        $method = $this->consume(TokenType::IDENTIFIER, 'Expected method name')->lexeme;
+
+                        if ($this->check(TokenType::IDENTIFIER) && $this->peek()->lexeme === 'insteadof') {
+                            $this->advance();
+                            do {
+                                $excluded = $this->parseQualifiedName();
+                                $traitAdaptations['insteadof'][$method][] = $excluded;
+                            } while ($this->match(TokenType::COMMA));
+                        } elseif ($this->check(TokenType::AS_KW)) {
+                            $this->advance();
+                            // as 后面可能是别名（IDENTIFIER）或可见性（public/private）
+                            if ($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW)) {
+                                $vis = $this->advance()->lexeme;
+                                $traitAdaptations['as']["{$ruleTrait}::{$method}"]['visibility'] = $vis;
+                                // 可见性后可能还有别名：as public bazAlias
+                                if ($this->check(TokenType::IDENTIFIER)) {
+                                    $alias = $this->advance()->lexeme;
+                                    $traitAdaptations['as']["{$ruleTrait}::{$method}"]['alias'] = $alias;
+                                }
+                            } else {
+                                $alias = $this->consume(TokenType::IDENTIFIER, 'Expected alias name')->lexeme;
+                                $traitAdaptations['as']["{$ruleTrait}::{$method}"]['alias'] = $alias;
+                            }
+                        } else {
+                            $this->error("Expected 'insteadof' or 'as' in trait adaptation");
+                        }
+                        $this->consume(TokenType::SEMICOLON, 'Expected ;');
+                    }
+                    $this->consume(TokenType::RBRACE, 'Expected }');
+                } else {
+                    $this->consume(TokenType::SEMICOLON, 'Expected ;');
+                }
                 continue;
             }
             // 属性声明: visibility type $name (= default)? ;
             if ($this->isPropertyStart()) {
                 $properties[] = $this->parsePropertyDecl();
             } elseif ($this->isClassConstStart()) {
-                $classConsts[] = $this->parseClassConstDecl($name);
+                $classConsts[] = $this->parseClassConstDecl($className);
             } elseif ($this->check(TokenType::CONST_KW)) {
                 $this->error("Class constants must have an explicit type declaration (e.g., 'public const string MAX = 100')");
             } elseif (($this->check(TokenType::PUBLIC_KW) || $this->check(TokenType::PRIVATE_KW) || $this->check(TokenType::STATIC_KW) || $this->check(TokenType::READONLY_KW))
@@ -751,8 +886,7 @@ class Parser
             }
         }
 
-        $this->consume(TokenType::RBRACE, 'Expected }');
-        return new ClassNode($name, $methods, $this->currentNamespace, $properties, $classConsts, $parentName, $isAbstract, $implements, $traits, $isReadonly, $attributes);
+        return [$methods, $properties, $classConsts, $traits, $traitAdaptations];
     }
 
     // interface → INTERFACE_KW IDENTIFIER LBRACE method* RBRACE
@@ -766,15 +900,21 @@ class Parser
         }
         $this->consume(TokenType::LBRACE, 'Expected {');
         $methods = [];
+        $classConsts = [];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
-            $methods[] = $this->parseMethod();
+            if ($this->isClassConstStart()) {
+                $classConsts[] = $this->parseClassConstDecl($name);
+            } else {
+                $methods[] = $this->parseMethod();
+            }
         }
         $this->consume(TokenType::RBRACE, 'Expected }');
         // Interface = abstract class with only method signatures
-        return new ClassNode($name, $methods, $this->currentNamespace, [], [], null, true, $extends);
+        return new ClassNode($name, $methods, $this->currentNamespace, [], $classConsts, null, true, $extends, isInterface: true);
     }
 
-    // trait → TRAIT_KW IDENTIFIER LBRACE method* RBRACE
+    // trait → TRAIT_KW IDENTIFIER LBRACE (method | property | class_const)* RBRACE
+    // trait 自身不生成 C 结构体，编译期扁平化到使用 trait 的类
     private function parseTraitDecl(): ClassNode
     {
         $this->consume(TokenType::TRAIT_KW, 'Expected trait keyword');
@@ -782,15 +922,25 @@ class Parser
         $this->consume(TokenType::LBRACE, 'Expected {');
         $methods = [];
         $properties = [];
+        $classConsts = [];
         while (!$this->check(TokenType::RBRACE) && !$this->check(TokenType::EOF)) {
+            // trait 不允许嵌套 use Trait（PHP 语义：trait 不能 use 其他 trait，但允许 use Trait 作为扁平化语法）
+            // 这里允许 use TraitName; 以支持 trait 组合
+            if ($this->match(TokenType::USE)) {
+                $this->error("Trait cannot use other traits via 'use' inside trait body; flatten at class level instead");
+            }
             if ($this->isPropertyStart()) {
                 $properties[] = $this->parsePropertyDecl();
+            } elseif ($this->isClassConstStart()) {
+                $classConsts[] = $this->parseClassConstDecl($name);
+            } elseif ($this->check(TokenType::CONST_KW)) {
+                $this->error("Trait constants must have an explicit type declaration (e.g., 'const string MAX = \"x\"')");
             } else {
                 $methods[] = $this->parseMethod();
             }
         }
         $this->consume(TokenType::RBRACE, 'Expected }');
-        return new ClassNode($name, $methods, $this->currentNamespace, $properties);
+        return new ClassNode($name, $methods, $this->currentNamespace, $properties, $classConsts, isTrait: true);
     }
 
     /** 判断当前 token 是否为类常量声明开头：const T name 或 visibility const T name */
@@ -844,12 +994,26 @@ class Parser
     }
 
     /** 判断当前 token 序列是否为属性声明开头
-     *  支持顺序: [visibility] [readonly] [static] type $name  |  static [visibility] [readonly] type $name
-     *  |  readonly [visibility] [static] type $name */
+     *  支持顺序: [visibility] [asymmetric_set] [readonly] [static] type $name  |  static [visibility] [asymmetric_set] [readonly] type $name
+     *  |  readonly [visibility] [asymmetric_set] [static] type $name
+     *  asymmetric_set = private(set) （PHP 8.4 非对称可见性） */
     private function isPropertyStart(): bool
     {
         $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
                        TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED, TokenType::TYPE_NEVER, TokenType::IDENTIFIER];
+        // 检查从 $off 开始是否为: private(set) 非对称可见性修饰符
+        //   pattern: PRIVATE_KW LPAREN IDENTIFIER(set) RPAREN — 4 tokens
+        //   返回跳过非对称可见性后的新 offset（未匹配则原样返回）
+        $skipAsymSet = function(int $off): int {
+            if ($this->peek($off)->type === TokenType::PRIVATE_KW
+                && $this->peek($off + 1)->type === TokenType::LPAREN
+                && $this->peek($off + 2)->type === TokenType::IDENTIFIER
+                && strtolower($this->peek($off + 2)->lexeme) === 'set'
+                && $this->peek($off + 3)->type === TokenType::RPAREN) {
+                return $off + 4;
+            }
+            return $off;
+        };
         // 检查从 $off 开始是否为: type $name (;|=|{)
         //   type 可为: builtin/类名（单 token）, 或 C.TypeName[*]* （phpc C 类型）
         //   返回 (offset_after_type => 匹配, false => 不匹配)
@@ -877,14 +1041,14 @@ class Parser
             $tt = $this->peek($next + 1);
             return in_array($tt->type, [TokenType::SEMICOLON, TokenType::EQUALS, TokenType::LBRACE], true);
         };
-        // static [visibility] [readonly] type $name
+        // static [visibility] [asymmetric_set] [readonly] type $name
         if ($this->check(TokenType::STATIC_KW)) {
             // static function ... → 方法，不是属性
             $n1 = $this->peek(1)->type;
             if ($n1 === TokenType::FUNCTION) return false;
-            // static public/private [readonly] type $name
+            // static public/private [asymmetric_set] [readonly] type $name
             if ($n1 === TokenType::PUBLIC_KW || $n1 === TokenType::PRIVATE_KW) {
-                $off = 2;
+                $off = $skipAsymSet(2);
                 if ($this->peek($off)->type === TokenType::READONLY_KW) $off++;
                 return $checkPropPattern($off);
             }
@@ -892,21 +1056,23 @@ class Parser
             if ($n1 === TokenType::READONLY_KW) {
                 $off = 2;
                 if ($this->peek($off)->type === TokenType::PUBLIC_KW || $this->peek($off)->type === TokenType::PRIVATE_KW) $off++;
+                $off = $skipAsymSet($off);
                 return $checkPropPattern($off);
             }
             // static type $name
             return $checkPropPattern(1);
         }
-        // readonly [visibility] [static] type $name
+        // readonly [visibility] [asymmetric_set] [static] type $name
         if ($this->check(TokenType::READONLY_KW)) {
             $off = 1;
             if ($this->peek($off)->type === TokenType::PUBLIC_KW || $this->peek($off)->type === TokenType::PRIVATE_KW) $off++;
+            $off = $skipAsymSet($off);
             if ($this->peek($off)->type === TokenType::STATIC_KW) $off++;
             return $checkPropPattern($off);
         }
-        // [visibility] [readonly] [static] type $name
+        // [visibility] [asymmetric_set] [readonly] [static] type $name
         if (!$this->check(TokenType::PUBLIC_KW) && !$this->check(TokenType::PRIVATE_KW)) return false;
-        $off = 1;
+        $off = $skipAsymSet(1);
         if ($this->peek($off)->type === TokenType::READONLY_KW) $off++;
         $hasStatic = $this->peek($off)->type === TokenType::STATIC_KW;
         if ($hasStatic) $off++;
@@ -918,6 +1084,9 @@ class Parser
     private function parsePropertyDecl(): PropertyDeclNode
     {
         $mods = $this->parseModifiers();
+        if ($mods['isFinal']) {
+            $this->error("Properties cannot be marked final (final only applies to classes and methods)");
+        }
         $type = $this->parseType();
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected property name')->lexeme;
         $default = null;
@@ -936,7 +1105,7 @@ class Parser
             $this->consume(TokenType::SEMICOLON, 'Expected ;');
         }
 
-        return new PropertyDeclNode($name, $type, $mods['vis'], $default, $hooks, $mods['isStatic'], $mods['isReadonly']);
+        return new PropertyDeclNode($name, $type, $mods['vis'], $default, $hooks, $mods['isStatic'], $mods['isReadonly'], $mods['setVis'] ?? null);
     }
 
     /** 解析 Property Hook 体: { get => expr; | get { stmts } set => expr; | set { stmts } } */
@@ -1030,7 +1199,7 @@ class Parser
             $this->consume(TokenType::RBRACE, 'Expected }');
         }
 
-        return new MethodNode($name, $mods['vis'], $params, $returnType, $body, $promoted, $isGen, $mods['isStatic'], $attributes);
+        return new MethodNode($name, $mods['vis'], $params, $returnType, $body, $promoted, $isGen, $mods['isStatic'], $mods['isFinal'], $attributes);
     }
 
     // ============================================================
@@ -1044,6 +1213,16 @@ class Parser
         $seenDefault = false;
         do {
             $param = $this->parseParam();
+            // C 风格变参 `...` 必须是最后一个参数
+            if ($param->type === '...') {
+                $params[] = $param;
+                break;
+            }
+            // PHP 风格可变参数 `...$args` / `int ...$nums` 必须是最后一个参数
+            if ($param->isVariadic) {
+                $params[] = $param;
+                break;
+            }
             // 检查：默认值参数后面不能有非默认值参数
             if ($seenDefault && $param->default === null) {
                 $this->error('Default value parameters must be at the end of parameter list');
@@ -1068,10 +1247,10 @@ class Parser
             if ($this->check(TokenType::READONLY_KW)
                 || $this->check(TokenType::PUBLIC_KW)
                 || $this->check(TokenType::PRIVATE_KW)) {
-                [$vis, $isReadonly] = $this->parseVisibility();
+                [$vis, $isReadonly, $setVis] = $this->parseVisibility();
                 $type = $this->parseType();
                 $pName = $this->consume(TokenType::IDENTIFIER, 'Expected property name')->lexeme;
-                $promoted[] = new PropertyDeclNode($pName, $type, $vis, null, [], false, $isReadonly);
+                $promoted[] = new PropertyDeclNode($pName, $type, $vis, null, [], false, $isReadonly, $setVis);
                 $params[] = new ParamNode($type, $pName, false, null, $isReadonly);
             } else {
                 $params[] = $this->parseParam();
@@ -1082,7 +1261,35 @@ class Parser
 
     private function parseParam(): ParamNode
     {
+        // C 风格变参 `...`：用于 function C.printf(..., ...): ... 声明
+        //   仅当 `...` 后面不是变量名时，识别为 C 风格变参标记
+        //   PHP 风格 `...$args` / `int ...$nums` 由下方 isVariadic 分支处理
+        if ($this->match(TokenType::ELLIPSIS)) {
+            // `...` 后跟 IDENTIFIER（变量名）→ PHP 风格可变参数
+            //   兼容 `...$args`（无类型）和 `... int $args`（vlang 风格类型在前已消费）
+            //   此分支仅处理 `...$args`（ELLIPSIS 在最前）
+            if ($this->check(TokenType::IDENTIFIER)) {
+                $varName = $this->advance()->lexeme;
+                // 不允许默认值：可变参数不能有默认值
+                if ($this->match(TokenType::EQUALS)) {
+                    $this->error("Variadic parameter '\${$varName}' cannot have a default value");
+                }
+                return new ParamNode('array', $varName, false, null, false, true);
+            }
+            // C 风格变参：`...` 后是 `,` 或 `)` → 返回 type='...' 标记节点
+            return new ParamNode('...', '__variadic__');
+        }
         $type = $this->parseType();
+        // PHP 风格类型化可变参数：`int ...$nums`（vlang 风格，类型在前）
+        //   语义等价 `...int $nums`，TinyPHP 统一为类型在前以保持类型固定优势
+        if ($this->match(TokenType::ELLIPSIS)) {
+            $varName = $this->consume(TokenType::IDENTIFIER, 'Expected variadic parameter name')->lexeme;
+            if ($this->match(TokenType::EQUALS)) {
+                $this->error("Variadic parameter '\${$varName}' cannot have a default value");
+            }
+            // 类型存储在 type 字段（用于元素类型追踪），isVariadic=true 标记可变参数语义
+            return new ParamNode($type, $varName, false, null, false, true);
+        }
         // & — pass-by-reference (int &$x → C: int *x)
         $byRef = false;
         if ($this->match(TokenType::AMP)) {
@@ -1238,6 +1445,7 @@ class Parser
     }
 
     // try { body } catch (Type $e) { body }* finally { body }?
+    //   catch (A | B $e) — 多异常 catch（PHP 8.0+），type 存为 string[]；单类型仍为 string
     private function parseTryStmt(): TryStmtNode
     {
         $this->consume(TokenType::LBRACE, 'Expected {');
@@ -1251,13 +1459,21 @@ class Parser
         while ($this->match(TokenType::CATCH_KW)) {
             $this->consume(TokenType::LPAREN, 'Expected (');
             $catchType = $this->parseType();
+            // catch (A | B | C $e) — 多异常类型（PHP 8.0+）
+            // parseType() 已将 union type 用 | 连接为单字符串，此处拆分
+            $catchTypes = explode('|', $catchType);
             $t = $this->consume(TokenType::IDENTIFIER, 'Expected catch variable')->lexeme;
             $catchVar = ltrim($t, '$');
             $this->consume(TokenType::RPAREN, 'Expected )');
             $this->consume(TokenType::LBRACE, 'Expected {');
             $catchBody = $this->parseBlock();
             $this->consume(TokenType::RBRACE, 'Expected }');
-            $catchClauses[] = ['type' => $catchType, 'var' => $catchVar, 'body' => $catchBody];
+            // 单类型存 string（向后兼容）；多类型存 string[]
+            $catchClauses[] = [
+                'type' => count($catchTypes) === 1 ? $catchTypes[0] : $catchTypes,
+                'var'  => $catchVar,
+                'body' => $catchBody,
+            ];
         }
 
         // finally { ... }
@@ -1369,13 +1585,15 @@ class Parser
             if ($this->check(TokenType::RPAREN) || $this->check(TokenType::RBRACKET)) {
                 break;
             }
-            // 键名解构: STRING_LIT => $var
-            if ($this->check(TokenType::STRING_LIT)) {
-                $keyLit = (string)$this->peek()->literal;
+            // 键名解构: STRING_LIT => $var  或  INT_LIT => $var
+            //   PHP 7.1+ 支持整数键名指定解构顺序：list(1 => $b, 0 => $a) = [1, 2]
+            if ($this->check(TokenType::STRING_LIT) || $this->check(TokenType::INT_LIT)) {
+                $keyIsInt = $this->check(TokenType::INT_LIT);
+                $keyLit = $keyIsInt ? (int)$this->peek()->literal : (string)$this->peek()->literal;
                 $this->advance();
                 $this->consume(TokenType::DOUBLE_ARROW, 'Expected =>');
                 $varName = $this->consume(TokenType::IDENTIFIER, 'Expected variable name')->lexeme;
-                $keyed[] = ['key' => $keyLit, 'var' => ltrim($varName, '$')];
+                $keyed[] = ['key' => $keyLit, 'var' => ltrim($varName, '$'), 'keyIsInt' => $keyIsInt];
                 // 逗号继续，否则结束
                 if (!$this->check(TokenType::COMMA)) break;
                 $this->advance();
@@ -1690,6 +1908,19 @@ class Parser
             TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
         ];
         if (in_array($t1->type, $nativeTypeTokens, true)) {
+            // Task 5.4: array<T> $var = ... — 跳过 <T> 查找 $var
+            if ($t1->type === TokenType::TYPE_ARRAY && $this->peek(1)->type === TokenType::LT) {
+                $i = 2;
+                // 跳过嵌套 array<...<T>> 中的所有 < 和 T
+                $depth = 1;
+                while ($depth > 0 && $this->peek($i)->type !== TokenType::EOF) {
+                    if ($this->peek($i)->type === TokenType::LT) $depth++;
+                    elseif ($this->peek($i)->type === TokenType::GT) $depth--;
+                    $i++;
+                }
+                return $this->peek($i)->type === TokenType::IDENTIFIER
+                    && str_starts_with($this->peek($i)->lexeme, '$');
+            }
             return $this->peek(1)->type === TokenType::IDENTIFIER
                 && str_starts_with($this->peek(1)->lexeme, '$');
         }
@@ -1779,7 +2010,7 @@ class Parser
             return new AssignPropStmtNode($expr, $val);
         }
         // 复合赋值: $var += expr 或 $this->prop += expr
-        $compOps = [TokenType::PLUS_EQ, TokenType::MINUS_EQ, TokenType::STAR_EQ, TokenType::SLASH_EQ, TokenType::DOT_EQ];
+        $compOps = [TokenType::PLUS_EQ, TokenType::MINUS_EQ, TokenType::STAR_EQ, TokenType::SLASH_EQ, TokenType::DOT_EQ, TokenType::COALESCE_EQ];
         foreach ($compOps as $op) {
             if ($this->check($op)) {
                 $this->advance();
@@ -2008,9 +2239,14 @@ class Parser
                 $nullsafe = $this->previous()->type === TokenType::NULLSAFE_ARROW;
                 $member = $this->parseMethodName()->lexeme;
                 if ($this->match(TokenType::LPAREN)) {
-                    $args = $this->parseArgs();
+                    [$args, $argNames, $spreads] = $this->parseArgs();
                     $this->consume(TokenType::RPAREN, 'Expected )');
-                    $expr = $this->setPos(new CallExpr($expr, $member, $args, $nullsafe), $expr->line, $expr->column);
+                    // First-class callable: $obj->method(...) — 仅一个占位符
+                    if (count($args) === 1 && $args[0] instanceof PlaceholderExpr) {
+                        $expr = $this->setPos(new CallableConvertExpr($expr, $member), $expr->line, $expr->column);
+                    } else {
+                        $expr = $this->setPos(new CallExpr($expr, $member, $args, $nullsafe, false, $argNames, $spreads), $expr->line, $expr->column);
+                    }
                 } else {
                     $expr = $this->setPos(new PropertyAccessExpr($expr, $member, $nullsafe), $expr->line, $expr->column);
                 }
@@ -2030,7 +2266,25 @@ class Parser
                 break;
             }
         }
+        // or {} 错误处理块（vlang 风格）：readFile('x') or { ... }
+        //   仅在 postfix 表达式后识别 IDENTIFIER "or" + LBRACE
+        //   不与 PHP `or` 逻辑运算符冲突（TinyPHP 不支持 $a or $b 语法）
+        if ($this->isOrBlockStart()) {
+            $this->advance(); // consume 'or'
+            $this->consume(TokenType::LBRACE, 'Expected { after or');
+            $orBody = $this->parseBlock();
+            $this->consume(TokenType::RBRACE, 'Expected }');
+            $expr = $this->setPos(new OrBlockExpr($expr, $orBody), $expr->line, $expr->column);
+        }
         return $expr;
+    }
+
+    /** 检测 or {} 块起始：IDENTIFIER "or" 紧跟 LBRACE */
+    private function isOrBlockStart(): bool
+    {
+        return $this->check(TokenType::IDENTIFIER)
+            && $this->peek()->lexeme === 'or'
+            && $this->peek(1)->type === TokenType::LBRACE;
     }
 
     private function parsePrimary(): ExprNode
@@ -2113,10 +2367,14 @@ class Parser
 
                 // 方法调用: $obj->method(args) 或 C->func(args)
                 if ($this->match(TokenType::LPAREN)) {
-                    $args = $this->parseArgs();
+                    [$args, $argNames, $spreads] = $this->parseArgs();
                     $this->consume(TokenType::RPAREN, 'Expected )');
                     $isRawC = ($name === 'C' && $opType !== TokenType::DOUBLE_COLON);
-                    return $this->setPos(new CallExpr(new VariableExpr($name), $memberName, $args, $nullsafe, $isRawC), $line, $col);
+                    // First-class callable: Class::method(...) / C->func(...) — 仅一个占位符
+                    if (count($args) === 1 && $args[0] instanceof PlaceholderExpr) {
+                        return $this->setPos(new CallableConvertExpr(new VariableExpr($name), $memberName, $isRawC), $line, $col);
+                    }
+                    return $this->setPos(new CallExpr(new VariableExpr($name), $memberName, $args, $nullsafe, $isRawC, $argNames, $spreads), $line, $col);
                 }
 
                 // 属性访问: $obj->prop / $obj?->prop
@@ -2125,11 +2383,15 @@ class Parser
 
             // 函数调用（含 var_dump、闭包调用 $var()）
             if ($this->match(TokenType::LPAREN)) {
-                $args = $this->parseArgs();
+                [$args, $argNames, $spreads] = $this->parseArgs();
                 $this->consume(TokenType::RPAREN, 'Expected )');
                 // $var() → 闭包调用
                 if (str_starts_with($name, '$')) {
-                    return $this->setPos(new CallExpr(new VariableExpr($name), '__invoke', $args), $line, $col);
+                    // First-class callable: $var(...) — 仅一个占位符
+                    if (count($args) === 1 && $args[0] instanceof PlaceholderExpr) {
+                        return $this->setPos(new CallableConvertExpr(new VariableExpr($name), '__invoke'), $line, $col);
+                    }
+                    return $this->setPos(new CallExpr(new VariableExpr($name), '__invoke', $args, false, false, $argNames, $spreads), $line, $col);
                 }
                 // Friendly errors for unsupported PHP functions
                 $unsupportedFns = [
@@ -2144,7 +2406,7 @@ class Parser
                 $globalFns = ['var_dump','count','exit','die','isset','empty','unset',
                     'error','time','date','sleep','usleep','hrtime',
                     // phpc 互操作（全部全局，不解析命名空间）
-                    'c_int','c_str','php_int','php_str','php_str_clone',
+                    'c_int','c_str','php_int','php_str','php_str_clone','cstr_to_string',
                     'phpc_arr_int','phpc_arr_dbl','phpc_arr_str',
                     'phpc_new_arr_int','phpc_new_arr_dbl','phpc_new_arr_str','phpc_new_arr',
                     'phpc_obj','phpc_new_obj','phpc_unregister_obj','phpc_obj_steal',
@@ -2168,7 +2430,11 @@ class Parser
                     && !str_starts_with($name, 'c_') && !str_starts_with($name, 'php_') && !str_starts_with($name, 'phpc_')) {
                     $name = $this->resolveFunctionName($name);
                 }
-                return $this->setPos(new CallExpr(null, $name, $args), $line, $col);
+                // First-class callable: foo(...) — 仅一个占位符
+                if (count($args) === 1 && $args[0] instanceof PlaceholderExpr) {
+                    return $this->setPos(new CallableConvertExpr(null, $name), $line, $col);
+                }
+                return $this->setPos(new CallExpr(null, $name, $args, false, false, $argNames, $spreads), $line, $col);
             }
 
             // 数组访问: $var[expr] 或 $var[] 空下标（赋值上下文）
@@ -2210,10 +2476,9 @@ class Parser
         $entries = [];
         if (!$this->check(TokenType::RBRACKET)) {
             do {
-                // ...$arr 展开元素（三个 DOT token）
+                // ...$arr 展开元素
                 $isSpread = false;
-                if ($this->check(TokenType::DOT) && $this->peek(1)->type === TokenType::DOT && $this->peek(2)->type === TokenType::DOT) {
-                    $this->advance(); $this->advance(); $this->advance();
+                if ($this->match(TokenType::ELLIPSIS)) {
                     $isSpread = true;
                 }
                 $first = $this->parseExpr();
@@ -2303,12 +2568,12 @@ class Parser
             if ($retType !== 'void' && !$this->blockHasReturn($body)) {
                 $this->error("Arrow function block body with non-void return type must contain a return statement");
             }
-            return new ClosureExpr($params, $retType, $body, []);
+            return new ClosureExpr($params, $retType, $body, [], false, true);
         }
         // 单表达式语法: fn(...): type => expr
         $bodyExpr = $this->parseExpr();
         $body = [new ReturnStmtNode($bodyExpr)];
-        return new ClosureExpr($params, $retType, $body, []);
+        return new ClosureExpr($params, $retType, $body, [], false, true);
     }
 
     /**
@@ -2362,6 +2627,20 @@ class Parser
             && !str_starts_with($this->peek()->lexeme, '$');
     }
 
+    /**
+     * 当前 token 是否可作为命名参数名（PHP 允许类型关键字 int/string/float/bool/array 等作为参数名）
+     * 用于命名参数解析：foo(string: $s), foo(int: $n)
+     */
+    private function isParamNameStart(): bool
+    {
+        if ($this->check(TokenType::IDENTIFIER)) return true;
+        // 类型关键字也可作为参数名（PHP 8+ semi-reserved 语义）
+        $typeTokens = [TokenType::TYPE_INT, TokenType::TYPE_FLOAT, TokenType::TYPE_STRING,
+                       TokenType::TYPE_BOOL, TokenType::TYPE_ARRAY, TokenType::TYPE_MIXED,
+                       TokenType::TYPE_NEVER, TokenType::TYPE_VOID];
+        return in_array($this->peek()->type, $typeTokens, true);
+    }
+
     private function parseClosure(): ClosureExpr
     {
         $this->consume(TokenType::LPAREN, 'Expected (');
@@ -2402,31 +2681,126 @@ class Parser
         return new ClosureExpr($params, $returnType, $body, $useVars, $isGen);
     }
 
-    /** @return ExprNode[] */
+    /** @return array{0:ExprNode[],1:string[],2:bool[]} [args, argNames, spreads] — argNames[i] 为 '' 表示位置参数；spreads[i] 为 true 表示该参数是 `...$arr` 展开形式 */
     private function parseArgs(): array
     {
         $args = [];
+        $argNames = [];
+        $spreads = [];
         if (!$this->check(TokenType::RPAREN)) {
             do {
-                // `...` 参数占位符（pipe operator 上下文使用）
-                if ($this->check(TokenType::DOT) && $this->peek(1)->type === TokenType::DOT && $this->peek(2)->type === TokenType::DOT) {
-                    $this->advance(); $this->advance(); $this->advance();
-                    $args[] = $this->setPos(new PlaceholderExpr(), $this->peek()->line, $this->peek()->column);
-                } else {
+                // `...` 后跟表达式：数组展开 `f(...$arr)`
+                //   `...` 单独使用（无后续表达式）：占位符（pipe / first-class callable）
+                if ($this->match(TokenType::ELLIPSIS)) {
+                    // `...` 后是 `,` 或 `)` → 占位符（PlaceholderExpr）
+                    if ($this->check(TokenType::COMMA) || $this->check(TokenType::RPAREN)) {
+                        $args[] = $this->setPos(new PlaceholderExpr(), $this->peek()->line, $this->peek()->column);
+                        $argNames[] = '';
+                        $spreads[] = false;
+                        continue;
+                    }
+                    // `...$expr` → 数组展开
                     $args[] = $this->parseExpr();
+                    $argNames[] = '';
+                    $spreads[] = true;
+                    continue;
                 }
+                // 命名参数: IDENTIFIER ':' expr （要求 name 与 ':' 紧贴，无空格）
+                //   PHP 8.0+ 语法: foo(name: $value)
+                //   检测方式：当前 token 是 IDENTIFIER（或类型关键字 int/string/float/bool/array 等，
+                //   PHP 允许类型名作为参数名），下一 token 是 COLON，
+                //   且 name.column + strlen(lexeme) == COLON.column（无空格）
+                if ($this->isParamNameStart() && $this->checkNext(TokenType::COLON)) {
+                    $nameTok = $this->peek();
+                    $colonTok = $this->peek(1);
+                    if ($nameTok->column + strlen($nameTok->lexeme) === $colonTok->column) {
+                        $argName = $this->advance()->lexeme;
+                        $this->advance(); // consume ':'
+                        $args[] = $this->parseExpr();
+                        $argNames[] = $argName;
+                        $spreads[] = false;
+                        continue;
+                    }
+                }
+                $args[] = $this->parseExpr();
+                $argNames[] = '';
+                $spreads[] = false;
             } while ($this->match(TokenType::COMMA) && !$this->check(TokenType::RPAREN));
         }
-        return $args;
+        return [$args, $argNames, $spreads];
     }
 
     private function parseNewExpr(): NewExpr
     {
+        // new class [extends Parent] [implements Iface] [(args)] { ... } — 匿名类
+        //   编译期转译为合成类 _AnonClass${N} + new _AnonClass${N}(args)
+        //   借鉴 vlang _VAnonStruct${counter} 命名约定（parser/struct.v:51-58）
+        if ($this->check(TokenType::CLASS_KW)) {
+            return $this->parseAnonymousClassExpr();
+        }
         $className = $this->consume(TokenType::IDENTIFIER, 'Expected class name')->lexeme;
         $this->consume(TokenType::LPAREN, 'Expected (');
-        $args = $this->parseArgs();
+        [$args, $argNames] = $this->parseArgs();
         $this->consume(TokenType::RPAREN, 'Expected )');
-        return new NewExpr($this->resolveClassName($className), $args);
+        // NewExpr 不支持 spread 参数（构造器调用不展开数组），忽略 $spreads
+        return new NewExpr($this->resolveClassName($className), $args, $argNames);
+    }
+
+    /**
+     * 解析匿名类表达式：new class [(args)] [extends Parent] [implements Iface] { members }
+     *
+     * 编译期转译策略（零运行时开销）：
+     *   1. 生成合成类名 _AnonClass${N}（借鉴 vlang _VAnonStruct${counter}）
+     *   2. 解析类体为 ClassNode，加入 $this->anonClasses（parseProgram 末尾合并到 extraClasses）
+     *   3. 返回 NewExpr('_AnonClass${N}', $ctorArgs)
+     *
+     * PHP 8.3 语法顺序：new class [(args)] [extends ...] [implements ...] { ... }
+     *   - 构造参数 (args) 在 class 关键字后、extends 前
+     *   - 注意：PHP 8.3 的 use($x, $y) 捕获语法当前不支持（需类型推导，与 AOT 显式类型哲学冲突）
+     *
+     * @return NewExpr 指向合成类 _AnonClass${N} 的构造调用
+     */
+    private function parseAnonymousClassExpr(): NewExpr
+    {
+        $this->consume(TokenType::CLASS_KW, 'Expected class keyword');
+
+        // 可选构造参数: new class($x, $y) { ... }
+        $ctorArgs = [];
+        $ctorArgNames = [];
+        if ($this->check(TokenType::LPAREN)) {
+            $this->advance();
+            [$ctorArgs, $ctorArgNames] = $this->parseArgs();
+            $this->consume(TokenType::RPAREN, 'Expected )');
+        }
+
+        // 生成合成类名（全局唯一，避免命名空间冲突）
+        $anonName = '_AnonClass' . (++$this->anonClassCounter);
+
+        // extends / implements
+        $parentName = null;
+        if ($this->match(TokenType::EXTENDS_KW)) {
+            $parentName = $this->resolveClassName($this->parseQualifiedName());
+        }
+        $implements = [];
+        if ($this->match(TokenType::IMPLEMENTS_KW)) {
+            do {
+                $implements[] = $this->resolveClassName($this->parseQualifiedName());
+            } while ($this->match(TokenType::COMMA));
+        }
+
+        // 解析类体（复用 parseClassMembers）
+        $this->consume(TokenType::LBRACE, 'Expected {');
+        [$methods, $properties, $classConsts, $traits, $traitAdaptations] = $this->parseClassMembers($anonName);
+        $this->consume(TokenType::RBRACE, 'Expected }');
+
+        // 创建合成 ClassNode 并收集（parseProgram 末尾合并到 extraClasses）
+        $this->anonClasses[] = new ClassNode(
+            $anonName, $methods, $this->currentNamespace,
+            $properties, $classConsts, $parentName, false, $implements,
+            $traits, false, false, traitAdaptations: $traitAdaptations
+        );
+
+        return new NewExpr($anonName, $ctorArgs, $ctorArgNames);
     }
 
     private function parseCastExpr(): CastExpr
@@ -2490,79 +2864,108 @@ class Parser
         // readonly 可在前: readonly public
         if ($this->match(TokenType::READONLY_KW)) {
             $isReadonly = true;
-            if ($this->match(TokenType::PUBLIC_KW))  return ['public', $isReadonly];
-            if ($this->match(TokenType::PRIVATE_KW)) return ['private', $isReadonly];
+            if ($this->match(TokenType::PUBLIC_KW))  return ['public', $isReadonly, $this->parseAsymmetricSet('public')];
+            if ($this->match(TokenType::PRIVATE_KW)) return ['private', $isReadonly, null];
             $this->error('Expected public or private after readonly');
         }
         if ($this->match(TokenType::PUBLIC_KW)) {
             // public readonly
             if ($this->match(TokenType::READONLY_KW)) $isReadonly = true;
-            return ['public', $isReadonly];
+            return ['public', $isReadonly, $this->parseAsymmetricSet('public')];
         }
         if ($this->match(TokenType::PRIVATE_KW)) {
             // private readonly
             if ($this->match(TokenType::READONLY_KW)) $isReadonly = true;
-            return ['private', $isReadonly];
+            return ['private', $isReadonly, null];
         }
         $this->error('Expected public or private');
     }
 
-    /** 解析成员修饰符组合 (visibility? readonly? static?) — 用于属性和方法
+    /** 解析非对称可见性 private(set)（PHP 8.4），仅在 $readVis 为 public 时允许 */
+    private function parseAsymmetricSet(string $readVis): ?string
+    {
+        if ($readVis !== 'public') return null;
+        if (!$this->check(TokenType::PRIVATE_KW)) return null;
+        $this->advance();
+        $this->consume(TokenType::LPAREN, "Expected ( after private in asymmetric visibility");
+        $setKw = $this->consume(TokenType::IDENTIFIER, "Expected 'set' in private(set)");
+        if (strtolower($setKw->lexeme) !== 'set') {
+            $this->error("Expected 'set' in private(set), got '{$setKw->lexeme}'");
+        }
+        $this->consume(TokenType::RPAREN, "Expected ) after private(set)");
+        return 'private';
+    }
+
+    /** 解析成员修饰符组合 (visibility? readonly? static? final?) — 用于属性和方法
      *  PHP 修饰符顺序灵活: readonly public / public readonly / static public / public static
+     *  final 可出现在任意位置: final public / public final / final static public / ...
      *  但 readonly + static 不兼容（PHP 8.2 禁止静态 readonly 属性）
-     *  返回 ['vis' => string, 'isStatic' => bool, 'isReadonly' => bool] */
+     *  返回 ['vis' => string, 'isStatic' => bool, 'isReadonly' => bool, 'isFinal' => bool] */
     private function parseModifiers(): array
     {
         $this->match(TokenType::ABSTRACT_KW); // skip abstract
         $vis = 'public';
+        $setVis = null; // 非对称可见性（PHP 8.4）：null=与读可见性一致；'private'=private(set)
         $isStatic = false;
         $isReadonly = false;
+        $isFinal = false;
+        $seenVis = false;
 
-        // 第一轮: 可能的 leading static / readonly
-        if ($this->match(TokenType::STATIC_KW)) {
-            $isStatic = true;
-            // static public/private [readonly]  或  static readonly public/private
-            if ($this->match(TokenType::READONLY_KW)) {
-                $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+        // 循环消费修饰符（顺序无关）
+        while (true) {
+            if ($this->match(TokenType::FINAL_KW)) {
+                $isFinal = true;
+                continue;
             }
-            if ($this->match(TokenType::PUBLIC_KW))       $vis = 'public';
-            elseif ($this->match(TokenType::PRIVATE_KW))  $vis = 'private';
-            // static readonly — 不允许
-            if ($this->match(TokenType::READONLY_KW)) {
-                $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
-            }
-        } elseif ($this->match(TokenType::READONLY_KW)) {
-            $isReadonly = true;
-            // readonly [public/private] [static] — static 不允许
-            if ($this->match(TokenType::PUBLIC_KW))       $vis = 'public';
-            elseif ($this->match(TokenType::PRIVATE_KW))  $vis = 'private';
             if ($this->match(TokenType::STATIC_KW)) {
-                $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+                $isStatic = true;
+                continue;
             }
-        } elseif ($this->match(TokenType::PUBLIC_KW)) {
-            $vis = 'public';
             if ($this->match(TokenType::READONLY_KW)) {
                 $isReadonly = true;
-                if ($this->match(TokenType::STATIC_KW)) {
-                    $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
-                }
-            } elseif ($this->match(TokenType::STATIC_KW)) {
-                $isStatic = true;
+                continue;
             }
-        } elseif ($this->match(TokenType::PRIVATE_KW)) {
-            $vis = 'private';
-            if ($this->match(TokenType::READONLY_KW)) {
-                $isReadonly = true;
-                if ($this->match(TokenType::STATIC_KW)) {
-                    $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
-                }
-            } elseif ($this->match(TokenType::STATIC_KW)) {
-                $isStatic = true;
+            if ($this->match(TokenType::PUBLIC_KW)) {
+                $vis = 'public';
+                $seenVis = true;
+                continue;
             }
-        } else {
-            $this->error('Expected public, private, readonly, or static');
+            if ($this->check(TokenType::PRIVATE_KW)) {
+                // private(set) — 非对称可见性：不作为读可见性消费，留给后面的非对称块处理
+                //   通过 peek next token 判断：private 后跟 ( 即为非对称
+                if ($this->peek(1)->type === TokenType::LPAREN) break;
+                $this->advance();
+                $vis = 'private';
+                $seenVis = true;
+                continue;
+            }
+            break;
         }
-        return ['vis' => $vis, 'isStatic' => $isStatic, 'isReadonly' => $isReadonly];
+
+        // 非对称可见性（PHP 8.4）：private(set) — 读写可见性不同
+        //   语法：public private(set) int $x
+        //   读取用 $vis（public），写入用 $setVis（private）
+        if ($this->check(TokenType::PRIVATE_KW)) {
+            $this->advance();
+            $this->consume(TokenType::LPAREN, "Expected ( after private in asymmetric visibility");
+            $setKw = $this->consume(TokenType::IDENTIFIER, "Expected 'set' in private(set)");
+            if (strtolower($setKw->lexeme) !== 'set') {
+                $this->error("Expected 'set' in private(set), got '{$setKw->lexeme}'");
+            }
+            $this->consume(TokenType::RPAREN, "Expected ) after private(set)");
+            $setVis = 'private';
+        }
+
+        if (!$isStatic && !$isReadonly && !$isFinal && !$seenVis) {
+            $this->error('Expected public, private, readonly, static, or final');
+        }
+
+        // readonly + static 不兼容
+        if ($isReadonly && $isStatic) {
+            $this->error("Readonly property cannot be static (PHP 8.2+ forbids static readonly properties)");
+        }
+
+        return ['vis' => $vis, 'setVis' => $setVis, 'isStatic' => $isStatic, 'isReadonly' => $isReadonly, 'isFinal' => $isFinal];
     }
 
     private function parseType(): string
@@ -2619,6 +3022,27 @@ class Parser
         if ($typeToken->type === TokenType::IDENTIFIER
             && !in_array($result, ['callable', 'iterable', 'object', 'static'], true)) {
             $result = $this->resolveClassName($result);
+        }
+
+        // 泛型数组类型注解: array<T>（Task 5.4）
+        //   支持 array<int> / array<string> / array<float> / array<bool> / array<mixed>
+        //   支持嵌套 array<array<int>>（二维整数数组）
+        //   元素类型信息保留在字符串中，CodeGenerator 解析后设置 arrElementTypes
+        //   注意: Lexer 将 >> 识别为 GT_GT（右移），嵌套 array<array<T>> 结尾的 >>
+        //   需拆分为两个 > 消费（通过向 token 流插入 GT 实现）
+        if ($result === 'array' && $this->check(TokenType::LT)) {
+            $this->advance(); // 消费 '<'
+            $elemType = $this->parseType(); // 递归解析元素类型（支持嵌套）
+            // 消费 '>'：可能是 GT 或 GT_GT（嵌套结尾的 >>）
+            if ($this->check(TokenType::GT_GT)) {
+                $this->advance();
+                // GT_GT 表示 >>，消费后等效于消费 1 个 >，剩余 1 个 > 留给外层
+                // 通过插入一个 GT token 模拟推回
+                array_splice($this->tokens, $this->current, 0, [new Token(TokenType::GT, '>', $this->peek()->line, $this->peek()->column)]);
+            } else {
+                $this->consume(TokenType::GT, "Expected '>' after array element type");
+            }
+            $result = "array<{$elemType}>";
         }
 
         // union type: int|string|bool
@@ -2702,8 +3126,9 @@ class Parser
                 }
                 continue;
             }
-            // Keyed list: STRING_LIT => ... → keep scanning (PHP 7.1+)
-            if ($t->type === TokenType::STRING_LIT) {
+            // Keyed list: STRING_LIT => ... 或 INT_LIT => ... → keep scanning (PHP 7.1+)
+            //   整数键名解构：[1 => $b, 0 => $a] = $arr
+            if ($t->type === TokenType::STRING_LIT || $t->type === TokenType::INT_LIT) {
                 $next = $this->peek();
                 if ($next->type === TokenType::DOUBLE_ARROW) {
                     $this->advance(); // skip =>
@@ -2712,7 +3137,7 @@ class Parser
                 break; // array value literal
             }
             if (in_array($t->type, [
-                TokenType::INT_LIT, TokenType::FLOAT_LIT,
+                TokenType::FLOAT_LIT,
                 TokenType::TRUE_KW, TokenType::FALSE_KW, TokenType::NULL_KW,
                 TokenType::ARROW,
             ])) break;
