@@ -39,6 +39,9 @@ class ProgramNode extends ASTNode
         public readonly array $debugs = [],
         /** @var array[]  [['name'=>'Point','fields'=>[['type'=>'C.double','name'=>'x'],...]], ...] */
         public readonly array $cstructs = [],
+        /** @var array{classes:array<string,string>, functions:array<string,string>, consts:array<string,string>, enums:array<string,string>}
+         *  use 导入表：短名 => FQCN（不含前导 \）。由 Parser 填充，供 TypeChecker 解析短类名引用 */
+        public readonly array $useImports = ['classes' => [], 'functions' => [], 'consts' => [], 'enums' => []],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -62,6 +65,9 @@ class FunctionNode extends ASTNode
         public readonly bool $isGenerator = false,
         /** @var AttributeUseNode[] */
         public readonly array $attributes = [],
+        /** C 函数签名声明（vlang 风格 function C.foo(...): C.ret; ）
+         *  true 表示这是一个 C 函数声明，仅用于类型信息，不生成 C 代码 */
+        public readonly bool $isCDeclaration = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -78,12 +84,13 @@ class ClassNode extends ASTNode
      *  @param ConstNode[] $classConsts */
     public function __construct(
         public readonly string $name,
-        public readonly array $methods,
+        /** @var MethodNode[] 可变：TypeChecker prescan 阶段合并 trait 方法 */
+        public array $methods,
         public readonly string $namespace = '',
-        /** @var PropertyDeclNode[] */
-        public readonly array $properties = [],
-        /** @var ConstNode[] 类成员常量 */
-        public readonly array $classConsts = [],
+        /** @var PropertyDeclNode[] 可变：TypeChecker prescan 阶段合并 trait 属性 */
+        public array $properties = [],
+        /** @var ConstNode[] 类成员常量；可变：TypeChecker prescan 阶段合并 trait 常量 */
+        public array $classConsts = [],
         public readonly ?string $parentName = null,
         public readonly bool $isAbstract = false,
         /** @var string[] */
@@ -91,8 +98,14 @@ class ClassNode extends ASTNode
         /** @var array[] trait names to flatten */
         public readonly array $traits = [],
         public readonly bool $isReadonly = false, // readonly class: 所有属性自动 readonly
+        public readonly bool $isFinal = false,
+        public readonly bool $isInterface = false, // interface 声明（区别于 abstract class）
         /** @var AttributeUseNode[] */
         public readonly array $attributes = [],
+        public readonly bool $isTrait = false, // trait 声明（编译期扁平化到使用方，自身不生成 C 结构体）
+        /** trait 适配规则（insteadof / as）：
+         *  ['insteadof' => [methodName => [excludedTraitName, ...]], 'as' => ['TraitName::methodName' => ['alias' => newName, 'visibility' => vis]]] */
+        public readonly array $traitAdaptations = ['insteadof' => [], 'as' => []],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -113,6 +126,7 @@ class PropertyDeclNode extends ASTNode
         public readonly array $hooks = [],    // PropertyHook[]
         public readonly bool $isStatic = false, // 静态属性（生成文件作用域 static 变量）
         public readonly bool $isReadonly = false, // readonly 属性：仅声明处或 __construct 内可赋值一次
+        public readonly ?string $setVisibility = null, // 非对称可见性（PHP 8.4）：null=与 visibility 一致；'private'=private(set)
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -149,8 +163,13 @@ class MethodNode extends ASTNode
         public readonly array $promoted = [],
         public readonly bool $isGenerator = false,
         public readonly bool $isStatic = false, // 静态方法（签名省略 self 参数）
+        public readonly bool $isFinal = false, // final 方法：子类不可覆盖
         /** @var AttributeUseNode[] */
         public readonly array $attributes = [],
+        /** 静态分发标记：final class 的方法标记为 true（TypeChecker prescan 设置）。
+         *  true = 方法调用直接生成 ClassName_method()，绕过 vtable；
+         *  false = 走 vtable 间接寻址（当前实现 vtable 为占位，仍走静态分发）。 */
+        public bool $isStaticDispatch = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -173,6 +192,7 @@ class ParamNode extends ASTNode
         public readonly bool $byRef = false,
         public readonly ?ExprNode $default = null,  // 默认值表达式
         public readonly bool $isReadonly = false,   // 属性提升 readonly 参数
+        public readonly bool $isVariadic = false,   // PHP 风格可变参数 `...$args` 或 `int ...$nums`
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -443,7 +463,7 @@ class GotoStmtNode extends StmtNode
 class TryStmtNode extends StmtNode
 {
     /** @param StmtNode[] $tryBody */
-    /** @param array<array{type:string, var:string, body:StmtNode[]}> $catchClauses */
+    /** @param array<array{type:string|string[], var:string, body:StmtNode[]}> $catchClauses */
     /** @param StmtNode[] $finallyBody */
     public function __construct(
         public readonly array $tryBody,
@@ -467,6 +487,24 @@ class ThrowExprNode extends ExprNode
 {
     public function __construct(public readonly ExprNode $expr) {}
     public function accept(ASTVisitor $visitor): string { return $visitor->visitThrowExpr($this); }
+}
+
+// or {} 错误处理块（vlang 风格，TinyPHP 扩展）
+//   $data = readFile('x.txt') or { echo "failed"; return; };
+//   语义：被检查表达式（左式）若抛出异常，执行 or {} 块
+//   - or 块内通过 $err 访问异常对象（类型为 Exception）
+//   - or 块内可 return/throw 传播错误，或提供默认值
+//   - 与 try/catch 共存：T|Exception 函数既可用 or {} 也可用 try/catch 处理
+//   - 仅支持语句级上下文（AssignStmt 右式 / ExprStmt 表达式）
+class OrBlockExpr extends ExprNode
+{
+    /** @param StmtNode[] $orBody */
+    public function __construct(
+        public readonly ExprNode $expr,
+        public readonly array $orBody,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string { return $visitor->visitOrBlock($this); }
 }
 
 // LABEL:
@@ -584,6 +622,9 @@ abstract class ExprNode extends ASTNode
 {
     public int $line = 0;
     public int $column = 0;
+
+    /** @var Type|null 类型推导结果，由 TypeChecker 填充。null 表示尚未推导 */
+    public ?Type $inferredType = null;
 }
 
 // 字符串字面量
@@ -833,6 +874,7 @@ class EnumCaseNode
 }
 
 // 匿名函数 / 闭包: function(): int { return 10; }
+// 箭头函数 fn(): int => expr 也用同一节点（isArrow=true），自动按值捕获外层变量
 class ClosureExpr extends ExprNode
 {
     /** @param ParamNode[] $params */
@@ -846,6 +888,8 @@ class ClosureExpr extends ExprNode
         /** @var array{string,string}[] */
         public readonly array $useVars = [],
         public readonly bool $isGenerator = false,
+        /** 箭头函数标志：true 时自动按值捕获 body 中引用的外层变量（PHP 8 语义） */
+        public readonly bool $isArrow = false,
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -902,6 +946,25 @@ class PlaceholderExpr extends ExprNode
     public function accept(ASTVisitor $visitor): string
     {
         return $visitor->visitPlaceholderExpr($this);
+    }
+}
+
+// First-class callable: foo(...) / $obj->method(...)
+//   PHP 8.1+ 语法，将函数/方法引用转为 t_callback
+//   callee=null: 全局函数 foo(...)
+//   callee=$var: 方法引用 $obj->method(...)
+//   callee=VariableExpr('C'): C 函数引用 C->func(...)（与 isRawC=true 互斥语义）
+class CallableConvertExpr extends ExprNode
+{
+    public function __construct(
+        public readonly ?ExprNode $callee,
+        public readonly string $name,
+        public readonly bool $isRawC = false,
+    ) {}
+
+    public function accept(ASTVisitor $visitor): string
+    {
+        return $visitor->visitCallableConvert($this);
     }
 }
 
@@ -1039,9 +1102,13 @@ class CallExpr extends ExprNode
         public readonly ?ExprNode $callee,
         public readonly string $name,
         /** @var ExprNode[] */
-        public readonly array $args,
+        public array $args,
         public readonly bool $isNullsafe = false,
         public readonly bool $isRawC = false,
+        /** @var string[] 参数名数组，与 $args 一一对应；位置参数为 ''，命名参数为名字（不含 $） */
+        public array $argNames = [],
+        /** @var bool[] 与 $args 一一对应；true 表示该参数是 `...$arr` 展开形式 */
+        public array $spreads = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -1070,7 +1137,9 @@ class NewExpr extends ExprNode
     public function __construct(
         public readonly string $className,
         /** @var ExprNode[] */
-        public readonly array $args,
+        public array $args,
+        /** @var string[] 参数名数组，与 $args 一一对应；位置参数为 ''，命名参数为名字（不含 $） */
+        public array $argNames = [],
     ) {}
 
     public function accept(ASTVisitor $visitor): string
@@ -1140,10 +1209,12 @@ interface ASTVisitor
     public function visitTryStmt(TryStmtNode $node): string;
     public function visitThrowStmt(ThrowStmtNode $node): string;
     public function visitThrowExpr(ThrowExprNode $node): string;
+    public function visitOrBlock(OrBlockExpr $node): string;
     public function visitLabelStmt(LabelStmtNode $node): string;
     public function visitContinueStmt(ContinueStmtNode $node): string;
     public function visitPipeExpr(PipeExpr $node): string;
     public function visitPlaceholderExpr(PlaceholderExpr $node): string;
+    public function visitCallableConvert(CallableConvertExpr $node): string;
     public function visitAttributeDecl(AttributeDeclNode $node): string;
     public function visitAttributeUse(AttributeUseNode $node): string;
     public function visitDeferStmt(DeferStmtNode $node): string;
