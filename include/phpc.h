@@ -55,6 +55,27 @@ static inline t_string tphp_fn_php_str(const char* s) {
 #define tphp_fn_php_str_ptr(ptr)    tphp_fn_php_str((const char*)(ptr))
 #define tphp_fn_php_str_clone(s)    tphp_fn_php_str(s)
 
+// cstr_to_string: 零拷贝将 C 字符串包装为 t_string（不接管所有权，永不 free）
+//   适用：C 函数返回的 .rodata 字符串字面量/静态字符串/调用方管理的字符串
+//   与 php_str 的区别：php_str 深拷贝（安全但开销大），cstr_to_string 零拷贝（快但不拥有内存）
+//   注意：返回的 t_string is_lit=true，tphp_rt_str_free 会跳过释放，调用方需自行管理原 C 字符串生命周期
+//   当 C 字符串可能被外部释放或为栈上临时变量时，请使用 php_str 而非 cstr_to_string
+static inline t_string tphp_fn_cstr_to_string(const char* s) {
+    t_string str;
+    if (s) {
+        str.data = (char*)s;
+        str.length = (int)strlen(s);
+        str.is_local = false;
+        str.is_lit = true;  // 标记为字面量，tphp_rt_str_free 跳过释放
+    } else {
+        str.data = NULL;
+        str.length = 0;
+        str.is_local = false;
+        str.is_lit = true;
+    }
+    return str;
+}
+
 // c_void_ptr: 透传 void*,让 void* 在 PHP 层显式流转（类型标记用途）
 #define tphp_fn_c_void_ptr(p) (p)
 

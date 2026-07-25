@@ -111,6 +111,17 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
             free(_tp_f.msg); _tp_f.msg = NULL; \
             tphp_class_Exception *ex_var = _tp_ex_as_exception(_tp_f.ex_obj);
 
+// 多类型捕获（PHP 8.0+ catch (A | B $e)）：cond 为预构建的 OR 类型检查表达式，
+//   形如 (tp_obj_is_a(_tp_f.ex_obj, &_class_tphp_class_A) || tp_obj_is_a(_tp_f.ex_obj, &_class_tphp_class_B))
+// 其余行为与 TP_CATCH_EX 一致
+#define TP_CATCH_EX_MULTI(ex_var, cond) \
+        } \
+        if (_tp_f.thrown && _tp_f.ex_obj != NULL && (cond)) { \
+            _tp_ex_top = _tp_f.prev; \
+            _tp_f.thrown = 0; \
+            free(_tp_f.msg); _tp_f.msg = NULL; \
+            tphp_class_Exception *ex_var = _tp_ex_as_exception(_tp_f.ex_obj);
+
 // 兜底：捕获任何异常（对象或字符串消息）
 // ex_var 为 t_string 类型，存储消息（对象取 message，否则取 msg）
 #define TP_CATCH_ANY(msg_var) \
