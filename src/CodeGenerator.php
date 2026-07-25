@@ -1261,7 +1261,14 @@ class CodeGenerator implements ASTVisitor
                         foreach ($stmt->expr->entries as $entry) {
                             if ($entry->key instanceof StringLiteralExpr) {
                                 $valType = $this->inferType($entry->value);
-                                if ($valType !== 'null') {
+                                // 预扫描阶段 varTypes 为空，VariableExpr 若无 inferredType
+                                // 会回退为 t_int（inferType 默认），这会导致 string 变量
+                                // 被误注册为 t_int，进而生成 arr_get_str_int 读取器。
+                                // 跳过此类不可靠推导，让调用点回退到默认 t_string。
+                                if ($valType !== 'null'
+                                    && !($entry->value instanceof VariableExpr
+                                        && $entry->value->inferredType === null
+                                        && $valType === 't_int')) {
                                     $this->fnReturnArrKeyTypes[$funcCName][$entry->key->value] = $valType;
                                 }
                             }
