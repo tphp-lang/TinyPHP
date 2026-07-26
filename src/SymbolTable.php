@@ -18,6 +18,16 @@ class MethodInfo
         public readonly string $visibility = 'public',
         public readonly int $defaultCount = 0,
         public readonly int $totalParams = 0,
+        /** final 方法：子类不可覆盖 */
+        public readonly bool   $isFinal = false,
+        /** abstract 方法（body = null）：子类必须实现 */
+        public readonly bool   $isAbstract = false,
+        /** @var string[] 参数名（不含 $），与 $paramTypes 一一对应；用于命名参数映射 */
+        public readonly array  $paramNames = [],
+        /** 可变参数：最后一个参数是否为 `...$args`（C 类型固定为 t_array*） */
+        public readonly bool   $isVariadic = false,
+        /** 静态分发标记：final class 的方法为 true（直接生成 ClassName_method 调用，绕过 vtable） */
+        public readonly bool   $isStaticDispatch = false,
     ) {}
 }
 
@@ -39,8 +49,14 @@ class ClassInfo
         public array $staticProps = [],
         /** @var array<string,bool> readonly propName => true (本类声明的 readonly 属性) */
         public array $readonlyProps = [],
+        /** @var array<string,bool> private(set) propName => true (本类声明的非对称可见性属性) */
+        public array $privateSetProps = [],
         /** readonly class: 所有属性自动 readonly */
         public bool  $isReadonlyClass = false,
+        /** final class: 不可继承，方法可静态分发 */
+        public bool  $isFinal = false,
+        /** interface 声明（区别于 abstract class） */
+        public bool  $isInterface = false,
     ) {}
 }
 
@@ -55,6 +71,10 @@ class FunctionInfo
         /** @var int 总参数数量 */
         public readonly int $totalParams = 0,
         public readonly bool $isGenerator = false,
+        /** @var string[] 参数名（不含 $），与 $paramTypes 一一对应；用于命名参数映射 */
+        public readonly array  $paramNames = [],
+        /** 可变参数：最后一个参数是否为 `...$args`（C 类型固定为 t_array*） */
+        public readonly bool   $isVariadic = false,
     ) {}
 }
 
@@ -79,6 +99,18 @@ class SymbolTable
     /** @var array<string,FunctionInfo> cName => FunctionInfo */
     private array $funcs = [];
 
+    // ═══ C 函数签名声明（vlang 风格 function C.foo(): C.ret;）═══
+    /** @var array<string,FunctionInfo> C 函数名（不含 C. 前缀）=> FunctionInfo
+     *  TypeChecker 注册时使用 PHP 等价类型（t_int / t_string 等），
+     *  CodeGenerator 注册时使用原始 C 类型字符串（int / char* 等）。
+     *  两个阶段使用各自的 SymbolTable 实例，互不冲突。 */
+    private array $cFunctions = [];
+
+    // ═══ C 结构体声明（#cstruct 指令 + struct C.Foo{} 声明）═══
+    /** @var array<string,array<string,string>> structName => [fieldName => C type]
+     *  TypeChecker 据此推导 C 结构体字段访问的类型 */
+    private array $cStructs = [];
+
     // ═══ 闭包 ═══
     /** @var array<string,array{ret:string,params:string}> */
     private array $closureSigs = [];
@@ -98,13 +130,16 @@ class SymbolTable
     /** @var array<string,bool> 返回语句中使用的变量名（排除在自动释放之外） */
     private array $returnedVars = [];
 
+    // ═══ Type 表示层 ═══
+    private ?TypeTable $typeTable = null;
+
     // ──────────────────────────────────────────────────────────
     // Class
     // ──────────────────────────────────────────────────────────
 
-    public function addClass(string $cName, string $parent = '', bool $isAbstract = false, array $implements = [], bool $isReadonly = false): void
+    public function addClass(string $cName, string $parent = '', bool $isAbstract = false, array $implements = [], bool $isReadonly = false, bool $isFinal = false, bool $isInterface = false): void
     {
-        $this->classes[$cName] = new ClassInfo($cName, $parent, [], [], [], $isAbstract, $implements, [], [], $isReadonly);
+        $this->classes[$cName] = new ClassInfo($cName, $parent, [], [], [], $isAbstract, $implements, [], [], [], $isReadonly, $isFinal, $isInterface);
     }
 
     public function addClassName(string $original, string $cName): void
@@ -114,6 +149,8 @@ class SymbolTable
 
     public function resolveClass(string $name): ?string
     {
+        // 规范化：去掉前导反斜杠（\Lib\Point → Lib\Point）
+        $name = ltrim($name, '\\');
         return $this->nameMap[$name] ?? null;
     }
 
@@ -140,6 +177,42 @@ class SymbolTable
         $c = $this->classes[$cName] ?? null;
         if ($c === null) return;
         $c->readonlyProps[$prop] = true;
+    }
+
+    /** 注册非对称可见性属性 private(set)（本类声明的） */
+    public function addClassPrivateSetProp(string $cName, string $prop): void
+    {
+        $c = $this->classes[$cName] ?? null;
+        if ($c === null) return;
+        $c->privateSetProps[$prop] = true;
+    }
+
+    /** 查询属性是否为 private(set)（沿父链查找）
+     *  @return bool 属性是否只能在声明类内写入 */
+    public function isPropPrivateSet(string $cName, string $prop): bool
+    {
+        $cur = $cName;
+        while ($cur !== '') {
+            $c = $this->classes[$cur] ?? null;
+            if ($c === null) return false;
+            if (isset($c->privateSetProps[$prop])) return true;
+            $cur = $c->parent;
+        }
+        return false;
+    }
+
+    /** 查询声明 private(set) 属性的类（沿父链查找）
+     *  @return string 声明该 private(set) 属性的 cName，未找到返回 '' */
+    public function getPrivateSetPropDeclaringClass(string $cName, string $prop): string
+    {
+        $cur = $cName;
+        while ($cur !== '') {
+            $c = $this->classes[$cur] ?? null;
+            if ($c === null) return '';
+            if (isset($c->privateSetProps[$prop])) return $cur;
+            $cur = $c->parent;
+        }
+        return '';
     }
 
     /** 查询属性是否 readonly（沿父链查找）
@@ -356,6 +429,12 @@ class SymbolTable
         return $this->consts[$fqn]['vis'] ?? 'public';
     }
 
+    /** 查询常量完整信息（type + vis），返回 null 表示未注册 */
+    public function getConst(string $fqn): ?array
+    {
+        return $this->consts[$fqn] ?? null;
+    }
+
     // ──────────────────────────────────────────────────────────
     // Function
     // ──────────────────────────────────────────────────────────
@@ -379,6 +458,55 @@ class SymbolTable
     public function getFuncParams(string $cName): array
     {
         return $this->funcs[$cName]->paramTypes ?? [];
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // C Function declarations (vlang-style function C.foo(...): C.ret;)
+    // ──────────────────────────────────────────────────────────
+
+    /** 注册 C 函数签名声明
+     *  @param string   $name        C 函数名（不含 C. 前缀）
+     *  @param string   $retType     返回类型（TypeChecker: PHP 等价类型；CodeGenerator: 原始 C 类型）
+     *  @param string[] $paramTypes  参数类型列表（同上），变参用 '...' 表示 */
+    public function addCFunction(string $name, string $retType, array $paramTypes): void
+    {
+        $this->cFunctions[$name] = new FunctionInfo($retType, $paramTypes);
+    }
+
+    /** 查询 C 函数签名声明
+     *  @return FunctionInfo|null null 表示未声明（回退到旧有硬编码逻辑） */
+    public function getCFunction(string $name): ?FunctionInfo
+    {
+        return $this->cFunctions[$name] ?? null;
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // C Struct declarations (#cstruct directive + struct C.Foo{} declaration)
+    // ──────────────────────────────────────────────────────────
+
+    /** 注册 C 结构体字段布局
+     *  @param string $name   结构体名（不含 C. 前缀，如 'Point'）
+     *  @param array  $fields 字段列表 [['type'=>'C.double','name'=>'x'], ...] */
+    public function addCStruct(string $name, array $fields): void
+    {
+        $fieldMap = [];
+        foreach ($fields as $f) {
+            $fieldMap[$f['name']] = $f['type'];
+        }
+        $this->cStructs[$name] = $fieldMap;
+    }
+
+    /** 查询 C 结构体字段类型
+     *  @return string|null C 类型字符串（如 'C.double'），null 表示未注册或字段不存在 */
+    public function getCStructField(string $structName, string $fieldName): ?string
+    {
+        return $this->cStructs[$structName][$fieldName] ?? null;
+    }
+
+    /** 查询 C 结构体是否已注册 */
+    public function hasCStruct(string $structName): bool
+    {
+        return isset($this->cStructs[$structName]);
     }
 
     // ──────────────────────────────────────────────────────────
@@ -493,11 +621,69 @@ class SymbolTable
         $this->enums = [];
         $this->consts = [];
         $this->funcs = [];
+        $this->cFunctions = [];
+        $this->cStructs = [];
         $this->closureSigs = [];
         $this->varClosureMap = [];
         $this->scopeObjects = [];
         $this->scopeStrings = [];
         $this->scopeArrays = [];
         $this->returnedVars = [];
+        $this->typeTable = null;
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Type 表示层
+    // ──────────────────────────────────────────────────────────
+
+    /** 获取 TypeTable 单例（懒初始化） */
+    public function typeTable(): TypeTable
+    {
+        if ($this->typeTable === null) {
+            $this->typeTable = new TypeTable();
+        }
+        return $this->typeTable;
+    }
+
+    /** 注册用户自定义类型（类、枚举等） */
+    public function registerType(string $name, string $cType, bool $isCLang = false, ?Type $elemType = null): Type
+    {
+        return $this->typeTable()->register($name, $cType, $isCLang, $elemType);
+    }
+
+    /** 按名称查找类型 */
+    public function lookupType(string $name): ?Type
+    {
+        return $this->typeTable()->lookup($name);
+    }
+
+    /** 按名称查找类型符号 */
+    public function lookupTypeSymbol(string $name): ?TypeSymbol
+    {
+        return $this->typeTable()->lookupSymbol($name);
+    }
+
+    /** 获取 Type 对应的 C 类型字符串 */
+    public function getTypeCType(Type $type): string
+    {
+        return $this->typeTable()->getCType($type);
+    }
+
+    /** 查询类是否为 final */
+    public function isClassFinal(string $cName): bool
+    {
+        return $this->classes[$cName]?->isFinal ?? false;
+    }
+
+    /** 查询类是否为 interface */
+    public function isClassInterface(string $cName): bool
+    {
+        return $this->classes[$cName]?->isInterface ?? false;
+    }
+
+    /** 查询类是否为 abstract（含 interface） */
+    public function isClassAbstract(string $cName): bool
+    {
+        return $this->classes[$cName]?->isAbstract ?? false;
     }
 }

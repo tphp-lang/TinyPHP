@@ -155,7 +155,7 @@ use MyApp\Models\User;
 | OOP | `class`、`extends`、`abstract`、`interface`、`implements`、`trait+use`、`enum`、`__construct(public $x)`、`__destruct`、`static/final/readonly`、`instanceof`、`self::`、`$this`、链式调用、`?->` 空安全 |
 | 闭包 | `function() use($x) {}`、`fn($x): T => expr` 单表达式、`fn($x): T => { stmts; return expr; }` 块体、多捕获、嵌套闭包 |
 | 异常 | `try/catch(Exception $e)/finally`、`throw new Exception()`、`throw` 表达式、`error($msg)` 抛出可捕获异常、`Type|Exception` 返回类型语法、`never` 返回类型 |
-| 类型 | `int` `float` `string` `bool` `array` `callable` `void` `mixed` `self` 类类型、局部变量/全局常量可选类型标记（类属性/类常量必填） |
+| 类型 | `int` `float` `string` `bool` `array` `array<T>` 泛型数组（`array<int>`/`array<string>`/`array<float>`/`array<bool>`/`array<array<T>>`/`array<mixed>`/`array<Foo>`） `callable` `void` `mixed` `self` 类类型、局部变量/全局常量可选类型标记（类属性/类常量必填） |
 | 运算符 | 完整 15 级优先级：算术/比较/逻辑/位/三元 `?:`/空合并 `??`/太空船 `<=>`/自增自减/类型转换 |
 | 命名空间 | `namespace A\B`、`use A\{B,C}` 分组导入、`use function A\{f1,f2}` 组合式函数导入、`use const A\{C1,C2}` 组合式常量导入、`use A\{B, function f, const C}` 混合导入 |
 | 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`[...$arr1, ...$arr2]` 数组展开（spread）、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、`int $x = 42;` 局部变量可选类型标记、`const int MAX = 100;` 全局常量可选类型标记、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
@@ -178,10 +178,13 @@ use MyApp\Models\User;
 | 特性 | 原因 | 替代方案 |
 |------|------|---------|
 | `?int` 可空类型 | AOT 下 null 分支需要运行时分发 | 用 `mixed` 替代，或拆分为两个重载函数 |
-| `...$args` 可变参数 | 需要动态栈构造 | 传 `array` 替代 |
 | `callable $fn = "func"` 默认值 | 编译时无法将字符串函数名转换为函数指针 | 每次调用时显式传入闭包 |
 
 > `int|string` 联合类型和 `mixed` 已支持。
+
+### ⚠️ array<T> 类型严格化
+
+显式声明 `array<T>` 后，push 不同类型会触发编译错误（须用 `array<mixed>` 表达异构意图）。`array<T>` 传给 `array<mixed>` 参数时自动调用 O(n) 协变转换函数（`tphp_fn_arr_int_to_var` 等）。无注解的 `array` 默认推导为 `array<mixed>`，保持 PHP 动态语义。
 
 ### ⚠️ 与原生 PHP 的差异（Generator）
 
@@ -220,6 +223,7 @@ use MyApp\Models\User;
 | 128 槽对象复用池 | LIFO | new+unset 提速 36-52% |
 | ROPE 多片段拼接 | 编译期展平为单次分配 | concat-4 提速 6 倍 |
 | Thread-Local 运行时 | 每线程独立 str_pool/arr_pool/obj_pool | 多线程无锁竞争 |
+| 泛型数组紧凑存储 | `array<T>` 按 T 紧凑存储 value | `array<int>` 比 `array<mixed>` 节省 67% 内存（8B vs 24B/元素） |
 
 ### 三编译器 + 四平台
 

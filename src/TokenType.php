@@ -59,6 +59,7 @@ enum TokenType: string
     case IMPLEMENTS_KW = 'implements';
     case INTERFACE_KW  = 'interface';
     case TRAIT_KW      = 'trait';
+    case STRUCT_KW     = 'struct';
     case INSTANCEOF_KW  = 'instanceof';
     case PARENT_KW      = 'parent';
     case MAGIC_CLASS    = '__CLASS__';
@@ -148,6 +149,8 @@ enum TokenType: string
     case GT_GT        = '>>';
     case QUEST        = '?';
     case QUEST_QUEST  = '??';
+    case COALESCE_EQ  = '??=';
+    case ELLIPSIS     = '...';
     case DOLLAR       = '$';
     case LPAREN       = '(';
     case RPAREN       = ')';

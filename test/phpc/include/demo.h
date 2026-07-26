@@ -86,7 +86,7 @@ void point_free(Point* p) {
 }
 
 // ── 多字段结构体测试:Rect ─────────────────────────────
-//   用于测试 #cstruct 多结构体声明 + int/double 混合字段
+//   用于测试 struct C.Foo 多结构体声明 + int/double 混合字段
 
 typedef struct {
     int id;          // int 字段

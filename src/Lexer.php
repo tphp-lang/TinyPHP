@@ -48,6 +48,7 @@ class Lexer
         'implements'  => TokenType::IMPLEMENTS_KW,
         'interface'   => TokenType::INTERFACE_KW,
         'trait'       => TokenType::TRAIT_KW,
+        'struct'      => TokenType::STRUCT_KW,
         'instanceof'  => TokenType::INSTANCEOF_KW,
         'parent'      => TokenType::PARENT_KW,
         '__CLASS__'   => TokenType::MAGIC_CLASS,
@@ -291,29 +292,14 @@ class Lexer
                 $this->advance(strlen($m[0]));
                 return;
             }
-            // #cstruct Name { C.type field; C.type field; ... } — 声明 C 结构体字段布局
-            //   多行匹配，支持嵌套结构体字段（值类型，非指针）
-            //   字段格式: C.type name 或 StructName name（嵌套值类型）
-            if (preg_match('/^#cstruct\s+(\w+)\s*\{([^}]*)\}/s', $rest, $m)) {
-                $structName = $m[1];
-                $body = trim($m[2]);
-                // 解析字段: "C.double x; C.double y" 或 "Point origin; C.int w"
-                $fields = [];
-                $fieldParts = preg_split('/[;\n]+/', $body);
-                foreach ($fieldParts as $fp) {
-                    $fp = trim($fp);
-                    if ($fp === '') continue;
-                    // 格式: Type name (Type 可能是 C.xxx 或 Identifier)
-                    if (preg_match('/^(\S+)\s+(\w+)$/', $fp, $fm)) {
-                        $fields[] = ['type' => $fm[1], 'name' => $fm[2]];
-                    }
-                }
-                $this->addToken(TokenType::HASH_CSTRUCT, $structName, [
-                    'name' => $structName,
-                    'fields' => $fields,
-                ]);
-                $this->advance(strlen($m[0]));
-                return;
+            // #cstruct 指令已移除（Task 6.1）— 改用 vlang 风格 struct C.Foo {} 声明
+            //   保留 #cstruct 关键字识别以给出明确的迁移错误提示
+            if (str_starts_with($rest, '#cstruct')) {
+                $this->error(
+                    "#cstruct directive has been removed. "
+                    . "Use 'struct C.Name { C.Type field; ... }' or 'struct C.Name;' (opaque) instead. "
+                    . "See test/phpc/c_struct_decl.php for examples."
+                );
             }
             // 普通 # 注释 — 跳过整行
             $this->skipLineComment();
@@ -356,9 +342,15 @@ class Lexer
             '>>' => TokenType::GT_GT,
             '|>' => TokenType::PIPE_GT,
         ];
-        // 三字符运算符 (必须在两字符之前检查): === !== ?->
+        // 三字符运算符 (必须在两字符之前检查): === !== ?-> ??= ...
         $three = $ch . $this->peek(1) . $this->peek(2);
-        $threeOps = ['===' => TokenType::IDENTICAL, '!==' => TokenType::NOT_IDENTICAL, '?->' => TokenType::NULLSAFE_ARROW];
+        $threeOps = [
+            '===' => TokenType::IDENTICAL,
+            '!==' => TokenType::NOT_IDENTICAL,
+            '?->' => TokenType::NULLSAFE_ARROW,
+            '??=' => TokenType::COALESCE_EQ,
+            '...' => TokenType::ELLIPSIS,
+        ];
         if (isset($threeOps[$three])) {
             $this->addToken($threeOps[$three], $three);
             $this->advance(3);
@@ -483,9 +475,14 @@ class Lexer
         }
     }
 
-    private function addToken(TokenType $type, string $lexeme, mixed $literal = null): void
+    private function addToken(TokenType $type, string $lexeme, mixed $literal = null, ?int $startColumn = null): void
     {
-        $this->tokens[] = new Token($type, $lexeme, $this->line, $this->column, $literal);
+        // $startColumn 用于多字符 token（identifier/number/string 等）：
+        // 这些扫描器在 advance 之后才调 addToken，$this->column 已前移到 token 之后，
+        // 需显式传入扫描前的起始 column，保证 token.column 指向 token 首字符。
+        // 单字符 token 在 advance 前调 addToken，$this->column 即正确起始位置，无需传入。
+        $col = $startColumn ?? $this->column;
+        $this->tokens[] = new Token($type, $lexeme, $this->line, $col, $literal);
     }
 
     private function skipLineComment(): void
@@ -511,6 +508,7 @@ class Lexer
     private function scanString(): void
     {
         $quote = $this->peek();
+        $startCol = $this->column;
         $this->advance(); // skip opening quote
 
         // 单引号：简单扫描，无插值
@@ -530,7 +528,7 @@ class Lexer
             }
             if ($this->peek() !== $quote) $this->error('Unterminated string');
             $this->advance();
-            $this->addToken(TokenType::STRING_LIT, $escaped, $escaped);
+            $this->addToken(TokenType::STRING_LIT, $escaped, $escaped, $startCol);
             return;
         }
 
@@ -643,6 +641,7 @@ class Lexer
     /** 十六进制: 0x[0-9a-fA-F_]+ */
     private function scanHexNumber(): void
     {
+        $startCol = $this->column;
         $lexeme = '0x';
         $this->advance(2);
 
@@ -673,12 +672,13 @@ class Lexer
         }
 
         $value = intval(str_replace('_', '', $digits), 16);
-        $this->addToken(TokenType::INT_LIT, $lexeme, $value);
+        $this->addToken(TokenType::INT_LIT, $lexeme, $value, $startCol);
     }
 
     /** 二进制: 0b[01_]+ */
     private function scanBinaryNumber(): void
     {
+        $startCol = $this->column;
         $lexeme = '0b';
         $this->advance(2);
 
@@ -709,12 +709,13 @@ class Lexer
         }
 
         $value = intval(str_replace('_', '', $digits), 2);
-        $this->addToken(TokenType::INT_LIT, $lexeme, $value);
+        $this->addToken(TokenType::INT_LIT, $lexeme, $value, $startCol);
     }
 
     /** 八进制: 0o[0-7_]+ */
     private function scanOctalNumber(): void
     {
+        $startCol = $this->column;
         $lexeme = '0o';
         $this->advance(2);
 
@@ -745,12 +746,13 @@ class Lexer
         }
 
         $value = intval(str_replace('_', '', $digits), 8);
-        $this->addToken(TokenType::INT_LIT, $lexeme, $value);
+        $this->addToken(TokenType::INT_LIT, $lexeme, $value, $startCol);
     }
 
     /** 十进制（含小数、科学计数、下划线分隔） */
     private function scanDecimalNumber(): void
     {
+        $startCol = $this->column;
         $num = '';
         $isFloat = false;
 
@@ -812,14 +814,15 @@ class Lexer
 
         $cleaned = str_replace('_', '', $num);
         if ($isFloat) {
-            $this->addToken(TokenType::FLOAT_LIT, $num, (float)$cleaned);
+            $this->addToken(TokenType::FLOAT_LIT, $num, (float)$cleaned, $startCol);
         } else {
-            $this->addToken(TokenType::INT_LIT, $num, (int)$cleaned);
+            $this->addToken(TokenType::INT_LIT, $num, (int)$cleaned, $startCol);
         }
     }
 
     private function scanIdentifier(): void
     {
+        $startCol = $this->column;
         $name = '';
         while ($this->pos < strlen($this->source) && (ctype_alnum($this->peek()) || $this->peek() === '_')) {
             $name .= $this->peek();
@@ -837,11 +840,12 @@ class Lexer
             $literal = null;
         }
 
-        $this->addToken($type, $name, $literal);
+        $this->addToken($type, $name, $literal, $startCol);
     }
 
     private function scanVariable(): void
     {
+        $startCol = $this->column;
         $this->advance(); // skip $
         // Check for $$var (variable variables) — unsupported in AOT
         if ($this->pos < strlen($this->source) && $this->peek() === '$') {
@@ -853,9 +857,9 @@ class Lexer
             $this->advance();
         }
         if ($name === 'this') {
-            $this->addToken(TokenType::IDENTIFIER, '$this');
+            $this->addToken(TokenType::IDENTIFIER, '$this', null, $startCol);
         } else {
-            $this->addToken(TokenType::IDENTIFIER, '$' . $name);
+            $this->addToken(TokenType::IDENTIFIER, '$' . $name, null, $startCol);
         }
     }
 

@@ -1,7 +1,7 @@
 <?php
 #debug === 1. 3层嵌套 ===
-#debug l0[0]=0 l0[1]=0
-#debug sub[0]=10 sub[1]=20 sub[2][0]=0
+#debug l0[0]=1 l0[1]=2
+#debug sub[0]=10 sub[1]=20 sub[2][0]=30
 #debug
 #debug === 2. 累加+条件 ===
 #debug sum=50 cnt=4 flag=1

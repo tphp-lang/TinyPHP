@@ -1180,6 +1180,102 @@ static inline void tphp_fn_rsort(t_array *a) {
     }
 }
 
+// ── array<T> 特化原地排序（避免 array<T> → t_array* 协变转换丢失修改）──
+//   对 t_arr_int/t_arr_str/t_arr_float/t_arr_bool 直接 qsort entries，
+//   排序后重置 int key 为连续下标（与 tphp_fn_sort 语义一致）。
+
+static inline int _arr_int_cmp_asc(const void *a, const void *b) {
+    t_int va = ((const t_arr_entry_int *)a)->val;
+    t_int vb = ((const t_arr_entry_int *)b)->val;
+    return (va > vb) - (va < vb);
+}
+static inline int _arr_int_cmp_desc(const void *a, const void *b) {
+    return -_arr_int_cmp_asc(a, b);
+}
+static inline int _arr_float_cmp_asc(const void *a, const void *b) {
+    t_float va = ((const t_arr_entry_float *)a)->val;
+    t_float vb = ((const t_arr_entry_float *)b)->val;
+    return (va > vb) - (va < vb);
+}
+static inline int _arr_float_cmp_desc(const void *a, const void *b) {
+    return -_arr_float_cmp_asc(a, b);
+}
+static inline int _arr_bool_cmp_asc(const void *a, const void *b) {
+    t_bool va = ((const t_arr_entry_bool *)a)->val;
+    t_bool vb = ((const t_arr_entry_bool *)b)->val;
+    return (int)va - (int)vb;
+}
+static inline int _arr_bool_cmp_desc(const void *a, const void *b) {
+    return -_arr_bool_cmp_asc(a, b);
+}
+static inline int _arr_str_cmp_asc(const void *a, const void *b) {
+    t_string va = ((const t_arr_entry_str *)a)->val;
+    t_string vb = ((const t_arr_entry_str *)b)->val;
+    int la = va.length, lb = vb.length;
+    int n = la < lb ? la : lb;
+    int c = memcmp(STR_PTR(va), STR_PTR(vb), (size_t)n);
+    if (c != 0) return c;
+    return la - lb;
+}
+static inline int _arr_str_cmp_desc(const void *a, const void *b) {
+    return -_arr_str_cmp_asc(a, b);
+}
+
+#define _TPHP_ARR_TYPED_SORT(suffix, entry_ty, cmp_asc, cmp_desc)                  \
+static inline void tphp_fn_arr_##suffix##_sort(t_arr_##suffix *a) {               \
+    if (unlikely(a == NULL || a->length <= 1)) return;                            \
+    arr_stridx_free((t_array*)a);                                                  \
+    arr_intidx_free((t_array*)a);                                                  \
+    qsort(a->entries, (size_t)a->length, sizeof(entry_ty), cmp_asc);              \
+    for (int i = 0; i < a->length; i++) {                                          \
+        if (a->entries[i].key.type == TYPE_INT)                                    \
+            a->entries[i].key.value._int = i;                                      \
+    }                                                                              \
+}                                                                                  \
+static inline void tphp_fn_arr_##suffix##_rsort(t_arr_##suffix *a) {              \
+    if (unlikely(a == NULL || a->length <= 1)) return;                            \
+    arr_stridx_free((t_array*)a);                                                  \
+    arr_intidx_free((t_array*)a);                                                  \
+    qsort(a->entries, (size_t)a->length, sizeof(entry_ty), cmp_desc);             \
+    for (int i = 0; i < a->length; i++) {                                          \
+        if (a->entries[i].key.type == TYPE_INT)                                    \
+            a->entries[i].key.value._int = i;                                      \
+    }                                                                              \
+}
+
+_TPHP_ARR_TYPED_SORT(int,   t_arr_entry_int,   _arr_int_cmp_asc,   _arr_int_cmp_desc)
+_TPHP_ARR_TYPED_SORT(float, t_arr_entry_float, _arr_float_cmp_asc, _arr_float_cmp_desc)
+_TPHP_ARR_TYPED_SORT(bool,  t_arr_entry_bool,  _arr_bool_cmp_asc,  _arr_bool_cmp_desc)
+_TPHP_ARR_TYPED_SORT(str,   t_arr_entry_str,   _arr_str_cmp_asc,   _arr_str_cmp_desc)
+
+// ── array<T> 特化原地 shuffle（Fisher-Yates，避免协变转换丢失修改）──
+//   与 tphp_fn_shuffle 语义一致：打乱 entries 后重置 int key 为连续下标。
+//   返回 t_bool 以匹配 $builtinRetTypes['shuffle'] = t_bool（PHP 语义：成功返回 true）。
+#define _TPHP_ARR_TYPED_SHUFFLE(suffix, entry_ty)                                  \
+static inline t_bool tphp_fn_arr_##suffix##_shuffle(t_arr_##suffix *a) {          \
+    if (unlikely(a == NULL || a->length <= 1)) return true;                       \
+    arr_stridx_free((t_array*)a);                                                  \
+    arr_intidx_free((t_array*)a);                                                  \
+    for (int i = a->length - 1; i > 0; i--) {                                      \
+        int j = rand() % (i + 1);                                                  \
+        if (j != i) {                                                              \
+            entry_ty tmp = a->entries[i];                                          \
+            a->entries[i] = a->entries[j];                                         \
+            a->entries[j] = tmp;                                                   \
+        }                                                                          \
+    }                                                                              \
+    for (int i = 0; i < a->length; i++) {                                          \
+        if (a->entries[i].key.type == TYPE_INT)                                    \
+            a->entries[i].key.value._int = i;                                      \
+    }                                                                              \
+    return true;                                                                   \
+}
+
+_TPHP_ARR_TYPED_SHUFFLE(int,   t_arr_entry_int)
+_TPHP_ARR_TYPED_SHUFFLE(float, t_arr_entry_float)
+_TPHP_ARR_TYPED_SHUFFLE(bool,  t_arr_entry_bool)
+_TPHP_ARR_TYPED_SHUFFLE(str,   t_arr_entry_str)
+
 // === array_unique ===
 
 // Simple hash helper for array_unique
@@ -1549,4 +1645,272 @@ static inline void tphp_fn_krsort(t_array* a) {
     for (int i = 0; i < a->length; i++) tmp[i] = *ptrs[i];
     for (int i = 0; i < a->length; i++) a->entries[i] = tmp[i];
     free(tmp); free(ptrs);
+}
+
+// ============================================================
+// 泛型数组操作函数 — array<T>
+//
+//   每种 array<T> 有独立的操作函数集，编译期类型安全：
+//     tphp_fn_arr_int_create / push / get / set / free / len / retain
+//     tphp_fn_arr_str_*  / tphp_fn_arr_float_* / tphp_fn_arr_bool_*
+//     tphp_fn_arr_ptr_*  (嵌套数组/对象数组, 元素 void*)
+//     tphp_fn_arr_var_*  (array<mixed>, 复用 t_array 万能数组)
+//
+//   标量/string/ptr: push 直接值拷贝, free 不释放 value (与现有行为一致)
+//   var (mixed): 复用 t_array 的 _arr_val_retain/release 引用计数
+//   哈希索引: var 复用现有 stridx/intidx; 其他类型暂用线性扫描 + 连续 int key 快路径
+// ============================================================
+
+// ── 辅助：空 t_string（get 失败时返回）──
+static inline t_string tphp_arr_empty_str(void) {
+    t_string s;
+    memset(&s, 0, sizeof(s));
+    s.is_local = true;
+    s.length = 0;
+    s.local[0] = '\0';
+    return s;
+}
+
+// ── 标量/string/ptr 类型宏模板 ──
+// 这些类型的 value 无需引用计数: push 直接值拷贝, free 不释放 value
+#define DEFINE_ARRAY_OPS(NAME, VALTYPE, ENTRYTYPE, ARRTYPE, ZERO_EXPR) \
+    \
+    static inline ARRTYPE* tphp_fn_arr_##NAME##_create(int cap) { \
+        if (cap < 4) cap = 4; \
+        size_t sz = sizeof(ARRTYPE) + (size_t)cap * sizeof(ENTRYTYPE); \
+        ARRTYPE *a = (ARRTYPE*)calloc(1, sz); \
+        if (unlikely(a == NULL)) { tp_throw("arr_" #NAME "_create: out of memory"); return NULL; } \
+        a->refcount = 1; \
+        a->capacity = cap; \
+        return a; \
+    } \
+    \
+    static inline ARRTYPE* tphp_fn_arr_##NAME##_retain(ARRTYPE *a) { \
+        if (a) a->refcount++; \
+        return a; \
+    } \
+    \
+    static inline void tphp_fn_arr_##NAME##_free(ARRTYPE *a) { \
+        if (unlikely(a == NULL)) return; \
+        if (--a->refcount > 0) return; \
+        free(a); \
+    } \
+    \
+    static inline int tphp_fn_arr_##NAME##_len(ARRTYPE *a) { \
+        return a ? a->length : 0; \
+    } \
+    \
+    static inline ARRTYPE* tphp_fn_arr_##NAME##_grow(ARRTYPE *a, int need) { \
+        if (likely(a != NULL && need <= a->capacity)) return a; \
+        if (unlikely(a == NULL)) return NULL; \
+        int nc = a->capacity + (a->capacity >> 1); \
+        if (nc < 4) nc = 4; \
+        if (nc < need) nc = need; \
+        size_t sz = sizeof(ARRTYPE) + (size_t)nc * sizeof(ENTRYTYPE); \
+        ARRTYPE *na = (ARRTYPE*)realloc(a, sz); \
+        if (unlikely(na == NULL)) { tp_throw("arr_" #NAME "_grow: out of memory"); return a; } \
+        na->capacity = nc; \
+        return na; \
+    } \
+    \
+    static inline ARRTYPE* tphp_fn_arr_##NAME##_push(ARRTYPE *a, VALTYPE val) { \
+        if (unlikely(a == NULL)) return NULL; \
+        a = tphp_fn_arr_##NAME##_grow(a, a->length + 1); \
+        a->entries[a->length].key.type = TYPE_INT; \
+        a->entries[a->length].key.value._int = a->length; \
+        a->entries[a->length].val = val; \
+        a->length++; \
+        return a; \
+    } \
+    \
+    static inline ARRTYPE* tphp_fn_arr_##NAME##_set_int(ARRTYPE *a, t_int key, VALTYPE val) { \
+        if (unlikely(a == NULL || key < 0)) return a; \
+        if (key < a->length && \
+            a->entries[key].key.type == TYPE_INT && \
+            a->entries[key].key.value._int == key) { \
+            a->entries[key].val = val; \
+            return a; \
+        } \
+        for (int i = 0; i < a->length; i++) { \
+            if (a->entries[i].key.type == TYPE_INT && \
+                a->entries[i].key.value._int == key) { \
+                a->entries[i].val = val; \
+                return a; \
+            } \
+        } \
+        a = tphp_fn_arr_##NAME##_grow(a, a->length + 1); \
+        a->entries[a->length].key.type = TYPE_INT; \
+        a->entries[a->length].key.value._int = key; \
+        a->entries[a->length].val = val; \
+        a->length++; \
+        return a; \
+    } \
+    \
+    static inline ARRTYPE* tphp_fn_arr_##NAME##_set_str(ARRTYPE *a, t_string key, VALTYPE val) { \
+        if (unlikely(a == NULL)) return a; \
+        for (int i = 0; i < a->length; i++) { \
+            if (a->entries[i].key.type == TYPE_STRING && \
+                tphp_rt_str_eq(a->entries[i].key.value._string, key)) { \
+                a->entries[i].val = val; \
+                return a; \
+            } \
+        } \
+        a = tphp_fn_arr_##NAME##_grow(a, a->length + 1); \
+        a->entries[a->length].key.type = TYPE_STRING; \
+        a->entries[a->length].key.value._string = tphp_rt_str_dup(key); \
+        a->entries[a->length].val = val; \
+        a->length++; \
+        return a; \
+    } \
+    \
+    static inline VALTYPE tphp_fn_arr_##NAME##_get(ARRTYPE *a, t_int key) { \
+        if (unlikely(a == NULL || key < 0 || key >= a->length)) { \
+            tp_throw("arr_" #NAME "_get: index out of bounds"); \
+            return ZERO_EXPR; \
+        } \
+        if (a->entries[key].key.type == TYPE_INT && \
+            a->entries[key].key.value._int == key) { \
+            return a->entries[key].val; \
+        } \
+        for (int i = 0; i < a->length; i++) { \
+            if (a->entries[i].key.type == TYPE_INT && \
+                a->entries[i].key.value._int == key) { \
+                return a->entries[i].val; \
+            } \
+        } \
+        tp_throw("arr_" #NAME "_get: key not found"); \
+        return ZERO_EXPR; \
+    } \
+    \
+    static inline VALTYPE tphp_fn_arr_##NAME##_get_str(ARRTYPE *a, t_string key) { \
+        if (unlikely(a == NULL)) { \
+            tp_throw("arr_" #NAME "_get_str: null array"); \
+            return ZERO_EXPR; \
+        } \
+        for (int i = 0; i < a->length; i++) { \
+            if (a->entries[i].key.type == TYPE_STRING && \
+                tphp_rt_str_eq(a->entries[i].key.value._string, key)) { \
+                return a->entries[i].val; \
+            } \
+        } \
+        tp_throw("arr_" #NAME "_get_str: key not found"); \
+        return ZERO_EXPR; \
+    }
+
+// 实例化标量/string/ptr 类型
+DEFINE_ARRAY_OPS(int,   t_int,    t_arr_entry_int,   t_arr_int,   (t_int)0)
+DEFINE_ARRAY_OPS(float, t_float,  t_arr_entry_float, t_arr_float, (t_float)0)
+DEFINE_ARRAY_OPS(bool,  t_bool,   t_arr_entry_bool,  t_arr_bool,  (t_bool)0)
+DEFINE_ARRAY_OPS(str,   t_string, t_arr_entry_str,   t_arr_str,   tphp_arr_empty_str())
+DEFINE_ARRAY_OPS(ptr,   void*,    t_arr_entry_ptr,   t_arr_ptr,   NULL)
+
+// ── var 类型（array<mixed>）── 复用 t_array 万能数组 ──
+static inline t_arr_var* tphp_fn_arr_var_create(int cap) { return tphp_fn_arr_create(cap); }
+static inline t_arr_var* tphp_fn_arr_var_retain(t_arr_var *a) { return tphp_fn_arr_retain(a); }
+static inline void tphp_fn_arr_var_free(t_arr_var *a) { tphp_fn_arr_free(a); }
+static inline int tphp_fn_arr_var_len(t_arr_var *a) { return a ? a->length : 0; }
+static inline t_arr_var* tphp_fn_arr_var_push(t_arr_var *a, t_var val) { return tphp_fn_arr_push(a, val); }
+static inline t_arr_var* tphp_fn_arr_var_set_int(t_arr_var *a, t_int key, t_var val) { return tphp_fn_arr_set_int(a, key, val); }
+static inline t_arr_var* tphp_fn_arr_var_set_str(t_arr_var *a, t_string key, t_var val) { return tphp_fn_arr_set_str(a, key, val); }
+
+static inline t_var tphp_fn_arr_var_get(t_arr_var *a, t_int key) {
+    if (unlikely(a == NULL || key < 0 || key >= a->length)) {
+        tp_throw("arr_var_get: index out of bounds");
+        t_var zero = {0};
+        return zero;
+    }
+    if (a->entries[key].key.type == TYPE_INT &&
+        a->entries[key].key.value._int == key) {
+        return a->entries[key].val;
+    }
+    if (a->int_index != NULL) {
+        int idx = arr_intidx_lookup(a, key);
+        if (idx >= 0) return a->entries[idx].val;
+    } else {
+        for (int i = 0; i < a->length; i++) {
+            if (a->entries[i].key.type == TYPE_INT &&
+                a->entries[i].key.value._int == key) {
+                return a->entries[i].val;
+            }
+        }
+    }
+    tp_throw("arr_var_get: key not found");
+    t_var zero = {0};
+    return zero;
+}
+
+static inline t_var tphp_fn_arr_var_get_str(t_arr_var *a, t_string key) {
+    if (unlikely(a == NULL)) {
+        tp_throw("arr_var_get_str: null array");
+        t_var zero = {0};
+        return zero;
+    }
+    if (a->str_index != NULL) {
+        int idx = arr_stridx_lookup(a, key);
+        if (idx >= 0) return a->entries[idx].val;
+    } else {
+        for (int i = 0; i < a->length; i++) {
+            if (a->entries[i].key.type == TYPE_STRING &&
+                tphp_rt_str_eq(a->entries[i].key.value._string, key)) {
+                return a->entries[i].val;
+            }
+        }
+    }
+    tp_throw("arr_var_get_str: key not found");
+    t_var zero = {0};
+    return zero;
+}
+
+// ── 协变转换函数: array<T> → array<mixed> ──
+// O(n) 重新分配, 每个 T 包装为 t_var
+static inline t_arr_var* tphp_fn_arr_int_to_var(t_arr_int *a) {
+    if (a == NULL) return NULL;
+    t_arr_var *out = tphp_fn_arr_var_create(a->length);
+    if (out == NULL) { tp_throw("arr_int_to_var: out of memory"); return NULL; }
+    for (int i = 0; i < a->length; i++) {
+        t_var v;
+        v.type = TYPE_INT;
+        v.value._int = a->entries[i].val;
+        out = tphp_fn_arr_var_push(out, v);
+    }
+    return out;
+}
+
+static inline t_arr_var* tphp_fn_arr_str_to_var(t_arr_str *a) {
+    if (a == NULL) return NULL;
+    t_arr_var *out = tphp_fn_arr_var_create(a->length);
+    if (out == NULL) { tp_throw("arr_str_to_var: out of memory"); return NULL; }
+    for (int i = 0; i < a->length; i++) {
+        t_var v;
+        v.type = TYPE_STRING;
+        v.value._string = a->entries[i].val;
+        out = tphp_fn_arr_var_push(out, v);
+    }
+    return out;
+}
+
+static inline t_arr_var* tphp_fn_arr_float_to_var(t_arr_float *a) {
+    if (a == NULL) return NULL;
+    t_arr_var *out = tphp_fn_arr_var_create(a->length);
+    if (out == NULL) { tp_throw("arr_float_to_var: out of memory"); return NULL; }
+    for (int i = 0; i < a->length; i++) {
+        t_var v;
+        v.type = TYPE_FLOAT;
+        v.value._float = a->entries[i].val;
+        out = tphp_fn_arr_var_push(out, v);
+    }
+    return out;
+}
+
+static inline t_arr_var* tphp_fn_arr_bool_to_var(t_arr_bool *a) {
+    if (a == NULL) return NULL;
+    t_arr_var *out = tphp_fn_arr_var_create(a->length);
+    if (out == NULL) { tp_throw("arr_bool_to_var: out of memory"); return NULL; }
+    for (int i = 0; i < a->length; i++) {
+        t_var v;
+        v.type = TYPE_BOOL;
+        v.value._bool = a->entries[i].val;
+        out = tphp_fn_arr_var_push(out, v);
+    }
+    return out;
 }

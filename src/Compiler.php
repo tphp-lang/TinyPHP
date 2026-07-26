@@ -43,7 +43,11 @@ class Compiler
         $parser = new Parser($tokens);
         $ast = $parser->parse();
 
-        // Phase 3: Generate C code
+        // Phase 3: Type Check（填充 AST 节点的 inferredType 字段）
+        $checker = new TypeChecker(new SymbolTable());
+        $checker->check($ast);
+
+        // Phase 4: Generate C code
         $gen = new CodeGenerator();
         $cFile = $gen->generate($ast, $phpFile, $outputDir);
 

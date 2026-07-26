@@ -59,6 +59,7 @@ foreach ($tests as $t) {
     $args = $cc === 'tcc' ? '' : ' -cc ' . escapeshellarg($cc);
     $cmd = PHP_BINARY . ' ' . escapeshellarg($tphp) . ' '
          . escapeshellarg($src) . $args . ' -o ' . escapeshellarg($out) . ' 2>&1';
+    $o = [];  // reset output array (exec appends if non-empty)
     exec($cmd, $o, $r);
     if ($r === 0 && file_exists($out)) {
         echo "  [OK]   {$t['name']}\n";
@@ -74,6 +75,7 @@ echo "\n--- Running TinyPHP ---\n";
 $tpResults = [];
 foreach ($bins as $name => $exe) {
     echo "  {$name}... ";
+    $out = [];
     $start = hrtime(true);
     exec('"' . $exe . '" 2>&1', $out, $r);
     $elapsed = (hrtime(true) - $start) / 1e6;
@@ -89,6 +91,7 @@ if ($doPhp) {
         if (!$t['php']) continue;
         $src = $base . '/' . $t['src'];
         echo "  {$t['name']}... ";
+        $out = [];
         $start = hrtime(true);
         exec(PHP_BINARY . ' ' . escapeshellarg($src) . ' 2>&1', $out, $r);
         $elapsed = (hrtime(true) - $start) / 1e6;

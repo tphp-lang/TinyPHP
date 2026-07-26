@@ -46,6 +46,8 @@ string $s = "hello";
 Point $p = new Point(1, 2);
 callable $fn = function(int $a): int { return $a; };
 C.FILE* $f = c_open("file.txt");   // phpc 互操作 C 类型
+array<int> $nums = [1, 2, 3];      // Task 5.4: 泛型数组（元素类型编译期已知）
+array<array<int>> $grid = [[1, 2], [3, 4]];  // 嵌套二维数组
 
 // 全局/命名空间常量（可选类型标记）
 const int MAX = 100;   // 等价于 const MAX = 100;
@@ -65,6 +67,7 @@ class C {
 | `string` | `t_string` | SSO ≤23 字节内联，超限走池 |
 | `bool` | `bool` | true/false |
 | `array` | `t_array*` | 有序映射，int/string 键 |
+| `array<T>` | `t_array*` | 泛型数组（Task 5.4，元素类型编译期已知，优化标量访问） |
 | `callable` | `t_callback` | 闭包/C 函数指针 |
 | `void` | `void` | 仅返回类型 |
 | `never` | `void` | 永不返回（exit/throw） |
@@ -74,6 +77,57 @@ class C {
 | 类类型 | `tphp_class_X*` 或 `tphp_na_Ns_tphp_class_X*` | COS 对象指针（命名空间类带 `tphp_na_` 前缀） |
 
 > ⚠️ **`===` 和 `==` 等价**：类型固定意味着编译期已知类型，"同时类型不同"的情况不存在。
+
+#### `array<T>` 泛型数组
+
+TinyPHP 支持泛型数组类型 `array<T>`，其中 T 可以是：
+
+| 元素类型 | C 结构 | value 大小 |
+|---------|--------|-----------|
+| `int` | `t_arr_int` | 8 字节 (`t_int`) |
+| `string` | `t_arr_str` | 24 字节 (`t_string`, SSO 内联) |
+| `float` | `t_arr_float` | 8 字节 (`t_float`) |
+| `bool` | `t_arr_bool` | 1 字节 (`t_bool`) |
+| `mixed` | `t_arr_var` | 24 字节 (`t_var`, tagged union) |
+| `array<U>` | `t_arr_ptr` | 8 字节 (指针) |
+| `Foo` (类类型) | `t_arr_ptr` | 8 字节 (指针) |
+
+**默认推导规则**：
+
+- 无类型注解 `$arr = [1, 2, 3]` → `array<mixed>`（保持 PHP 动态语义）
+- 显式声明 `array<int> $arr = [1, 2, 3]` → `array<int>`（触发紧凑存储优化）
+- 空数组 `$arr = []` → `array<mixed>`（默认），或 `array<int> $arr = []` → `array<int>`
+
+**类型严格性**：
+
+显式声明 `array<T>` 后，push 不同类型会触发编译错误：
+
+```php
+array<int> $arr = [1, 2];
+$arr[] = "hello";  // 编译错误：Cannot push string to array<int>
+```
+
+需用 `array<mixed>` 表达异构意图。
+
+**协变转换**：
+
+`array<T>` 传给 `array<mixed>` 参数时自动调用 O(n) 协变转换函数：
+
+```php
+function foo(array $arr): void { ... }  // 参数推导为 array<mixed>
+
+array<int> $nums = [1, 2, 3];
+foo($nums);  // 自动调用 tphp_fn_arr_int_to_var，O(n) 转换
+```
+
+| 源类型 | 转换函数 | 开销 |
+|--------|---------|------|
+| `array<int>` | `tphp_fn_arr_int_to_var` | O(n) |
+| `array<string>` | `tphp_fn_arr_str_to_var` | O(n) |
+| `array<float>` | `tphp_fn_arr_float_to_var` | O(n) |
+| `array<bool>` | `tphp_fn_arr_bool_to_var` | O(n) |
+
+同类型直接传递无开销：`function foo(array<int> $arr)` 调用 `foo([1, 2, 3])` 直接传 `t_arr_int*`。
 
 ### AOT 限制
 
@@ -166,8 +220,16 @@ member:
     property_decl         ✅
   | method_decl           ✅
   | const_decl            ✅
-  | 'use' trait_name      ✅
+  | trait_use             ✅
   | enum_case             ✅ (enum only)
+
+trait_use:
+    'use' trait_name (',' trait_name)* ';'                              ✅ (简单引入)
+  | 'use' trait_name (',' trait_name)* '{' trait_adaptation* '}'        ✅ (带冲突解决)
+
+trait_adaptation:
+    trait_name '::' IDENTIFIER 'insteadof' trait_name (',' trait_name)* ';'  ✅ (排除某 trait 的方法)
+  | trait_name '::' IDENTIFIER 'as' (visibility | IDENTIFIER | visibility IDENTIFIER) ';'  ✅ (别名/改可见性)
 ```
 
 ### 3.1 属性
@@ -263,6 +325,79 @@ class_const_decl:
 > ```
 ```
 
+### 3.4 Trait
+
+```
+trait_decl:
+    'trait' IDENTIFIER '{' (method_decl | property_decl | class_const_decl)* '}'   ✅
+```
+
+> **Trait 支持（AOT 编译期扁平化，零运行时开销）**：
+>
+> - **声明**：`trait Foo { public int $x; public function bar(): void { ... } }`
+>   - trait 内可含方法、属性、类常量（与类成员语法一致）
+>   - trait 自身**不生成 C 结构体**，编译期扁平化到使用 trait 的类
+> - **引入**：`class C { use Foo; }` 或 `class C { use Foo, Bar; }`
+>   - 编译期将 trait 的 methods/properties/classConsts 复制到使用类
+>   - 类自身成员**优先**于 trait 成员（覆盖语义，无警告）
+> - **冲突解决**（多 trait 同名方法时**必须**显式解决，否则报错）：
+>   ```php
+>   class C {
+>       use A, B {
+>           B::foo insteadof A;     // foo 使用 B 的版本，排除 A 的
+>           A::foo as aFoo;          // 创建 A::foo 的别名 aFoo
+>           A::bar as private bBar;  // 改可见性（语法接受，AOT 无运行时可见性检查）
+>       }
+>   }
+>   ```
+> - **`as` 别名独立于 `insteadof`**：即使主方法被 `insteadof` 排除，其 `as` 别名仍会创建
+>   - 例：`A::foo insteadof A; A::foo as aFoo;` — `foo` 被排除，但 `aFoo` 别名仍可用
+> - **属性/常量冲突**：直接报错（无隐式覆盖，与 PHP 一致），需开发者调整设计
+> - **`$this` 访问**：trait 方法内 `$this` 指向使用类的实例，可访问类自身属性
+> - **不支持**：trait 静态属性、trait 组合（trait use trait）、抽象 trait 方法
+
+### 3.5 匿名类
+
+```
+anon_class_tail:
+    'extends' name? 'implements' name (',' name)*? '{' member* '}'   ✅
+  | 'implements' name (',' name)* '{' member* '}'                    ✅
+  | 'extends' name '{' member* '}'                                   ✅
+  | '{' member* '}'                                                  ✅
+
+anon_class_expr:
+    'new' 'class' '(' args? ')' anon_class_tail   ✅
+```
+
+> **匿名类（AOT 编译期转译，零运行时开销）**：
+>
+> - **语法**：`new class [(args)] [extends Parent] [implements Iface] { members }`
+>   - 构造参数 `(args)` 在 `class` 关键字后、`extends` 前（PHP 8.3 语法顺序）
+>   - 成员语法与普通类一致（方法、属性、常量、trait use）
+> - **编译期转译**（借鉴 vlang `_VAnonStruct${counter}` 命名约定）：
+>   1. 生成合成类名 `_AnonClass${N}`（N 为全局递增计数器）
+>   2. 解析类体为 `ClassNode`，加入 `extraClasses`（与普通类相同路径生成 C 结构体）
+>   3. 表达式位置返回 `new _AnonClass${N}(args)`
+>   - 零运行时开销：匿名类与普通类在 C 层完全等价，无动态分派
+> - **继承**：`new class extends Foo { ... }` — 复用普通类继承机制，可访问父类属性和方法
+> - **接口**：`new class implements Bar { ... }` — 语法可解析，类生成正常
+>   - ⚠️ **限制**：通过接口类型变量调用方法（如 `$obj: Bar = new class implements Bar {...}; $obj->method()`）当前不支持，因接口分派需 vtable。直接通过匿名类变量调用方法可用。
+> - **`get_class()` 返回 `_AnonClass${N}`**（AOT 限制，非 PHP 原生 `class@anonymous`）
+> - **不支持** `use($x, $y)` 捕获语法（需类型推导，与 AOT 显式类型哲学冲突；可用构造器属性提升替代）
+>
+> ```php
+> // 简单匿名类
+> $obj = new class {
+>     public function greet(): void { echo "hello"; }
+> };
+>
+> // 带构造参数 + 继承
+> $obj = new class(42) extends Base {
+>     public int $v;
+>     public function __construct(int $v) { $this->v = $v; }
+> };
+> ```
+
 ---
 
 ## 4. 枚举
@@ -311,7 +446,38 @@ param:
   | IDENTIFIER                 ✅ (无类型，箭头函数)
   | 'public' type '$' IDENTIFIER   ✅ (构造器属性提升)
   | 'private' type '$' IDENTIFIER  ✅ (构造器属性提升)
+  | '...' '$' IDENTIFIER       ✅ (可变参数 ...$args，必须为最后一个参数)
+  | type '...' '$' IDENTIFIER  ✅ (类型化可变参数 int ...$nums，vlang 风格)
 ```
+
+### 6.1 可变参数 `...$args`（vlang 风格 AOT 实现）
+
+```php
+function sum(int ...$nums): int { /* $nums 推导为 array<int> */ }
+function log_all(...$args): void { /* $args 推导为 array<mixed> */ }
+
+sum(1, 2, 3);          // 编译期打包为 t_array*（单次堆分配）
+sum(...$arr);          // 透传 $arr，零拷贝零分配
+sum(1, ...$tail, 2);   // 编译期合并为单次分配
+```
+
+**性能模型**（参考 vlang 设计，对齐其 `_vargs` 数组方案）：
+
+| 调用形式 | 生成代码 | 开销 |
+|---------|---------|------|
+| `f(...$arr)` | `f($arr)` 直接透传 `t_array*` | 零拷贝零分配 |
+| `f(1, 2, 3)` | `f(({ t_array* _vp_N = arr_create(3); push; push; push; _vp_N; }))` | 单次堆分配（PHP 语义必需） |
+| `f(1, ...$arr, 2)` | 编译期合并为 `_vp_N` | 单次堆分配 |
+
+**关键性质**：
+- 可变形参 C ABI 固定为 `t_array*`，与普通数组形参同 ABI，调用点无运行时分支
+- 非可变函数完全不受影响（仅 `isVariadic=true` 的函数走打包路径）
+- `func_get_args()` / `func_num_args()` / `func_get_arg($i)` 仅在可变参数函数内可用（直接操作 `t_array*` 形参）
+
+**限制**：
+- 可变参数必须为最后一个形参
+- 可变参数不能有默认值
+- 类型化可变参数 `int ...$nums` 的元素类型在编译期追踪，`func_get_arg($i)` 据此选择类型化访问器
 
 > 默认值参数规则：有默认值的参数必须放在参数列表末尾，与 PHP 原生一致。
 > 编译器会为每个默认值参数生成重载函数，调用时自动选择正确版本。
@@ -569,6 +735,7 @@ primary:
   | 'array' '(' args ')'            ✅
   | '[' args ']'                    ✅ (支持尾逗号；支持 spread `...$arr`)
   | 'new' name '(' args ')'         ✅
+  | 'new' 'class' '(' args? ')' anon_class_tail   ✅ (匿名类，见 3.5)
   | 'function' '(' params ')' body  ✅ (闭包)
   | 'fn' '(' typed_params ')' ':' type '=>' expr        ✅ (箭头函数单表达式，强制参数+返回类型)
   | 'fn' '(' typed_params ')' ':' type '=>' '{' stmts '}' ✅ 🔧 TinyPHP 扩展（块体箭头函数，须含 return；void 类型除外）
@@ -877,7 +1044,6 @@ phpc_ptr_bridge:
 | 语法 | 原因 |
 |------|------|
 | `?int` `int\|string` | 破坏类型固定优势 |
-| `...$args` 可变参数 | 需动态栈构造；注：`max()/min()` 等内置函数已通过 `variadic_pack` 分派支持多参数形式（编译期打包为临时 `t_array*`） |
 | 命名参数 | AOT 无意义 |
 | `#[Route(path: "/x")]` 命名参数注解 | 与全局命名参数禁用一致；注解仅支持位置参数 `#[Route("/x")]` |
 | 运行时反射 `Reflection*` | AOT 无运行时元数据，注解仅供编译期消费 |
@@ -892,8 +1058,8 @@ phpc_ptr_bridge:
 | 返回引用 `function &f()` | AOT 类型固定下无意义；COS 对象按指针传递已是引用 |
 
 > ⚠️ 定参 vs 可变参数的 `func_get_args()`：
-> - **定参函数**（`function f(int $a, string $b)`）：参数编译为独立 C 形参 `t_int a, t_string b`，没有统一容器 → `func_get_args()` **不可行**
-> - **可变参数函数**（`function f(...$args)`）：可编译为 `t_array* args` 形参 → `func_get_args()` 直接返回 `args` 即可 → **可行**
+> - **定参函数**（`function f(int $a, string $b)`）：参数编译为独立 C 形参 `t_int a, t_string b`，没有统一容器 → `func_get_args()` **不可行**（编译期报错）
+> - **可变参数函数**（`function f(...$args)`）：编译为 `t_array* args` 形参 → `func_get_args()` 直接返回 `args`、`func_num_args()` 返回 `tphp_fn_arr_count(args)`、`func_get_arg($i)` 按元素类型选择类型化访问器 → **已支持**（见 §6.1）
 
 ---
 

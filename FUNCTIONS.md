@@ -275,6 +275,24 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 
 数组字面量支持 spread 展开 `[...$arr1, ...$arr2]`（PHP 7.4+）：编译期调用 `tphp_fn_arr_spread(dst, src)` 逐元素复制，int 键重新索引（append），string 键保留并覆盖；支持与字面量混合 `[1, ...$arr, 2]`、嵌套 `[[...$a], [...$b]]`、内联函数参数 `var_dump([...$arr])`。
 
+### 泛型数组支持
+
+`array<T>` 泛型数组在编译期单态化为独立 C 类型（`t_arr_int`/`t_arr_str`/`t_arr_float`/`t_arr_bool`/`t_arr_var`/`t_arr_ptr`），元素紧凑存储（`array<int>` 的 value 是 8 字节 `t_int`，比 `array<mixed>` 的 24 字节 `t_var` 节省 67%）。
+
+**协变转换**：`array<T>` 传给 `array<mixed>` 参数时自动调用 `tphp_fn_arr_{int|str|float|bool}_to_var`（O(n) 开销，重新分配 + 元素包装为 `t_var`）。无注解的 `array` 默认推导为 `array<mixed>`，无转换开销。
+
+**内置函数行为**：
+
+| 类别 | 函数 | 行为 |
+|------|------|------|
+| 协变转换调用 | `count`/`in_array`/`array_key_exists`/`implode`/`array_sum`/`array_product` | 通过 `arrayArgCode` 自动协变转换为 `t_array*`，调用通用函数 |
+| 元素类型追踪 | `array_keys`→`t_int`、`array_values`/`array_merge`/`array_slice`/`array_unique`/`array_reverse`/`array_diff`/`array_intersect`/`array_pad`→跟随源数组、`array_combine`→从 values 推导、`array_chunk`→外层 `t_array*`、`array_fill`→`t_var`、`array_column`→`t_var`、`array_count_values`→`t_int`、`str_split`/`parse_str`/`parse_url`/`iconv_get_encoding`→`t_string` | 覆盖 `$builtinArrElemTypes` 硬编码默认值，确保返回数组元素类型正确 |
+| 原地修改特化 | `sort`/`rsort`/`shuffle` | 特化实现 `tphp_fn_arr_{int\|str\|float\|bool}_{sort\|rsort\|shuffle}`，直接操作特化数组内存，避免协变转换丢失修改 |
+| 拒绝 | `asort`/`arsort`/`ksort`/`krsort`/`uasort`/`usort` | 对 `array<T>` 抛编译期异常（保持 key-value 关联的函数不适用于有序列表） |
+| 拒绝 | `array_push`/`array_pop`/`array_shift`/`array_unshift` | 对 `array<T>` 拒绝，用 `$arr[]=$val` 语法替代 |
+
+**类型严格性**：显式声明 `array<T>` 后，push 不同类型会触发编译错误（须用 `array<mixed>` 表达异构意图）。
+
 ### 增删 / 统计
 
 | php函数 | tphp函数 | 性能说明 | 差异说明 |

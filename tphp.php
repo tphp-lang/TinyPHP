@@ -426,12 +426,14 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     $outDir = $cwd . DIRECTORY_SEPARATOR . 'build';
 
     // Clean build directory before compiling
+    //   只清理 build/ 下的直接文件（.c/.o/.exe 等），保留子目录（如 build/bench/）
+    //   rmdir 可能因子目录存在而失败，用 @ 抑制 warning
     if (is_dir($outDir)) {
         $contents = glob($outDir . DIRECTORY_SEPARATOR . '*');
         if ($contents !== false) {
             foreach ($contents as $f) { if (is_file($f)) unlink($f); }
         }
-        rmdir($outDir);
+        @rmdir($outDir);
     }
 
     // Dedup: #include by file, #flag by flags string
@@ -758,6 +760,18 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     $extraFlags = !empty($keptFlags) ? ' ' . implode(' ', $keptFlags) : '';
 
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
+
+    // Phase 1.5: Type Check — 填充 AST 节点的 inferredType 字段
+    //   使 CodeGenerator 能基于类型信息生成泛型数组等优化代码
+    try {
+        $checker = new TypeChecker(new SymbolTable());
+        $checker->check($merged);
+    } catch (\Throwable $e) {
+        // TypeChecker 错误不阻塞编译（CodeGenerator 有回退逻辑）
+        if ($debugMode) {
+            fwrite(STDERR, "[WARN] TypeChecker: " . $e->getMessage() . "\n");
+        }
+    }
 
     $gen   = new CodeGenerator();
     $gen->isShared = $isShared;

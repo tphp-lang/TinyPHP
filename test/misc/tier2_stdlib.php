@@ -6,7 +6,7 @@
 #debug rev=string(3) "cba"
 #debug repeat=string(6) "ababab"
 #debug -- 3. str_split --
-#debug split[0]=int(0)
+#debug split[0]=string(1) "a"
 #debug cnt=3
 #debug -- 4. str_pad --
 #debug padR=string(5) "ab---"
