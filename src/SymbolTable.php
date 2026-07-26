@@ -196,7 +196,7 @@ class SymbolTable
             $c = $this->classes[$cur] ?? null;
             if ($c === null) return false;
             if (isset($c->privateSetProps[$prop])) return true;
-            $cur = $c->parentClass;
+            $cur = $c->parent;
         }
         return false;
     }
@@ -210,7 +210,7 @@ class SymbolTable
             $c = $this->classes[$cur] ?? null;
             if ($c === null) return '';
             if (isset($c->privateSetProps[$prop])) return $cur;
-            $cur = $c->parentClass;
+            $cur = $c->parent;
         }
         return '';
     }
