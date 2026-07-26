@@ -1224,8 +1224,8 @@ static inline int _arr_str_cmp_desc(const void *a, const void *b) {
 #define _TPHP_ARR_TYPED_SORT(suffix, entry_ty, cmp_asc, cmp_desc)                  \
 static inline void tphp_fn_arr_##suffix##_sort(t_arr_##suffix *a) {               \
     if (unlikely(a == NULL || a->length <= 1)) return;                            \
-    arr_stridx_free(a);                                                            \
-    arr_intidx_free(a);                                                            \
+    arr_stridx_free((t_array*)a);                                                  \
+    arr_intidx_free((t_array*)a);                                                  \
     qsort(a->entries, (size_t)a->length, sizeof(entry_ty), cmp_asc);              \
     for (int i = 0; i < a->length; i++) {                                          \
         if (a->entries[i].key.type == TYPE_INT)                                    \
@@ -1234,8 +1234,8 @@ static inline void tphp_fn_arr_##suffix##_sort(t_arr_##suffix *a) {             
 }                                                                                  \
 static inline void tphp_fn_arr_##suffix##_rsort(t_arr_##suffix *a) {              \
     if (unlikely(a == NULL || a->length <= 1)) return;                            \
-    arr_stridx_free(a);                                                            \
-    arr_intidx_free(a);                                                            \
+    arr_stridx_free((t_array*)a);                                                  \
+    arr_intidx_free((t_array*)a);                                                  \
     qsort(a->entries, (size_t)a->length, sizeof(entry_ty), cmp_desc);             \
     for (int i = 0; i < a->length; i++) {                                          \
         if (a->entries[i].key.type == TYPE_INT)                                    \
@@ -1254,8 +1254,8 @@ _TPHP_ARR_TYPED_SORT(str,   t_arr_entry_str,   _arr_str_cmp_asc,   _arr_str_cmp_
 #define _TPHP_ARR_TYPED_SHUFFLE(suffix, entry_ty)                                  \
 static inline t_bool tphp_fn_arr_##suffix##_shuffle(t_arr_##suffix *a) {          \
     if (unlikely(a == NULL || a->length <= 1)) return true;                       \
-    arr_stridx_free(a);                                                            \
-    arr_intidx_free(a);                                                            \
+    arr_stridx_free((t_array*)a);                                                  \
+    arr_intidx_free((t_array*)a);                                                  \
     for (int i = a->length - 1; i > 0; i--) {                                      \
         int j = rand() % (i + 1);                                                  \
         if (j != i) {                                                              \
