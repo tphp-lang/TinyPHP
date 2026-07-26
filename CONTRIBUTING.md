@@ -22,9 +22,9 @@ tphp / tphp.cmd                  Linux/macOS / Windows 快捷入口
 include/                         C 运行时头文件（全 static inline）
   ├── common.h                   总入口
   ├── compat.h                   三编译器兼容（TCC/GCC/Clang）
-  ├── types.h                    类型系统 + likely/unlikely + SSO 字符串
+  ├── types.h                    类型系统 + 泛型数组结构（t_arr_int/t_arr_str/t_arr_float/t_arr_bool/t_arr_var/t_arr_ptr）+ likely/unlikely + SSO 字符串
   ├── val.h                      便捷宏 (VAR_INT, STR_LIT, …)
-  ├── array.h                    PHP 数组（128 槽复用池 + 1.5× 增长 + sort/shuffle/search）
+  ├── array.h                    PHP 数组（128 槽复用池 + 1.5× 增长 + 泛型数组特化操作 + 协变转换 + sort/shuffle/search）
   ├── runtime.h                  运行时（128KB 字符串池 + Arena、对象/数组/字符串池、资源追踪）
   ├── builtin.h                  内置函数入口 (incl 8个 std/ 子文件, 230+ 函数)
   ├── rand.h                     CSPRNG 随机数 (Win→rand_s, Unix→/dev/urandom)

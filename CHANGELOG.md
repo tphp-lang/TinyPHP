@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **`array<T>` 泛型数组类型系统**（`types.h`/`array.h`/`Type.php`/`TypeChecker.php`/`CodeGenerator.php`）：
+  - **特化数组结构**：`array<T>` 在编译期单态化为独立 C 类型（`t_arr_int`/`t_arr_str`/`t_arr_float`/`t_arr_bool`/`t_arr_var`/`t_arr_ptr`），元素紧凑存储（`array<int>` 的 value 是 8 字节 `t_int`，比 `array<mixed>` 的 24 字节 `t_var` 节省 67%）
+  - **协变转换机制**：`array<T>` 传给 `array<mixed>` 参数时自动调用 `tphp_fn_arr_{int|str|float|bool}_to_var`（O(n) 开销，重新分配 + 元素包装为 `t_var`）。内置数组函数通过 `arrayArgCode` 统一协变转换调用
+  - **元素类型追踪**：扩展 `$builtinArrElemTypes` 注册表 + `visitAssign` 动态推导，覆盖 `array_keys`/`array_values`/`array_merge`/`array_slice`/`array_unique`/`array_reverse`/`array_diff`/`array_intersect`/`array_pad`/`array_combine`/`array_chunk`/`array_column`/`array_fill`/`array_count_values`/`str_split`/`parse_str`/`parse_url`/`iconv_get_encoding` 等函数的返回数组元素类型
+  - **特化排序/洗牌**：实现 `tphp_fn_arr_{int|str|float|bool}_{sort|rsort|shuffle}` 直接操作特化数组内存，避免协变转换丢失修改
+  - **类型严格性**：显式声明 `array<T>` 后 push 不同类型 → 编译错误；无注解 `array` 默认推导为 `array<mixed>` 保持 PHP 动态语义
+  - **拒绝 asort/arsort/ksort/krsort/uasort/usort**：这些保持 key-value 关联的函数对 `array<T>` 抛编译期异常（不适用于有序列表）
+  - 测试：`test/type/array_generic_test.php`（基础功能）+ `test/type/array_generic_funcs_test.php`（内置函数全覆盖）
+
+### 变更
+
+- **扩展 `$builtinArrElemTypes` 注册表**（`CodeGenerator.php`）：
+  - 新增 `array_fill`→`t_var`、`array_column`→`t_var`（元素通过 VAR_* 包装存储）
+  - 新增 `str_split`/`parse_str`/`parse_url`/`iconv_get_encoding`→`t_string`（内部 VAR_STRING 存储）
+  - 新增 `array_count_values`→`t_int`（值是出现次数）
+  - 在 `visitAssign` 中为 `array_combine`（从 values 推导）、`array_chunk`（外层 t_array*）、`array_reverse`/`array_diff`/`array_intersect`/`array_pad`/`array_merge`/`array_values`/`array_slice`/`array_unique`（跟随源数组）添加动态元素类型推导，覆盖硬编码默认值
+  - 修正 `test/misc/tier2_stdlib.php` 的 str_split 预期输出（`int(0)` → `string(1) "a"`，之前是 bug 的体现）
+
 ### 修复
 
 - **对象唯一 ID 机制**（`object.h` / `tls.h` / `core.h`）：`t_object` 新增独立 `id` 字段（uint32_t），由线程本地全局计数器 `_tphp_obj_id_counter` 递增生成，替代原来用 `refcount & 0xFFFF` 作为对象 ID 的做法。`var_dump` 输出 `object(Class)#<id>` 时改用 `obj->id`，符合标准 PHP 每个对象实例拥有唯一 ID 的行为。原方案在数组 retain 引入后 refcount 不再恒为 1，导致 `var_dump` 输出的 ID 不稳定。
@@ -14,6 +34,7 @@
 - **注解 `newInstance()` 类型推断**（`CodeGenerator.php`）：`foreach (ROUTE as $v) { $v->newInstance(); }` 中 `$v` 来自 foreach 遍历注解数组时，通过 `varAnnotSource` 追踪来源注解常量，正确推导 `newInstance()` 返回的类指针类型。修复 Linux/macOS 上 `Call to undefined method t_int::hello()` / `void::hello()` 转译错误。
 - **`stream_socket_accept` 错误处理契约**（`stream.h`）：真正的错误（accept 失败等）抛异常供用户 try-catch 捕获，EAGAIN/超时等非错误返回 `-1`，符合 AOT 错误处理原则（用户可通过异常捕获真正的错误，而非静默返回 false）。
 - **macOS `-framework` 链接支持**：TCC 不识别 macOS 的 `-framework X` 语法（会把 `X` 当作输入文件，报错 `file 'OpenGL' not found`）。`tphp.php` 在 #flag 处理中自动把 `-framework X` 转换为 `-Wl,-framework,X`（透传给系统 `ld`），`-F path` 同理转换为 `-Wl,-F,path`。`-Wl,` 开头的 token 分离到 `$lateLinkFlags`（链接器选项放在源文件之后，遵循单遍扫描顺序）
+- **gcc/clang 下特化排序/洗牌函数指针类型不兼容**（`array.h`）：`_TPHP_ARR_TYPED_SORT` 和 `_TPHP_ARR_TYPED_SHUFFLE` 宏在特化数组（`t_arr_int*`/`t_arr_str*` 等）上直接调用 `arr_stridx_free`/`arr_intidx_free`，但这两个函数接收 `t_array*`，gcc/clang 严格检查 `-Wincompatible-pointer-types` 报错。修复：调用前显式 cast 为 `(t_array*)`。特化数组结构与 `t_array` 前 6 个字段布局完全一致，cast 安全。TCC 比较宽松未报错，本地测试未发现。CI Windows gcc 全部 247 个测试编译失败，clang 因超时被取消。
 
 ## [0.2.0-beta.3] — 2026-07-19
 

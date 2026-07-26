@@ -78,6 +78,57 @@ class C {
 
 > ⚠️ **`===` 和 `==` 等价**：类型固定意味着编译期已知类型，"同时类型不同"的情况不存在。
 
+#### `array<T>` 泛型数组
+
+TinyPHP 支持泛型数组类型 `array<T>`，其中 T 可以是：
+
+| 元素类型 | C 结构 | value 大小 |
+|---------|--------|-----------|
+| `int` | `t_arr_int` | 8 字节 (`t_int`) |
+| `string` | `t_arr_str` | 24 字节 (`t_string`, SSO 内联) |
+| `float` | `t_arr_float` | 8 字节 (`t_float`) |
+| `bool` | `t_arr_bool` | 1 字节 (`t_bool`) |
+| `mixed` | `t_arr_var` | 24 字节 (`t_var`, tagged union) |
+| `array<U>` | `t_arr_ptr` | 8 字节 (指针) |
+| `Foo` (类类型) | `t_arr_ptr` | 8 字节 (指针) |
+
+**默认推导规则**：
+
+- 无类型注解 `$arr = [1, 2, 3]` → `array<mixed>`（保持 PHP 动态语义）
+- 显式声明 `array<int> $arr = [1, 2, 3]` → `array<int>`（触发紧凑存储优化）
+- 空数组 `$arr = []` → `array<mixed>`（默认），或 `array<int> $arr = []` → `array<int>`
+
+**类型严格性**：
+
+显式声明 `array<T>` 后，push 不同类型会触发编译错误：
+
+```php
+array<int> $arr = [1, 2];
+$arr[] = "hello";  // 编译错误：Cannot push string to array<int>
+```
+
+需用 `array<mixed>` 表达异构意图。
+
+**协变转换**：
+
+`array<T>` 传给 `array<mixed>` 参数时自动调用 O(n) 协变转换函数：
+
+```php
+function foo(array $arr): void { ... }  // 参数推导为 array<mixed>
+
+array<int> $nums = [1, 2, 3];
+foo($nums);  // 自动调用 tphp_fn_arr_int_to_var，O(n) 转换
+```
+
+| 源类型 | 转换函数 | 开销 |
+|--------|---------|------|
+| `array<int>` | `tphp_fn_arr_int_to_var` | O(n) |
+| `array<string>` | `tphp_fn_arr_str_to_var` | O(n) |
+| `array<float>` | `tphp_fn_arr_float_to_var` | O(n) |
+| `array<bool>` | `tphp_fn_arr_bool_to_var` | O(n) |
+
+同类型直接传递无开销：`function foo(array<int> $arr)` 调用 `foo([1, 2, 3])` 直接传 `t_arr_int*`。
+
 ### AOT 限制
 
 以下 PHP 特性依赖运行时解释器/动态符号表，**永久不支持**：
