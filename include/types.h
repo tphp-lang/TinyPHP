@@ -170,3 +170,109 @@ struct _t_array {
     void *int_index;        // hash index for O(1) sparse int-key lookup (NULL if none)
     t_arr_entry entries[];  // flexible array member
 };
+
+// ============================================================
+// 8. 泛型数组 — array<T> 的 C 结构
+//
+//   每种 array<T> 在编译期单态化为独立 C 类型，元素紧凑存储：
+//     array<int>      → t_arr_int   (entry: {t_var key; t_int val;})
+//     array<string>   → t_arr_str   (entry: {t_var key; t_string val;})
+//     array<float>    → t_arr_float (entry: {t_var key; t_float val;})
+//     array<bool>     → t_arr_bool  (entry: {t_var key; t_bool val;})
+//     array<mixed>    → t_arr_var   (= t_array, 万能数组, entry: {t_var key; t_var val;})
+//     array<array<T>> → t_arr_ptr   (entry: {t_var key; void* val;}, 访问时转型)
+//     array<Foo>      → t_arr_ptr   (对象数组, 元素为 void* 指向对象)
+//
+//   key 统一为 t_var（支持 int/string 混存，保留 PHP 有序 map 语义）
+//   value 按 T 紧凑存储，无 t_var 包装（除 array<mixed>）
+// ============================================================
+
+// array<int> entry — value 为 8 字节 t_int（比 t_var 的 24 字节节省 67%）
+typedef struct {
+    t_var  key;
+    t_int  val;
+} t_arr_entry_int;
+
+// array<string> entry — value 为 t_string（SSO 内联，无 type tag）
+typedef struct {
+    t_var     key;
+    t_string  val;
+} t_arr_entry_str;
+
+// array<float> entry — value 为 8 字节 t_float
+typedef struct {
+    t_var    key;
+    t_float  val;
+} t_arr_entry_float;
+
+// array<bool> entry — value 为 1 字节 t_bool（ padded to 8 due to struct alignment)
+typedef struct {
+    t_var   key;
+    t_bool  val;
+} t_arr_entry_bool;
+
+// array<mixed> entry = 当前 t_arr_entry（别名，保持兼容）
+typedef t_arr_entry t_arr_entry_var;
+
+// array<array<T>> / array<Foo> entry — value 为 void* 指针
+// CodeGenerator 根据内层类型生成转型代码
+typedef struct {
+    t_var  key;
+    void  *val;
+} t_arr_entry_ptr;
+
+// ── 数组头结构（每种元素类型独立，布局与 t_array 一致） ──
+
+typedef struct {
+    int    length;
+    int    capacity;
+    int    refcount;
+    int    cursor;
+    void  *str_index;
+    void  *int_index;
+    t_arr_entry_int entries[];
+} t_arr_int;
+
+typedef struct {
+    int    length;
+    int    capacity;
+    int    refcount;
+    int    cursor;
+    void  *str_index;
+    void  *int_index;
+    t_arr_entry_str entries[];
+} t_arr_str;
+
+typedef struct {
+    int    length;
+    int    capacity;
+    int    refcount;
+    int    cursor;
+    void  *str_index;
+    void  *int_index;
+    t_arr_entry_float entries[];
+} t_arr_float;
+
+typedef struct {
+    int    length;
+    int    capacity;
+    int    refcount;
+    int    cursor;
+    void  *str_index;
+    void  *int_index;
+    t_arr_entry_bool entries[];
+} t_arr_bool;
+
+// array<mixed> = t_array（别名，共享同一结构）
+typedef struct _t_array t_arr_var;
+
+// array<array<T>> / array<Foo> — 元素为指针的数组
+typedef struct {
+    int    length;
+    int    capacity;
+    int    refcount;
+    int    cursor;
+    void  *str_index;
+    void  *int_index;
+    t_arr_entry_ptr entries[];
+} t_arr_ptr;

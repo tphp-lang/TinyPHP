@@ -19,7 +19,7 @@ class Main
     private string $escapeStr;
     private array $mixedArr;
 
-    // ── decode 测试数据 ──  
+    // ── decode 测试数据 ──
     private string $smallJson;
     private string $largeJson;
     private string $nestedJson;
@@ -37,58 +37,71 @@ class Main
         // ──── json_encode ────
         echo "───── json_encode ─────\n";
 
-        $this->bench('encode(小数组 10元素)     ', function(): string {
-            return json_encode($this->smallArr);
+        // 注: 闭包返回 int (非 string/mixed) 以匹配 CodeGenerator 的 t_int 默认返回类型，
+        //   避免 Win64 ABI 不匹配 (struct hidden pointer vs register return)
+        $this->bench('encode(小数组 10元素)     ', function(): int {
+            json_encode($this->smallArr);
+            return 0;
         });
 
-        $this->bench('encode(大数组 1000元素)   ', function(): string {
-            return json_encode($this->largeArr);
+        $this->bench('encode(大数组 1000元素)   ', function(): int {
+            json_encode($this->largeArr);
+            return 0;
         });
 
-        $this->bench('encode(嵌套对象 50键)     ', function(): string {
-            return json_encode($this->nestedObj);
+        $this->bench('encode(嵌套对象 50键)     ', function(): int {
+            json_encode($this->nestedObj);
+            return 0;
         });
 
-        $this->bench('encode(含转义字符串)      ', function(): string {
-            return json_encode($this->escapeStr);
+        $this->bench('encode(含转义字符串)      ', function(): int {
+            json_encode($this->escapeStr);
+            return 0;
         });
 
-        $this->bench('encode(混合类型数组)      ', function(): string {
-            return json_encode($this->mixedArr);
+        $this->bench('encode(混合类型数组)      ', function(): int {
+            json_encode($this->mixedArr);
+            return 0;
         });
 
         // ──── json_decode ────
         echo "\n───── json_decode ─────\n";
 
-        $this->bench('decode(小JSON 10元素)     ', function(): mixed {
-            return json_decode($this->smallJson);
+        $this->bench('decode(小JSON 10元素)     ', function(): int {
+            json_decode($this->smallJson);
+            return 0;
         });
 
-        $this->bench('decode(大JSON 1000元素)   ', function(): mixed {
-            return json_decode($this->largeJson);
+        $this->bench('decode(大JSON 1000元素)   ', function(): int {
+            json_decode($this->largeJson);
+            return 0;
         });
 
-        $this->bench('decode(深层嵌套JSON)      ', function(): mixed {
-            return json_decode($this->nestedJson);
+        $this->bench('decode(深层嵌套JSON)      ', function(): int {
+            json_decode($this->nestedJson);
+            return 0;
         });
 
-        $this->bench('decode(对象JSON 50键)     ', function(): mixed {
-            return json_decode($this->objJson);
+        $this->bench('decode(对象JSON 50键)     ', function(): int {
+            json_decode($this->objJson);
+            return 0;
         });
 
         // ──── round-trip ────
         echo "\n───── round-trip (encode → decode → encode) ─────\n";
 
-        $this->bench('round-trip(小数组)        ', function(): string {
+        $this->bench('round-trip(小数组)        ', function(): int {
             $enc = json_encode($this->smallArr);
             $dec = json_decode($enc);
-            return json_encode($dec);
+            json_encode($dec);
+            return 0;
         });
 
-        $this->bench('round-trip(嵌套对象)      ', function(): string {
+        $this->bench('round-trip(嵌套对象)      ', function(): int {
             $enc = json_encode($this->nestedObj);
             $dec = json_decode($enc);
-            return json_encode($dec);
+            json_encode($dec);
+            return 0;
         });
 
         echo "\n========================================\n";
@@ -182,6 +195,7 @@ class Main
         $elapsed = microtime(true) - $start;
         $perOp = ($elapsed / (float)self::ITER) * 1000000.0;
 
-        printf("%s  %8.2f 秒  (%7.2f μs/op)\n", $label, $elapsed, $perOp);
+        echo $label . "  " . sprintf("%8.2f", $elapsed) . " 秒  ("
+            . sprintf("%7.2f", $perOp) . " μs/op)\n";
     }
 }

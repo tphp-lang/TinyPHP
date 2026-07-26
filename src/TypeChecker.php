@@ -26,6 +26,27 @@ class TypeChecker implements ASTVisitor
     /** @var array<int,array<string,Type>> 作用域栈（用于嵌套块作用域） */
     private array $scopeStack = [];
 
+    /**
+     * @var array<string,string> 变量名（不含 $）→ 类 C 名（如 tphp_class_File）
+     *
+     * 用于实例方法调用类型推导：TypeChecker 将所有 new X() 表达式标记为
+     * Type::$object（避免用户 Type idx 冲突），但 $obj->method() 需要知道
+     * 具体类才能查方法返回类型。此表在 checkAssignStmt 中由 new X() 右式填充，
+     * 在 inferMethodCallReturnType 中查询。
+     */
+    private array $varClassCNames = [];
+
+    /**
+     * @var array<string,ClosureExpr> 变量名（不含 $）→ ClosureExpr 节点
+     *
+     * 用于闭包调用返回类型推导：$cb = function(): int {...}; 之后 $cb() 调用
+     * 需要知道闭包的返回类型。CodeGenerator 在 visitAssignStmt 中注册
+     * addVarClosure（闭包名 → 签名），但那发生在 TypeChecker 之后。
+     * 此表在 checkAssignStmt 中由 ClosureExpr 右式填充，在
+     * inferMethodCallReturnType 中查询，直接从 AST returnType 字段取值。
+     */
+    private array $varClosureExprs = [];
+
     /** @var string 当前命名空间 */
     private string $currentNamespace = '';
 
@@ -66,12 +87,12 @@ class TypeChecker implements ASTVisitor
         'trim' => 'string', 'ltrim' => 'string', 'rtrim' => 'string',
         'substr' => 'string', 'strpos' => 'int', 'stripos' => 'int',
         'strrpos' => 'int', 'str_split' => 'array', 'explode' => 'array',
-        'implode' => 'string', 'join' => 'string', 'preg_match' => 'int',
-        'preg_match_all' => 'int', 'preg_replace' => 'string', 'preg_split' => 'array',
+        'implode' => 'string', 'join' => 'string', 'preg_match' => 'array',
+        'preg_match_all' => 'array', 'preg_replace' => 'string', 'preg_split' => 'array',
         'date' => 'string', 'time' => 'int', 'microtime' => 'float',
         'mktime' => 'int', 'strtotime' => 'int', 'abs' => 'int',
         'max' => 'mixed', 'min' => 'mixed', 'round' => 'float',
-        'floor' => 'float', 'ceil' => 'float', 'pow' => 'float',
+        'floor' => 'float', 'ceil' => 'float', 'pow' => 'mixed',
         'sqrt' => 'float', 'log' => 'float', 'exp' => 'float',
         'sin' => 'float', 'cos' => 'float', 'tan' => 'float',
         'pi' => 'float', 'mt_rand' => 'int', 'rand' => 'int',
@@ -113,7 +134,7 @@ class TypeChecker implements ASTVisitor
         'arsort' => 'bool', 'ksort' => 'bool', 'krsort' => 'bool',
         'usort' => 'bool', 'uasort' => 'bool', 'uksort' => 'bool',
         'natsort' => 'bool', 'natcasesort' => 'bool', 'shuffle' => 'bool',
-        'array_sum' => 'int', 'array_product' => 'int', 'array_pad' => 'array',
+        'array_sum' => 'mixed', 'array_product' => 'mixed', 'array_pad' => 'array',
         'array_chunk' => 'array', 'array_diff' => 'array', 'array_intersect' => 'array',
         'array_count_values' => 'array', 'array_fill_keys' => 'array',
         'compact' => 'array', 'extract' => 'int', 'range' => 'array',
@@ -125,6 +146,128 @@ class TypeChecker implements ASTVisitor
         'spl_autoload_unregister' => 'bool', 'spl_autoload_functions' => 'array',
         'iterator_to_array' => 'array', 'iterator_count' => 'int',
         'iterator_apply' => 'int',
+        // ── ext 扩展函数返回类型（与 CodeGenerator::$builtinRetTypes 保持同步）──
+        //   避免扩展函数返回具体类型（如 Resource*）被推导为 mixed（t_var），
+        //   导致变量声明类型不匹配（如 t_var zip = tphp_fn_zip_open() → 编译错误）
+        // ── zip (Resource*/bool/int/string/array) ──
+        'zip_open' => 'tphp_class_Resource*', 'zip_close' => 'bool',
+        'zip_read' => 'array', 'zip_entry_open' => 'bool',
+        'zip_entry_read' => 'string', 'zip_entry_close' => 'bool',
+        'zip_add_file' => 'bool', 'zip_add_dir' => 'bool',
+        'zip_delete' => 'bool', 'zip_rename' => 'bool',
+        'zip_stat' => 'array', 'zip_num_files' => 'int',
+        'zip_get_error_string' => 'string', 'zip_entry_name' => 'string',
+        'zip_entry_filesize' => 'int', 'zip_entry_compressedsize' => 'int',
+        'zip_entry_compressionmethod' => 'string', 'zip_locate' => 'int',
+        // ── zlib gz/增量 (Resource*/bool/int/string/array) ──
+        'gzopen' => 'tphp_class_Resource*', 'gzclose' => 'bool',
+        'gzeof' => 'bool', 'gzrewind' => 'bool', 'gzflush' => 'bool',
+        'gzread' => 'string', 'gzgets' => 'string', 'gzgetc' => 'string',
+        'gzwrite' => 'int', 'gzputs' => 'int', 'gzseek' => 'int',
+        'gztell' => 'int', 'gzpassthru' => 'int', 'readgzfile' => 'int',
+        'gzfile' => 'array',
+        'gzcompress' => 'string', 'gzuncompress' => 'string',
+        'gzencode' => 'string', 'gzdecode' => 'string',
+        'gzdeflate' => 'string', 'gzinflate' => 'string',
+        'zlib_encode' => 'string', 'zlib_decode' => 'string',
+        'deflate_init' => 'tphp_class_Resource*', 'inflate_init' => 'tphp_class_Resource*',
+        'deflate_add' => 'string', 'inflate_add' => 'string',
+        'inflate_get_status' => 'int', 'inflate_get_read_len' => 'int',
+        // ── fileinfo (Resource*/string/bool) ──
+        'finfo_open' => 'tphp_class_Resource*', 'finfo_close' => 'void',
+        'finfo_file' => 'string', 'finfo_buffer' => 'string',
+        'finfo_set_flags' => 'bool', 'mime_content_type' => 'string',
+        // ── sqlite3 函数式 API (int/bool/string/array) ──
+        'sqlite_open' => 'int', 'sqlite_close' => 'void',
+        'sqlite_exec' => 'bool', 'sqlite_query' => 'array',
+        'sqlite_query_single' => 'array', 'sqlite_escape_string' => 'string',
+        'sqlite_changes' => 'int', 'sqlite_last_insert_rowid' => 'int',
+        'sqlite_last_error_msg' => 'string', 'sqlite_last_error_code' => 'int',
+        'sqlite_version' => 'string',
+        // ── stream (int/bool/string/array) ──
+        'stream_last_error' => 'int', 'stream_set_read_buffer' => 'int',
+        'stream_set_write_buffer' => 'int', 'stream_select' => 'int',
+        'stream_socket_server' => 'int', 'stream_socket_accept' => 'int',
+        'stream_socket_client' => 'int', 'stream_socket_sendto' => 'int',
+        'stream_socket_enable_crypto' => 'int', 'stream_context_create' => 'int',
+        'stream_strerror' => 'string', 'stream_socket_recvfrom' => 'string',
+        'stream_socket_get_name' => 'string', 'stream_get_contents' => 'string',
+        'stream_get_line' => 'string', 'stream_set_blocking' => 'bool',
+        'stream_isatty' => 'bool', 'stream_set_timeout' => 'bool',
+        'stream_socket_shutdown' => 'bool', 'stream_get_meta_data' => 'array',
+        'stream_socket_pair' => 'array', 'stream_close' => 'void',
+        // ── openssl (int/bool/string) ──
+        'openssl_ctx_new' => 'int', 'openssl_ctx_set_options' => 'int',
+        'openssl_ssl_new' => 'int', 'openssl_ssl_connect' => 'int',
+        'openssl_ssl_accept' => 'int', 'openssl_ssl_write' => 'int',
+        'openssl_error_string' => 'string', 'openssl_ssl_get_cipher_name' => 'string',
+        'openssl_ssl_get_version' => 'string', 'openssl_encrypt' => 'string',
+        'openssl_decrypt' => 'string', 'openssl_random_pseudo_bytes' => 'string',
+        'openssl_digest' => 'string',
+        'openssl_ctx_use_certificate_file' => 'bool',
+        'openssl_ctx_use_private_key_file' => 'bool',
+        'openssl_ssl_set_fd' => 'bool', 'openssl_ssl_shutdown' => 'bool',
+        'openssl_ctx_free' => 'void', 'openssl_ssl_free' => 'void',
+        'openssl_ctx_set_verify' => 'void',
+        // ── pdo 底层 (int/string/float/void) ──
+        'pdo_open_db' => 'int', 'pdo_prepare' => 'int',
+        'pdo_exec' => 'int', 'pdo_str_len' => 'int',
+        'pdo_bind_text' => 'int', 'pdo_bind_blob' => 'int',
+        'pdo_bind_params' => 'void', 'pdo_str_from_ptr' => 'string',
+        'pdo_sqlite_errstate' => 'string', 'pdo_quote' => 'string',
+        'pdo_column_double' => 'float', 'pdo_column_text' => 'string',
+        'pdo_column_name' => 'string', 'pdo_column_decltype' => 'string',
+        'pdo_errmsg' => 'string', 'pdo_libversion' => 'string',
+        'pdo_throw_msg' => 'void', 'pdo_throw_db_error' => 'void',
+        'pdo_throw_stmt_error' => 'void',
+        'pdo_driver_find' => 'int', 'pdo_driver_open' => 'int',
+        'pdo_driver_exec' => 'int', 'pdo_driver_prepare' => 'int',
+        'pdo_driver_bind_int' => 'int', 'pdo_driver_bind_text' => 'int',
+        'pdo_driver_bind_blob' => 'int', 'pdo_driver_bind_null' => 'int',
+        'pdo_driver_bind_param_index' => 'int', 'pdo_driver_step' => 'int',
+        'pdo_driver_column_count' => 'int', 'pdo_driver_column_type' => 'int',
+        'pdo_driver_column_int64' => 'int', 'pdo_driver_column_bytes' => 'int',
+        'pdo_driver_data_count' => 'int', 'pdo_driver_changes' => 'int',
+        'pdo_driver_last_insert_rowid' => 'int', 'pdo_driver_errcode' => 'int',
+        'pdo_driver_column_double' => 'float', 'pdo_driver_column_text' => 'string',
+        'pdo_driver_column_name' => 'string', 'pdo_driver_column_decltype' => 'string',
+        'pdo_driver_errmsg' => 'string', 'pdo_driver_last_open_error' => 'string',
+        'pdo_driver_name' => 'string', 'pdo_driver_server_version' => 'string',
+        'pdo_driver_quote' => 'string',
+        // ── posix (int/string) ──
+        'posix_getpid' => 'int', 'posix_getppid' => 'int',
+        'posix_getuid' => 'int', 'posix_geteuid' => 'int',
+        'posix_getgid' => 'int', 'posix_getegid' => 'int',
+        'posix_isatty' => 'int', 'posix_kill' => 'int',
+        'posix_get_last_error' => 'int', 'posix_getcwd' => 'string',
+        'posix_strerror' => 'string', 'posix_ttyname' => 'string',
+        // ── pcntl (int/string/void) ──
+        'pcntl_fork' => 'int', 'pcntl_waitpid' => 'int',
+        'pcntl_wait' => 'int', 'pcntl_alarm' => 'int',
+        'pcntl_get_last_error' => 'int', 'pcntl_strerror' => 'string',
+        'pcntl_exec' => 'void',
+        // ── 其他补充 ──
+        'str_contains' => 'bool', 'str_starts_with' => 'bool', 'str_ends_with' => 'bool',
+        'array_is_list' => 'bool', 'str_split' => 'array',
+        'parse_url' => 'array', 'parse_str' => 'array',
+        'preg_grep' => 'array', 'preg_last_error' => 'int',
+        'preg_last_error_msg' => 'string', 'preg_quote' => 'string',
+        'iconv' => 'string', 'iconv_strlen' => 'int', 'iconv_strpos' => 'int',
+        'iconv_substr' => 'string', 'iconv_mime_encode' => 'string',
+        'iconv_mime_decode' => 'string', 'iconv_set_encoding' => 'bool',
+        'iconv_get_encoding' => 'array',
+        'http_build_query' => 'string', 'htmlspecialchars' => 'string',
+        'nl2br' => 'string', 'password_hash' => 'string', 'password_verify' => 'bool',
+        'json_validate' => 'bool', 'sha256' => 'string', 'sha512' => 'string',
+        'base_convert' => 'string', 'str_pad' => 'string', 'str_shuffle' => 'string',
+        'strrev' => 'string', 'strtr' => 'string', 'urlencode' => 'string',
+        'urldecode' => 'string', 'addslashes' => 'string', 'stripslashes' => 'string',
+        'intdiv' => 'int', 'array_key_first' => 'int', 'array_key_last' => 'int',
+        'substr_count' => 'int', 'hrtime' => 'int', 'array_unshift' => 'int',
+        'array_rand' => 'mixed', 'filter_var' => 'mixed', 'filter_id' => 'int',
+        'filter_list' => 'array', 'deg2rad' => 'float', 'rad2deg' => 'float',
+        'log10' => 'float', 'fmod' => 'float', 'asin' => 'float', 'acos' => 'float',
+        'atan' => 'float', 'php_str' => 'string', 'php_str_clone' => 'string',
     ];
 
     public function __construct(SymbolTable $symbols)
@@ -263,20 +406,108 @@ class TypeChecker implements ASTVisitor
         $this->symbols->addClassName('Exception', 'tphp_class_Exception');
         $this->symbols->addClassProp('tphp_class_Exception', 'message', 't_string');
         $this->symbols->addClassProp('tphp_class_Exception', 'code', 't_int');
-        $this->symbols->addClassMethod('tphp_class_Exception', 'getMessage', new MethodInfo('t_string'));
-        $this->symbols->addClassMethod('tphp_class_Exception', 'getCode', new MethodInfo('t_int'));
+        $this->symbols->addClassMethod('tphp_class_Exception', '__construct', new MethodInfo('void', ['t_string'], false, 'public', 1, 1));
+        $this->symbols->addClassMethod('tphp_class_Exception', '__destruct',  new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_Exception', 'getMessage',  new MethodInfo('t_string'));
+        $this->symbols->addClassMethod('tphp_class_Exception', 'getCode',     new MethodInfo('t_int'));
         $this->symbols->addClassMethod('tphp_class_Exception', 'getPrevious', new MethodInfo('tphp_class_Exception*'));
 
-        // Generator（简化，只注册存在性）
+        // Generator（基于 minicoro 协程）
         $this->symbols->addClass('tphp_class_Generator');
         $this->symbols->addClassName('Generator', 'tphp_class_Generator');
+        $this->symbols->addClassMethod('tphp_class_Generator', 'current',   new MethodInfo('t_var'));
+        $this->symbols->addClassMethod('tphp_class_Generator', 'key',       new MethodInfo('t_var'));
+        $this->symbols->addClassMethod('tphp_class_Generator', 'next',      new MethodInfo('t_var'));
+        $this->symbols->addClassMethod('tphp_class_Generator', 'send',      new MethodInfo('t_var', ['t_var']));
+        $this->symbols->addClassMethod('tphp_class_Generator', 'valid',     new MethodInfo('t_int'));
+        $this->symbols->addClassMethod('tphp_class_Generator', 'getReturn', new MethodInfo('t_var'));
+        $this->symbols->addClassMethod('tphp_class_Generator', 'rewind',    new MethodInfo('void'));
 
         // 注册 Exception 子类（常见异常）— 列表与 CodeGenerator::BUILTIN_EXCEPTION_SUBCLASSES 一致
         foreach (CodeGenerator::BUILTIN_EXCEPTION_SUBCLASSES as $name) {
             $cn = 'tphp_class_' . $name;
             $this->symbols->addClass($cn, 'tphp_class_Exception');
             $this->symbols->addClassName($name, $cn);
+            $this->symbols->addClassMethod($cn, '__construct', new MethodInfo('void', ['t_string'], false, 'public', 1, 1));
+            $this->symbols->addClassMethod($cn, '__destruct',  new MethodInfo('void'));
+            $this->symbols->addClassMethod($cn, 'getMessage',  new MethodInfo('t_string'));
         }
+
+        // 内置 Resource 类（资源对象化根，用户可 extends Resource）
+        //   注册与方法签名与 CodeGenerator 中保持一致
+        $this->symbols->addClass('tphp_class_Resource');
+        $this->symbols->addClassName('Resource', 'tphp_class_Resource');
+        $this->symbols->addClassMethod('tphp_class_Resource', '__construct', new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_Resource', '__destruct',  new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_Resource', 'getType',     new MethodInfo('t_int'));
+
+        // 内置 File 类（Resource 子类，替代 fopen resource）
+        $this->symbols->addClass('tphp_class_File', 'tphp_class_Resource');
+        $this->symbols->addClassName('File', 'tphp_class_File');
+        $this->symbols->addClassMethod('tphp_class_File', '__construct', new MethodInfo('void', ['t_string', 't_string']));
+        $this->symbols->addClassMethod('tphp_class_File', '__destruct',  new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_File', 'getType',     new MethodInfo('t_int'));
+        $this->symbols->addClassMethod('tphp_class_File', 'read',        new MethodInfo('t_string', ['t_int']));
+        $this->symbols->addClassMethod('tphp_class_File', 'write',       new MethodInfo('t_int', ['t_string']));
+        $this->symbols->addClassMethod('tphp_class_File', 'eof',         new MethodInfo('t_bool'));
+        $this->symbols->addClassMethod('tphp_class_File', 'close',       new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_File', 'isOpen',      new MethodInfo('t_bool'));
+
+        // 内置 Thread 类（基于 tinycthread 的线程封装）
+        $this->symbols->addClass('tphp_class_Thread');
+        $this->symbols->addClassName('Thread', 'tphp_class_Thread');
+        $this->symbols->addClassMethod('tphp_class_Thread', '__construct', new MethodInfo('void', ['t_callback']));
+        $this->symbols->addClassMethod('tphp_class_Thread', '__destruct',  new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_Thread', 'start',       new MethodInfo('t_bool'));
+        $this->symbols->addClassMethod('tphp_class_Thread', 'join',        new MethodInfo('t_int'));
+        $this->symbols->addClassMethod('tphp_class_Thread', 'detach',      new MethodInfo('t_bool'));
+        $this->symbols->addClassMethod('tphp_class_Thread', 'yield',       new MethodInfo('void', [], true));
+        $this->symbols->addClassMethod('tphp_class_Thread', 'sleep',       new MethodInfo('void', ['t_float'], true));
+        $this->symbols->addClassMethod('tphp_class_Thread', 'id',          new MethodInfo('t_int', [], true));
+
+        // 内置 Mutex 类
+        $this->symbols->addClass('tphp_class_Mutex');
+        $this->symbols->addClassName('Mutex', 'tphp_class_Mutex');
+        $this->symbols->addClassMethod('tphp_class_Mutex', '__construct', new MethodInfo('void', ['t_bool']));
+        $this->symbols->addClassMethod('tphp_class_Mutex', '__destruct',  new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_Mutex', 'lock',        new MethodInfo('t_bool'));
+        $this->symbols->addClassMethod('tphp_class_Mutex', 'tryLock',     new MethodInfo('t_bool'));
+        $this->symbols->addClassMethod('tphp_class_Mutex', 'unlock',      new MethodInfo('t_bool'));
+
+        // 内置 CondVar 类
+        $this->symbols->addClass('tphp_class_CondVar');
+        $this->symbols->addClassName('CondVar', 'tphp_class_CondVar');
+        $this->symbols->addClassMethod('tphp_class_CondVar', '__construct', new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_CondVar', '__destruct',  new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_CondVar', 'wait',        new MethodInfo('t_bool', ['tphp_class_Mutex*']));
+        $this->symbols->addClassMethod('tphp_class_CondVar', 'signal',      new MethodInfo('t_bool'));
+        $this->symbols->addClassMethod('tphp_class_CondVar', 'broadcast',   new MethodInfo('t_bool'));
+
+        // 内置 WaitGroup 类
+        $this->symbols->addClass('tphp_class_WaitGroup');
+        $this->symbols->addClassName('WaitGroup', 'tphp_class_WaitGroup');
+        $this->symbols->addClassMethod('tphp_class_WaitGroup', '__construct', new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_WaitGroup', '__destruct',  new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_WaitGroup', 'add',         new MethodInfo('void', ['t_int']));
+        $this->symbols->addClassMethod('tphp_class_WaitGroup', 'done',        new MethodInfo('void'));
+        $this->symbols->addClassMethod('tphp_class_WaitGroup', 'wait',        new MethodInfo('void'));
+
+        // 内置 Parallel 类（数据并行 API — 纯函数并行）
+        $this->symbols->addClass('tphp_class_Parallel');
+        $this->symbols->addClassName('Parallel', 'tphp_class_Parallel');
+        // for(int $n, callable $fn, int $threads = 0): void — 3 params, 1 default
+        $this->symbols->addClassMethod('tphp_class_Parallel', 'for', new MethodInfo('void', ['t_int', 't_callback', 't_int'], true, 'public', 1, 3));
+        // map(array $data, callable $fn, int $threads = 0): array — 3 params, 1 default
+        $this->symbols->addClassMethod('tphp_class_Parallel', 'map', new MethodInfo('t_array*', ['t_array*', 't_callback', 't_int'], true, 'public', 1, 3));
+
+        // 内置 AnnotationEntry 类（注解系统）
+        $this->symbols->addClass('tphp_class_AnnotationEntry');
+        $this->symbols->addClassName('AnnotationEntry', 'tphp_class_AnnotationEntry');
+        $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'data', 't_array*');
+        $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'type', 't_string');
+        $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'name', 't_string');
+        $this->symbols->addClassMethod('tphp_class_AnnotationEntry', '__construct', new MethodInfo('void', ['t_array*', 't_string', 't_string']));
+        $this->symbols->addClassMethod('tphp_class_AnnotationEntry', '__destruct',  new MethodInfo('void'));
     }
 
     /** 注册内置常量 */
@@ -353,15 +584,34 @@ class TypeChecker implements ASTVisitor
                 throw new \RuntimeException("Trait '{$traitName}' not found (used by class {$class->name})");
             }
 
-            // 复制方法（应用 insteadof 排除规则）
+            // 复制方法（应用 insteadof 排除规则 + as 别名规则）
+            // 注意：as 别名独立于 insteadof 排除 — 即使主方法被 insteadof 排除，
+            //       其 as 别名仍应创建（PHP 语义：as 是独立的方法复制操作）
             foreach ($trait->methods as $m) {
                 $mName = $m->name;
+                $excluded = isset($insteadof[$mName]) && in_array($traitName, $insteadof[$mName], true);
+
+                // as 别名规则：TraitName::method as alias
+                //   先于 insteadof 排除处理，确保别名独立创建
+                $asKey = "{$traitName}::{$mName}";
+                if (isset($asRules[$asKey]['alias'])) {
+                    $alias = $asRules[$asKey]['alias'];
+                    if (!isset($selfMethods[$alias])) {
+                        // 克隆方法并重命名（PHP 语义：as 创建别名副本，原方法仍可用除非同时用 insteadof）
+                        $aliasMethod = clone $m;
+                        // 反射修改 readonly 的 name 字段
+                        (new \ReflectionProperty($aliasMethod, 'name'))->setValue($aliasMethod, $alias);
+                        $newMethods[] = $aliasMethod;
+                        $selfMethods[$alias] = true;
+                    }
+                }
+
                 // 类自身已定义 → 跳过（类方法覆盖 trait 方法）
                 if (isset($selfMethods[$mName])) {
                     continue;
                 }
-                // insteadof 排除：当前 trait 在该方法的排除列表中 → 跳过
-                if (isset($insteadof[$mName]) && in_array($traitName, $insteadof[$mName], true)) {
+                // insteadof 排除：当前 trait 在该方法的排除列表中 → 跳过主方法
+                if ($excluded) {
                     continue;
                 }
 
@@ -378,18 +628,6 @@ class TypeChecker implements ASTVisitor
                 }
                 if (!$exists) {
                     $newMethods[] = $m;
-                }
-
-                // 处理 as 别名规则：TraitName::method as alias
-                $asKey = "{$traitName}::{$mName}";
-                if (isset($asRules[$asKey]['alias'])) {
-                    $alias = $asRules[$asKey]['alias'];
-                    // 克隆方法并重命名（PHP 语义：as 创建别名副本，原方法仍可用除非同时用 insteadof）
-                    $aliasMethod = clone $m;
-                    // 反射修改 readonly 的 name 字段
-                    (new \ReflectionProperty($aliasMethod, 'name'))->setValue($aliasMethod, $alias);
-                    $newMethods[] = $aliasMethod;
-                    $selfMethods[$alias] = true;
                 }
             }
 
@@ -983,9 +1221,10 @@ class TypeChecker implements ASTVisitor
     {
         $name = ltrim($node->name, '$');
         // 可变参数：在函数体内作为 t_array* 访问（元素类型由 type 字段追踪）
-        //   `...$args`（type='array'）或 `int ...$nums`（type='int'）均映射为 Type::$array
+        //   `...$args`（type='array'）或 `int ...$nums`（type='int'）均映射为 array<mixed>
+        //   （与通用 array 参数一致，保持 PHP 动态语义）
         if ($node->isVariadic) {
-            $this->declareVar($name, Type::$array);
+            $this->declareVar($name, Type::array(Type::$mixed));
             return;
         }
         // Task 2.13: 无类型标注的参数（type=''）经 resolveTypeFromString 返回 Type::$mixed，
@@ -1208,6 +1447,12 @@ class TypeChecker implements ASTVisitor
             $elemTypeName = substr($name, 6, -1);
             $elemType = $this->resolveTypeFromString($elemTypeName);
             return Type::array($elemType);
+        }
+
+        // 通用 array（无泛型参数）→ array<mixed>
+        // 保持 PHP 友好性：未注解的 array 参数/变量默认为 array<mixed>（万能数组）
+        if ($name === 'array') {
+            return Type::array(Type::$mixed);
         }
 
         // 处理 C.X* / C.X** 指针类型：剥离尾部 * 递归解析基础类型，再加指针标志
@@ -1575,6 +1820,13 @@ class TypeChecker implements ASTVisitor
                     return $this->resolveCTypeToType($sig['ret']);
                 }
             }
+            // 回退：查 varClosureExprs 表（TypeChecker 阶段 CodeGenerator 尚未注册闭包签名）
+            if (isset($this->varClosureExprs[$varName])) {
+                $closureExpr = $this->varClosureExprs[$varName];
+                if ($closureExpr->returnType !== '') {
+                    return $this->resolveTypeFromString($closureExpr->returnType);
+                }
+            }
         }
 
         // 2. 静态方法调用：ClassName::method() — callee 是 VariableExpr(ClassName)（无 $ 前缀）
@@ -1675,7 +1927,21 @@ class TypeChecker implements ASTVisitor
             return Type::$mixed;
         }
 
-        $cName = $this->typeToCName($objType);
+        // 优先使用 varClassCNames 表（$var = new X() 时记录的具体类 C 名）
+        //   checkNew 将所有 new X() 标记为 Type::$object，typeToCName 无法解析，
+        //   通过 varClassCNames 表可恢复具体类信息，正确查找方法返回类型
+        $cName = null;
+        if ($callee instanceof VariableExpr) {
+            $varName = ltrim($callee->name, '$');
+            if (isset($this->varClassCNames[$varName])) {
+                $cName = $this->varClassCNames[$varName];
+            }
+        }
+        // 回退：通过 inferredType 解析类 C 名
+        if ($cName === null) {
+            $cName = $this->typeToCName($objType);
+        }
+
         if ($cName !== null) {
             // 枚举方法
             $enumCName = $this->symbols->resolveEnumCName($cName);
@@ -1821,6 +2087,31 @@ class TypeChecker implements ASTVisitor
         // 声明变量到作用域（变量名 ltrim '$'）
         $varName = ltrim($node->varName, '$');
         $this->declareVar($varName, $varType);
+
+        // 跟踪 new X() 赋值的变量 → 类 C 名映射，供实例方法调用类型推导使用
+        //   checkNew 将所有 new X() 标记为 Type::$object，丢失了具体类信息；
+        //   此处补充记录类 C 名，inferMethodCallReturnType 通过此表查找方法
+        if ($node->expr instanceof NewExpr) {
+            $cName = $this->resolveClassCName($node->expr->className);
+            if ($cName !== '' && $this->symbols->hasClass($cName)) {
+                $this->varClassCNames[$varName] = $cName;
+            } else {
+                // 变量被重赋值为非 new 表达式，清除映射
+                unset($this->varClassCNames[$varName]);
+            }
+        } else {
+            // 变量被重赋值为非 new 表达式，清除映射
+            unset($this->varClassCNames[$varName]);
+        }
+
+        // 跟踪闭包赋值：$cb = function(): T {...} → 记录 ClosureExpr 节点，
+        //   供 $cb() 调用时直接从 AST returnType 字段推导返回类型
+        //   （CodeGenerator 的 addVarClosure 发生在 TypeChecker 之后，此表填补空窗）
+        if ($node->expr instanceof ClosureExpr) {
+            $this->varClosureExprs[$varName] = $node->expr;
+        } else {
+            unset($this->varClosureExprs[$varName]);
+        }
     }
 
     private function checkAssignPropStmt(AssignPropStmtNode $node): void
@@ -2155,35 +2446,28 @@ class TypeChecker implements ASTVisitor
             }
         }
 
-        // 空数组
-        if (empty($elemTypes)) {
-            if ($this->expectedType !== null && $this->expectedType->isArray()) {
-                // 有 expectedType 且是数组类型，用 expectedType
-                $node->inferredType = $this->expectedType;
-            } else {
-                // 万能数组
-                $node->inferredType = Type::$array;
+        // 泛型数组推导策略：默认 array<mixed>，显式声明才优化
+        // - 无 expectedType → array<mixed>（保持 PHP 友好性，现有代码无需修改）
+        // - expectedType 为 array<T>（T 非 mixed）→ 用 expectedType，验证元素类型一致
+        // - expectedType 为 array<mixed> → 用 array<mixed>
+        $expected = $this->expectedType;
+        if ($expected !== null && $expected->isArray() && $expected->elemType() !== null) {
+            $expectedElem = $expected->elemType();
+            // 类型严格性：显式声明 array<T>（T 非 mixed）时，元素类型必须匹配
+            if (!$expectedElem->isMixed()) {
+                foreach ($elemTypes as $et) {
+                    if (!$et->equals($expectedElem)) {
+                        $this->error("Cannot assign {$et} to array<{$expectedElem}> element");
+                        break;
+                    }
+                }
             }
+            $node->inferredType = $expected;
             return;
         }
 
-        // 检查所有元素类型是否相同
-        $first = $elemTypes[0];
-        $allSame = true;
-        foreach ($elemTypes as $t) {
-            if (!$t->equals($first)) {
-                $allSame = false;
-                break;
-            }
-        }
-
-        if ($allSame) {
-            // 所有元素类型相同 → array<元素类型>
-            $node->inferredType = Type::array($first);
-        } else {
-            // 类型不同 → array<mixed>（万能数组）
-            $node->inferredType = Type::array(Type::$mixed);
-        }
+        // 默认 array<mixed>（包括无 expectedType 或 expectedType 是通用 array 的情况）
+        $node->inferredType = Type::array(Type::$mixed);
     }
 
     private function checkVariable(VariableExpr $node): void
@@ -2209,6 +2493,17 @@ class TypeChecker implements ASTVisitor
         $this->checkExpr($node->right);
 
         $op = $node->operator;
+        if ($op === '=') {
+            // for-init 赋值: $i = expr → 声明循环变量类型为右式类型
+            //   （Parser 将 for ($i = 0; ...) 的 init 解析为 BinaryExpr($i, '=', 0)）
+            if ($node->left instanceof VariableExpr) {
+                $varName = ltrim($node->left->name, '$');
+                $varType = $node->right->inferredType ?? Type::$mixed;
+                $this->declareVar($varName, $varType);
+            }
+            $node->inferredType = $node->right->inferredType ?? Type::$mixed;
+            return;
+        }
         if ($op === '.') {
             // 字符串拼接 → string
             $node->inferredType = Type::$string;
@@ -2223,7 +2518,22 @@ class TypeChecker implements ASTVisitor
             $node->inferredType = Type::$bool;
         } else {
             // 算术/位运算：取左操作数类型，左为 null 时取右，都 null 时默认 int
-            $node->inferredType = $node->left->inferredType ?? $node->right->inferredType ?? Type::$int;
+            //   注意：t_var（mixed）操作数在 CodeGenerator.visitBinary 中按 unwrapIfMixed
+            //   解包为标量后运算，结果类型应为解包后的标量类型，而非 t_var。
+            //   两侧 t_var 按 t_int 解包；单侧 t_var 按另一侧类型解包。
+            $lt = $node->left->inferredType;
+            $rt = $node->right->inferredType;
+            $lMixed = $lt !== null && $lt->isMixed();
+            $rMixed = $rt !== null && $rt->isMixed();
+            if ($lMixed && $rMixed) {
+                $node->inferredType = Type::$int;
+            } elseif ($lMixed) {
+                $node->inferredType = $rt ?? Type::$int;
+            } elseif ($rMixed) {
+                $node->inferredType = $lt ?? Type::$int;
+            } else {
+                $node->inferredType = $lt ?? $rt ?? Type::$int;
+            }
         }
     }
 
@@ -2357,10 +2667,19 @@ class TypeChecker implements ASTVisitor
             $this->checkParam($param);
         }
         // 闭包 use 变量：[varName, type] 二元组数组
+        //   Parser 留空 type（''），TypeChecker 从外层作用域查变量类型；
+        //   若未找到（未声明），回退到 mixed
         foreach ($node->useVars as $useVar) {
             if (is_array($useVar) && isset($useVar[0], $useVar[1])) {
                 $varName = ltrim((string)$useVar[0], '$');
-                $type = $this->resolveTypeFromString((string)$useVar[1]);
+                $typeStr = (string)$useVar[1];
+                if ($typeStr !== '') {
+                    $type = $this->resolveTypeFromString($typeStr);
+                } else {
+                    // 从外层作用域查找变量类型
+                    $outerType = $this->lookupVar($varName);
+                    $type = $outerType ?? Type::$mixed;
+                }
                 $this->declareVar($varName, $type);
             }
         }

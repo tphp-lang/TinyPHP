@@ -86,6 +86,9 @@ class Type
     /** @var array<int,Type> idx => 元素类型（仅 FLAG_ARRAY 类型） */
     private static array $arrayElemMap = [];
 
+    /** @var array<string,int> intern key => idx（相同元素类型复用同一 idx） */
+    private static array $arrayIntern = [];
+
     public function __construct(int $idx, int $flags = 0)
     {
         $this->idx = $idx;
@@ -182,9 +185,47 @@ class Type
         if ($elem === null) {
             return self::$array;
         }
-        $idx = self::$nextArrayIdx++;
-        self::$arrayElemMap[$idx] = $elem;
+        // intern: 相同元素类型复用同一 idx，保证 array<int> === array<int>
+        $key = $elem->idx() . ':' . $elem->flags();
+        if (isset(self::$arrayIntern[$key])) {
+            $idx = self::$arrayIntern[$key];
+        } else {
+            $idx = self::$nextArrayIdx++;
+            self::$arrayElemMap[$idx] = $elem;
+            self::$arrayIntern[$key] = $idx;
+        }
         return new self($idx, self::FLAG_ARRAY);
+    }
+
+    /**
+     * 返回 array<T> 对应的 C 类型名（不含指针 *）。
+     * - array<int>    → t_arr_int
+     * - array<string> → t_arr_str
+     * - array<float>  → t_arr_float
+     * - array<bool>   → t_arr_bool
+     * - array<mixed>  → t_arr_var (= t_array)
+     * - array<array<T>> / array<Foo> → t_arr_ptr (元素为 void*)
+     * - 通用 array（无元素类型）→ t_arr_var
+     */
+    public static function arrayCType(?Type $elem): string
+    {
+        if ($elem === null) {
+            return 't_arr_var';
+        }
+        if ($elem->isMixed()) {
+            return 't_arr_var';
+        }
+        if ($elem->flags() !== 0) {
+            // 带修饰符（option/result/pointer）的元素用 ptr 数组承载
+            return 't_arr_ptr';
+        }
+        return match ($elem->idx()) {
+            self::IDX_INT    => 't_arr_int',
+            self::IDX_STRING => 't_arr_str',
+            self::IDX_FLOAT  => 't_arr_float',
+            self::IDX_BOOL   => 't_arr_bool',
+            default          => 't_arr_ptr', // 嵌套数组、对象数组等
+        };
     }
 
     /**
@@ -418,9 +459,10 @@ class TypeTable
             return 't_var';
         }
 
-        // 数组类型（带元素类型或通用数组）
+        // 数组类型：array<T> → t_arr_T*，通用 array → t_arr_var* (= t_array*)
         if ($type->isArray()) {
-            return 't_array*';
+            $elem = $type->elemType();
+            return Type::arrayCType($elem) . '*';
         }
 
         // 查找类型符号
