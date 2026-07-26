@@ -486,8 +486,8 @@ class CodeGenerator implements ASTVisitor
         'mt_rand'            => ['cName' => 'tphp_fn_mt_rand', 'modes' => ['direct', 'direct']],
         'random_int'         => ['cName' => 'tphp_fn_random_int', 'modes' => ['direct', 'direct']],
         'array_column'       => ['cName' => 'tphp_fn_array_column_str', 'modes' => ['direct', 'direct']],
-        'array_diff'         => ['cName' => 'tphp_fn_arr_diff', 'modes' => ['direct', 'direct']],
-        'array_intersect'    => ['cName' => 'tphp_fn_arr_intersect', 'modes' => ['direct', 'direct']],
+        'array_diff'         => ['cName' => 'tphp_fn_arr_diff', 'modes' => ['direct', 'direct'], 'variadic_n' => 'tphp_fn_arr_diff_n'],
+        'array_intersect'    => ['cName' => 'tphp_fn_arr_intersect', 'modes' => ['direct', 'direct'], 'variadic_n' => 'tphp_fn_arr_intersect_n'],
         'array_flip'         => ['cName' => 'tphp_fn_arr_flip', 'modes' => ['direct']],
         // ── 双参带默认值 ──
         'array_reverse'      => ['cName' => 'tphp_fn_arr_reverse', 'modes' => ['direct', 'direct'], 'defaults' => [1 => 'false']],
@@ -7230,6 +7230,28 @@ class CodeGenerator implements ASTVisitor
                 return "tphp_fn_array_keys_search($arrCode, $searchCode)";
             }
             return "tphp_fn_array_keys($arrCode)";
+        }
+
+        // array_diff/array_intersect 变参支持（variadic_n dispatch）：
+        //   PHP 原生签名：array_diff(array $base, array ...$others): array
+        //   2 参数：走原 direct 路径 tphp_fn_arr_diff(a1, a2)（零开销）
+        //   3+ 参数：第 1 参数单独传，第 2+ 参数打包为 t_array*（元素为 VAR_ARRAY）
+        //   调用 tphp_fn_arr_diff_n(base, packed_others) — 单次分配、单次遍历，符合 PHP 语义
+        //   元素类型追踪由 visitAssign 的 case 'array_diff'/'array_intersect' 从第一个源数组推导。
+        if (isset($info['variadic_n']) && count($node->args) > 2) {
+            $nName = $info['variadic_n'];
+            // 第 1 参数：协变转换为 t_array*
+            $baseCode = $this->arrayArgCode($node->args[0], $node->args[0]->accept($this));
+            // 第 2+ 参数：每个协变转换为 t_array* 后包装为 VAR_ARRAY，打包成一个 t_array*
+            $nPack = count($node->args) - 1;
+            $tmpArr = '_vn_' . (++$this->tmpVarCounter);
+            $code = "({ t_array* {$tmpArr} = tphp_fn_arr_create({$nPack}); tphp_rt_register((void*){$tmpArr}, 1);";
+            for ($i = 1; $i < count($node->args); $i++) {
+                $argArr = $this->arrayArgCode($node->args[$i], $node->args[$i]->accept($this));
+                $code .= " {$tmpArr} = tphp_fn_arr_push({$tmpArr}, VAR_ARRAY({$argArr}));";
+            }
+            $code .= " {$nName}({$baseCode}, {$tmpArr}); })";
+            return $code;
         }
 
         // max/min variadic 形式：多参数时打包成数组调用 tphp_fn_max/min(arr)

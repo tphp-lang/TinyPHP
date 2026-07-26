@@ -107,6 +107,108 @@ static t_array* tphp_fn_arr_intersect(t_array *a1, t_array *a2) {
     return r;
 }
 
+// 变参版本：array_diff(array $base, array ...$others): array
+//   others 是打包后的 t_array*，每个元素是 t_var(TYPE_ARRAY) 包裹的子数组
+//   语义：从 base 中排除出现在任意 others 数组中的元素
+//   实现：合并所有 others 元素到一个 intSet + strSet，一次遍历 base（O(n + Σm)）
+static t_array* tphp_fn_arr_diff_n(t_array *base, t_array *others) {
+    t_array *r = tphp_fn_arr_create(base ? base->length : 8);
+    if (!r) { tp_throw("arr_diff(): out of memory"); return NULL; }
+    if (!base) return r;
+    tphp_rt_register((void*)r, 1);
+    if (!others || others->length == 0) {
+        // 无 others：直接复制 base
+        for (int i = 0; i < base->length; i++)
+            r = tphp_fn_arr_push(r, base->entries[i].val);
+        return r;
+    }
+    // 合并所有 others 元素到统一集合
+    t_array *intSet = tphp_fn_arr_create(8);
+    t_array *strSet = tphp_fn_arr_create(8);
+    if (intSet) tphp_rt_register((void*)intSet, 1);
+    if (strSet) tphp_rt_register((void*)strSet, 1);
+    for (int k = 0; k < others->length; k++) {
+        if (others->entries[k].val.type != TYPE_ARRAY) continue;
+        t_array *oa = others->entries[k].val.value._array;
+        if (!oa) continue;
+        for (int j = 0; j < oa->length; j++) {
+            if (oa->entries[j].val.type == TYPE_INT) {
+                char buf[32];
+                int n = snprintf(buf, sizeof(buf), "%lld", (long long)oa->entries[j].val.value._int);
+                intSet = tphp_fn_arr_set_str(intSet, (t_string){buf, n}, VAR_INT(1));
+            } else if (oa->entries[j].val.type == TYPE_STRING) {
+                strSet = tphp_fn_arr_set_str(strSet, oa->entries[j].val.value._string, VAR_INT(1));
+            }
+        }
+    }
+    // 一次遍历 base，排除集合中的元素
+    for (int i = 0; i < base->length; i++) {
+        if (!_arr_diff_lookup(intSet, strSet, base->entries[i].val))
+            r = tphp_fn_arr_push(r, base->entries[i].val);
+    }
+    return r;
+}
+
+// 变参版本：array_intersect(array $base, array ...$others): array
+//   语义：保留 base 中同时出现在所有 others 数组中的元素
+//   实现：为每个 other 构建独立集合，base 元素必须在所有集合中存在
+static t_array* tphp_fn_arr_intersect_n(t_array *base, t_array *others) {
+    t_array *r = tphp_fn_arr_create(base ? base->length : 8);
+    if (!r) { tp_throw("arr_intersect(): out of memory"); return NULL; }
+    if (!base) return r;
+    tphp_rt_register((void*)r, 1);
+    if (!others || others->length == 0) {
+        // 无 others：直接复制 base（PHP 语义：array_intersect($a) = $a）
+        for (int i = 0; i < base->length; i++)
+            r = tphp_fn_arr_push(r, base->entries[i].val);
+        return r;
+    }
+    int k = others->length;
+    // 为每个 other 构建独立集合（intSet[k], strSet[k]）
+    t_array **intSets = (t_array**)malloc(sizeof(t_array*) * k);
+    t_array **strSets = (t_array**)malloc(sizeof(t_array*) * k);
+    if (!intSets || !strSets) {
+        if (intSets) free(intSets);
+        if (strSets) free(strSets);
+        tp_throw("arr_intersect(): out of memory");
+        return r;
+    }
+    for (int s = 0; s < k; s++) {
+        intSets[s] = strSets[s] = NULL;
+        if (others->entries[s].val.type != TYPE_ARRAY) continue;
+        t_array *oa = others->entries[s].val.value._array;
+        if (!oa) continue;
+        intSets[s] = tphp_fn_arr_create(8);
+        strSets[s] = tphp_fn_arr_create(8);
+        if (intSets[s]) tphp_rt_register((void*)intSets[s], 1);
+        if (strSets[s]) tphp_rt_register((void*)strSets[s], 1);
+        for (int j = 0; j < oa->length; j++) {
+            if (oa->entries[j].val.type == TYPE_INT) {
+                char buf[32];
+                int n = snprintf(buf, sizeof(buf), "%lld", (long long)oa->entries[j].val.value._int);
+                intSets[s] = tphp_fn_arr_set_str(intSets[s], (t_string){buf, n}, VAR_INT(1));
+            } else if (oa->entries[j].val.type == TYPE_STRING) {
+                strSets[s] = tphp_fn_arr_set_str(strSets[s], oa->entries[j].val.value._string, VAR_INT(1));
+            }
+        }
+    }
+    // base 元素必须在所有集合中存在
+    for (int i = 0; i < base->length; i++) {
+        t_var v = base->entries[i].val;
+        bool in_all = true;
+        for (int s = 0; s < k; s++) {
+            if (!_arr_diff_lookup(intSets[s], strSets[s], v)) {
+                in_all = false;
+                break;
+            }
+        }
+        if (in_all) r = tphp_fn_arr_push(r, v);
+    }
+    free(intSets);
+    free(strSets);
+    return r;
+}
+
 static t_array* tphp_fn_arr_column(t_array *a, t_string ck) {
     t_array *r = tphp_fn_arr_create(a?a->length:8);
     if (!r) { tp_throw("arr_column(): out of memory"); return NULL; }
