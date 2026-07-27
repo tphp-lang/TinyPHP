@@ -5,9 +5,24 @@ declare(strict_types=1);
 // ═══════════════════════════════════════════════════════════════
 // Type — 类型表示层
 //   参考 vlang 的 Type = u32 设计：
-//   - 低 24 位 (0 ~ 0xFFFFFF) 为类型索引 (idx)
-//   - 高 8 位 (bits 24-31) 为标志位 (flags)
+//   - 低 24 位 (0 ~ 0xFFFFFF) 为类型索引 (idx)，支持 16M 种类型
+//     （spec 要求 65536，本实现更强，不需要缩减）
+//   - 高 8 位 (bits 24-31) 为标志位 (flags)，8 个独立 flag 位
+//   - pointerLevel 字段（0-255，独立于 idx 和 flags）：多级指针层数
+//     spec 要求支持 255 级指针（ref/deref 操作）
 //   不可变值对象，通过静态工厂方法创建复合类型
+//
+// 位布局总览：
+//   idx          : bits 0-23   (24 bits, 0 ~ 0xFFFFFF)
+//   flags        : bits 24-31  (8 bits, 位掩码)
+//   pointerLevel : 独立字段     (0-255, 不复用 flag 位)
+//
+// 内置类型 idx (0-17)：
+//   0=void 1=int 2=float 3=string 4=bool 5=null 6=array
+//   7=mixed 8=object 9=callback 10=resource 11=never
+//   12=C.int 13=C.double 14=C.char 15=C.void 16=C.voidptr 17=C.FILE
+// 用户类型 idx: 256+ （由 TypeTable 分配）
+// 数组复合类型 idx: 0x10000+ （interna 复用）
 // ═══════════════════════════════════════════════════════════════
 
 class Type
@@ -20,6 +35,7 @@ class Type
     public const FLAG_ARRAY   = 1 << 27;  // 数组类型（带元素类型）
     public const FLAG_MIXED   = 1 << 28;  // mixed 类型
     public const FLAG_C_LANG  = 1 << 29;  // C 语言类型（C.int, C.char* 等）
+    public const FLAG_READONLY = 1 << 30; // readonly 类型
 
     // ═══ 预定义类型索引常量（低 24 位，0 ~ 255 为内置类型） ═══
     public const IDX_VOID      = 0;
@@ -57,6 +73,8 @@ class Type
     // ═══ 实例字段（不可变） ═══
     private int $idx;
     private int $flags;
+    /** 指针层数（0-255，独立于 idx 和 flags；ref/deref 操作） */
+    private int $pointerLevel = 0;
 
     /** @var array<int,string> idx => name（内置类型名映射，用于 __toString） */
     private static array $builtinNames = [
@@ -89,10 +107,11 @@ class Type
     /** @var array<string,int> intern key => idx（相同元素类型复用同一 idx） */
     private static array $arrayIntern = [];
 
-    public function __construct(int $idx, int $flags = 0)
+    public function __construct(int $idx, int $flags = 0, int $pointerLevel = 0)
     {
         $this->idx = $idx;
         $this->flags = $flags;
+        $this->pointerLevel = $pointerLevel;
     }
 
     public function idx(): int
@@ -112,7 +131,35 @@ class Type
 
     public function isPointer(): bool
     {
-        return $this->hasFlag(self::FLAG_POINTER);
+        return $this->pointerLevel > 0 || $this->hasFlag(self::FLAG_POINTER);
+    }
+
+    /** 返回指针层数（0-255；0 表示非指针，除非设置了 FLAG_POINTER） */
+    public function pointerLevel(): int
+    {
+        return $this->pointerLevel;
+    }
+
+    /**
+     * 返回指针层数 +1 的新 Type（不可变，不修改原对象）。
+     * 用于 ref 取址操作。最大 255。
+     */
+    public function ref(): Type
+    {
+        $level = $this->pointerLevel < 255 ? $this->pointerLevel + 1 : 255;
+        return new self($this->idx, $this->flags, $level);
+    }
+
+    /**
+     * 返回指针层数 -1 的新 Type（不可变）。
+     * 若 pointerLevel 已为 0，返回原对象（避免无意义 deref）。
+     */
+    public function deref(): Type
+    {
+        if ($this->pointerLevel <= 0) {
+            return $this;
+        }
+        return new self($this->idx, $this->flags, $this->pointerLevel - 1);
     }
 
     public function isOption(): bool
@@ -153,12 +200,27 @@ class Type
     public function isScalar(): bool
     {
         if ($this->flags !== 0) return false;
+        if ($this->pointerLevel > 0) return false;
         return in_array($this->idx, [self::IDX_INT, self::IDX_FLOAT, self::IDX_BOOL, self::IDX_NULL], true);
+    }
+
+    /** ?T 可选类型别名（spec 提到 isNullable） */
+    public function isNullable(): bool
+    {
+        return $this->isOption();
+    }
+
+    /** readonly 类型检查 */
+    public function isReadOnly(): bool
+    {
+        return $this->hasFlag(self::FLAG_READONLY);
     }
 
     public function equals(Type $other): bool
     {
-        return $this->idx === $other->idx && $this->flags === $other->flags;
+        return $this->idx === $other->idx
+            && $this->flags === $other->flags
+            && $this->pointerLevel === $other->pointerLevel;
     }
 
     // ──────────────────────────────────────────────────────────
@@ -167,17 +229,18 @@ class Type
 
     public static function pointer(Type $base): Type
     {
-        return new self($base->idx, $base->flags | self::FLAG_POINTER);
+        // 向后兼容：等价于 $base->ref()（pointerLevel +1）
+        return $base->ref();
     }
 
     public static function option(Type $base): Type
     {
-        return new self($base->idx, $base->flags | self::FLAG_OPTION);
+        return new self($base->idx, $base->flags | self::FLAG_OPTION, $base->pointerLevel);
     }
 
     public static function result(Type $base): Type
     {
-        return new self($base->idx, $base->flags | self::FLAG_RESULT);
+        return new self($base->idx, $base->flags | self::FLAG_RESULT, $base->pointerLevel);
     }
 
     public static function array(?Type $elem = null): Type
@@ -186,7 +249,7 @@ class Type
             return self::$array;
         }
         // intern: 相同元素类型复用同一 idx，保证 array<int> === array<int>
-        $key = $elem->idx() . ':' . $elem->flags();
+        $key = $elem->idx() . ':' . $elem->flags() . ':' . $elem->pointerLevel();
         if (isset(self::$arrayIntern[$key])) {
             $idx = self::$arrayIntern[$key];
         } else {
@@ -215,8 +278,8 @@ class Type
         if ($elem->isMixed()) {
             return 't_arr_var';
         }
-        if ($elem->flags() !== 0) {
-            // 带修饰符（option/result/pointer）的元素用 ptr 数组承载
+        if ($elem->flags() !== 0 || $elem->pointerLevel() > 0) {
+            // 带修饰符（option/result/pointer）或多级指针的元素用 ptr 数组承载
             return 't_arr_ptr';
         }
         return match ($elem->idx()) {
@@ -294,7 +357,11 @@ class Type
         if ($this->hasFlag(self::FLAG_RESULT)) {
             $base = "{$base}|Exception";
         }
-        if ($this->hasFlag(self::FLAG_POINTER)) {
+        // 多级指针：根据 pointerLevel 输出对应数量的 '*'
+        if ($this->pointerLevel > 0) {
+            $base .= str_repeat('*', $this->pointerLevel);
+        } elseif ($this->hasFlag(self::FLAG_POINTER)) {
+            // 向后兼容：旧式 FLAG_POINTER 输出单个 '*'
             $base = "{$base}*";
         }
 
@@ -473,8 +540,12 @@ class TypeTable
 
         $cType = $sym->cType;
 
-        // 指针类型：在 C 类型后加 '*'
-        if ($type->isPointer()) {
+        // 指针类型：根据 pointerLevel 追加对应数量的 '*'
+        $ptrLevel = $type->pointerLevel();
+        if ($ptrLevel > 0) {
+            $cType .= str_repeat('*', $ptrLevel);
+        } elseif ($type->hasFlag(Type::FLAG_POINTER)) {
+            // 向后兼容：旧式 FLAG_POINTER 追加单个 '*'
             $cType .= '*';
         }
 

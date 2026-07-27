@@ -13,7 +13,7 @@ declare(strict_types=1);
 // ============================================================
 
 /** TinyPHP 版本号 */
-const TPHP_VERSION = '0.2.0-beta.5';
+const TPHP_VERSION = '0.2.0-beta.7';
 
 spl_autoload_register(function (string $class): void {
     $baseDir = __DIR__ . '/src';
@@ -29,6 +29,13 @@ require_once __DIR__ . '/src/Lexer.php';
 require_once __DIR__ . '/src/Parser.php';
 require_once __DIR__ . '/src/CodeGenerator.php';
 require_once __DIR__ . '/src/Compiler.php';
+// SSA 路径相关模块（仅 --ssa 模式使用，但 require_once 开销可忽略）
+require_once __DIR__ . '/src/AST/FlatAst.php';
+require_once __DIR__ . '/src/AST/FlatAstConverter.php';
+require_once __DIR__ . '/src/SSA/SSA.php';
+require_once __DIR__ . '/src/SSA/SSABuilder.php';
+require_once __DIR__ . '/src/SSA/SSAOptPass.php';
+require_once __DIR__ . '/src/SSA/SSAToCGenerator.php';
 
 // --- Parse arguments ---
 $options = getopt('f:o:hv', ['help', 'os:', 'arch:', 'debug', 'version']);
@@ -315,6 +322,9 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     // --debug: enable #debug directive and print compile command
     // (manual parse, because getopt stops at first positional argument)
     $debugMode = in_array('--debug', $argv, true);
+
+    // --ssa: 启用 SSA 中间表示路径（FlatAst → SSA → 优化 → C）
+    $ssaMode = in_array('--ssa', $argv, true);
 
     // Collect known enum names (for cross-file references)
     $knownEnumNames = [];
@@ -773,9 +783,50 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         }
     }
 
-    $gen   = new CodeGenerator();
-    $gen->isShared = $isShared;
-    $cFile = $gen->generate($merged, $entryFile, $outDir);
+    // ── 代码生成阶段 ──
+    //   --ssa 模式：FlatAst → SSA → 优化 → C
+    //   默认模式：ProgramNode → CodeGenerator → C
+    if ($ssaMode) {
+        if ($debugMode) echo "[*] SSA mode enabled\n";
+
+        // 1. Node AST → FlatAst
+        $converter = new FlatAstConverter();
+        $flatAst = $converter->convert($merged);
+
+        // 2. FlatAst → SSAModule（遍历 ProgramNode 子节点，构建每个 FunctionNode 的 SSA）
+        $ssaModule = new SSAModule();
+        $programIdx = $flatAst->root;
+        $childCount = $flatAst->childCount($programIdx);
+        for ($i = 0; $i < $childCount; $i++) {
+            $childIdx = $flatAst->child($programIdx, $i);
+            if ($flatAst->nodes[$childIdx]['kind'] === NodeKind::FunctionNode) {
+                $builder = new SSABuilder();
+                $ssaFunc = $builder->build($flatAst, $childIdx);
+                // 用 newFunction 创建占位项后替换为实际 SSAFunction
+                // （SSABuilder.build 内部已设置 entryBlockId / values / blocks）
+                $fid = $ssaModule->newFunction($ssaFunc->name, $ssaFunc->paramTypes, $ssaFunc->retType);
+                $ssaModule->functions[$fid] = $ssaFunc;
+            }
+        }
+
+        // 3. SSA 优化（对每个函数运行 fixpoint 优化）
+        $optPass = new SSAOptPass();
+        foreach ($ssaModule->functions as $ssaFunc) {
+            $optPass->runUntilFixpoint($ssaFunc);
+        }
+
+        // 4. SSA → C 降低
+        $toC = new SSAToCGenerator();
+        $cCode = $toC->generate($ssaModule, $entryFile);
+
+        if (!is_dir($outDir)) mkdir($outDir, 0777, true);
+        $cFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '.c';
+        file_put_contents($cFile, $cCode);
+    } else {
+        $gen   = new CodeGenerator();
+        $gen->isShared = $isShared;
+        $cFile = $gen->generate($merged, $entryFile, $outDir);
+    }
 
     echo "       [YES] {$cFile}\n";
 
@@ -1571,6 +1622,7 @@ Options:
   -arch <arch>      target architecture: x86_64, aarch64 (default: host)
   -shared           compile as shared library (.dll/.so/.dylib)
   --debug           print full compile command
+  --ssa             enable SSA IR pipeline (FlatAst → SSA → optimize → C)
   -v, --version     show version and exit
   -h, --help        show help
 

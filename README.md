@@ -361,7 +361,7 @@ class Main {
 
 ### 基础类型桥接
 
-```
+```text
 PHP → C:                   C → PHP:
 c_int($x)   → int32_t      php_int(v)       → t_int
 c_str($s)   → const char*  php_str(s)       → t_string (深拷贝，复用 C 内存)
@@ -597,7 +597,7 @@ PHP 8.5.1 vs TinyPHP（GCC -O2），详见 [BENCHMARK_RESULTS.md](BENCHMARK_RESU
 
 ## 编译流水线
 
-```
+```text
 PHP → Lexer → Token[] → Parser → AST → CodeGenerator → .c → 编译器 → 二进制
                                     include/  (C 运行时头文件)
 ```

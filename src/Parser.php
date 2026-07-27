@@ -3423,4 +3423,27 @@ class Parser
         if ($this->handleCtEndif())   return true;
         return false;
     }
+
+    // ============================================================
+    // FlatAst 适配入口
+    //
+    // 调用现有 parse() 产出 Node 树，再用 FlatAstConverter 转换为 FlatAst。
+    // 不修改任何现有 parse* 方法，TypeChecker/CodeGenerator 仍消费 Node 对象。
+    // 后续 Task 3/4 迁移消费者到 FlatAst 后，可再回头直接化 Parser。
+    // ============================================================
+
+    /**
+     * 解析当前 token 流并返回扁平化 AST。
+     *
+     * 实现细节：先调用 parse() 得到 ProgramNode（Node 树），
+     * 再通过 FlatAstConverter 递归转换为 FlatAst。
+     *
+     * @return FlatAst 扁平化 AST（root 已设置为 ProgramNode 索引）
+     */
+    public function parseToFlatAst(): FlatAst
+    {
+        $program = $this->parse();
+        $converter = new FlatAstConverter();
+        return $converter->convert($program);
+    }
 }

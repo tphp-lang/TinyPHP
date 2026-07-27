@@ -405,7 +405,7 @@ try {
 
 ### 驱动抽象架构
 
-```
+```text
 ext/pdo/
   pdo_driver.h    — 公共接口（pdo_driver_t 结构体 + 注册/查找 + 包装函数）
   pdo.h           — SQLite 驱动实现（填充函数指针表 + 自动注册）
