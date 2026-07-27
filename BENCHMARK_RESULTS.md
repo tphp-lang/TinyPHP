@@ -353,7 +353,7 @@ N=10K, SQLite `:memory:` 数据库
 
 `builtin.h` (原 1500+ 行) → 拆分为 8 个 `std/` 文件:
 
-```
+```text
 include/std/
 ├── output.h     — echo, var_dump, exit, isset, empty
 ├── type.h       — is_*, intval, floatval, gettype, getenv
@@ -367,7 +367,7 @@ include/std/
 
 ### include/os/ 系统层
 
-```
+```text
 include/os/
 ├── times.h      — time, date, sleep, hrtime, microtime, strtotime, mktime
 ├── json.h       — json_encode, json_decode, json_validate
@@ -378,7 +378,7 @@ include/os/
 
 ### include/object/ 对象系统
 
-```
+```text
 include/object/
 ├── object.h     — COS 对象系统 (16B 头 + struct 嵌套继承 + 对象复用池)
 ├── exception.h  — 内置 Exception 类
@@ -390,7 +390,7 @@ include/object/
 
 ### include/compat/ 跨平台兼容层
 
-```
+```text
 include/compat/
 ├── tinycthread.h — tinycthread v1.1 优化版 (SRWLOCK/CONDITION_VARIABLE/SpinLock/WaitGroup)
 └── tls.h         — TCC+Windows TLS 兼容层 (Windows TLS API 实现 _Thread_local)

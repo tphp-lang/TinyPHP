@@ -192,7 +192,7 @@ php tphp.php thread_demo.php --debug
 
 ## 4. 开发流程
 
-```
+```text
 改代码 → 跑相关测试 → 全量 CI → PR
          ↓                ↓
     php tphp.php       php .github/scripts/run_tests.php
@@ -242,7 +242,7 @@ A: `compat.h` 处理差异。TCC 不报隐式声明，GCC/Clang 报。用 `-cc g
 
 **Q: `#debug` 怎么写？**
 
-```
+```text
 #debug text      → 精确匹配
 #debug           → 预期空行
 #debug ~ text    → 近似值（时间/时区相关），不判错

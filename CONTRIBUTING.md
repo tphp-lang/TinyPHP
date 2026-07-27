@@ -6,7 +6,7 @@
 
 ## 1. 架构总览
 
-```
+```text
 tphp.php                         CLI 入口（参数解析、文件收集、AST 合并、编译器调用）
 tphp / tphp.cmd                  Linux/macOS / Windows 快捷入口
 
@@ -93,7 +93,7 @@ include/                         C 运行时头文件（全 static inline）
 
 节点层次（重点）：
 
-```
+```text
 StmtNode（抽象）
 ├── EchoStmtNode          # echo
 ├── ReturnStmtNode        # return
@@ -204,7 +204,7 @@ ExprNode（抽象，含 line/column）
 
 ---
 
-## 4. 测试框架（#debug）
+## 4. 测试框架（`#debug`）
 
 ### 4.1 --debug 模式
 
@@ -214,7 +214,7 @@ ExprNode（抽象，含 line/column）
 php tphp.php test/var/var.php --debug
 ```
 
-### 4.2 #debug 指令
+### 4.2 `#debug` 指令
 
 在 PHP 测试文件顶部用 `#debug` 声明预期输出：
 
@@ -237,7 +237,7 @@ class Main {
 
 ### 4.3 输出标记
 
-```
+```text
 [YES] expected    — 完全匹配
 [NO]  expected... — 不匹配（expected vs got）
 [REF] expected... — ~ 前缀，仅参考（actual: ...）
@@ -335,7 +335,7 @@ TinyPHP 支持**按需引入扩展**，设计理念对标 PHP 的 extension。�
 
 **目录结构：**
 
-```
+```text
 ext/
 ├── demo/               ← PHPC 示例（.php + .c 混写）
 │   ├── demo.h

@@ -149,7 +149,7 @@ foo($nums);  // 自动调用 tphp_fn_arr_int_to_var，O(n) 转换
 
 ## 1. 顶层声明（Top-level）
 
-```
+```ebnf
 program:
     program statement_top
   | %empty
@@ -175,7 +175,7 @@ statement_top:
 
 ## 2. 命名空间 / Use
 
-```
+```ebnf
 namespace_decl:
     'namespace' name ';'                    ✅
   | 'namespace' name '{' statement_top* '}' ✅ (多文件模式不支持)
@@ -201,7 +201,7 @@ fn_use:
 
 ## 3. 类声明
 
-```
+```ebnf
 class_decl:
     modifier* 'class' IDENTIFIER extends? implements? '{' member* '}'   ✅ 部分
 
@@ -234,7 +234,7 @@ trait_adaptation:
 
 ### 3.1 属性
 
-```
+```ebnf
 property_decl:
     visibility 'readonly'? 'static'? type IDENTIFIER ';'            ✅ (type required)
   | visibility 'readonly'? 'static'? type IDENTIFIER '=' expr ';'  ✅ (type required; readonly 禁止默认值)
@@ -296,7 +296,7 @@ type:
 
 ### 3.2 方法
 
-```
+```ebnf
 method_decl:
     visibility 'function' IDENTIFIER '(' params ')' return_type? body   ✅
   | visibility 'static' 'function' IDENTIFIER '(' params ')' return_type? body  ✅ (部分)
@@ -313,7 +313,7 @@ return_type:
 
 ### 3.3 类常量
 
-```
+```ebnf
 class_const_decl:
     visibility 'const' type IDENTIFIER '=' expr ';'  ✅ (type required, no auto-deduction)
 
@@ -327,7 +327,7 @@ class_const_decl:
 
 ### 3.4 Trait
 
-```
+```ebnf
 trait_decl:
     'trait' IDENTIFIER '{' (method_decl | property_decl | class_const_decl)* '}'   ✅
 ```
@@ -358,7 +358,7 @@ trait_decl:
 
 ### 3.5 匿名类
 
-```
+```ebnf
 anon_class_tail:
     'extends' name? 'implements' name (',' name)*? '{' member* '}'   ✅
   | 'implements' name (',' name)* '{' member* '}'                    ✅
@@ -402,7 +402,7 @@ anon_class_expr:
 
 ## 4. 枚举
 
-```
+```ebnf
 enum_decl:
     'enum' IDENTIFIER ':' backing_type '{' case* '}'   ✅
 
@@ -418,7 +418,7 @@ enum_case:
 
 ## 5. 函数
 
-```
+```ebnf
 function_decl:
     'function' IDENTIFIER '(' params ')' return_type? body   ✅
 
@@ -435,7 +435,7 @@ use_vars:
 
 ## 6. 参数
 
-```
+```ebnf
 params:
     param (',' param)* ','?   ✅ (尾部逗号支持)
 
@@ -488,7 +488,7 @@ sum(1, ...$tail, 2);   // 编译期合并为单次分配
 
 ## 7. 语句
 
-```
+```ebnf
 statement:
     expr ';'                   ✅
   | echo_stmt                  ✅
@@ -519,7 +519,7 @@ statement:
 
 ### 7.1 具体语法
 
-```
+```ebnf
 echo_stmt:
     'echo' expr (',' expr)* ';'   ✅
 
@@ -600,7 +600,7 @@ defer_stmt:
 
 ### 8.1 运算符优先级（从低到高）
 
-```
+```ebnf
 expr:
     yield_expr       ✅
   | pipe_expr        ✅
@@ -710,7 +710,7 @@ postfix:
 
 ### 8.2 基础表达式
 
-```
+```ebnf
 primary:
     INT_LIT          ✅ → t_int(int64_t)
        └─ 支持十进制 / 0x十六进制 / 0b二进制 / 0o八进制 / 下划线分隔 1_000_000
@@ -782,7 +782,7 @@ primary:
 
 ## 10. Magical / Special Tokens
 
-```
+```text
 __LINE__              ✅
 __FILE__              ✅
 __DIR__               ✅
@@ -801,7 +801,7 @@ __TRAIT__             ❌
 
 ## 11. 预处理器指令（TinyPHP 扩展）
 
-```
+```ebnf
 #directive:
     '#include' '"' file '"'   ✅ (生成 #include "file" 到 C 代码)
   | '#include' '<' file '>'   ✅ (系统头文件)
@@ -875,7 +875,7 @@ function init(): void {
 
 ## 12. C 互操作扩展（TinyPHP 扩展）
 
-```
+```ebnf
 c_call:
     'C->' IDENTIFIER '(' args ')'   ✅ (直接 C 函数调用)
   | 'C->' IDENTIFIER                ✅ (直接 C 常量/枚举/宏访问，无括号)
@@ -1079,7 +1079,7 @@ TinyPHP 注解采用**纯编译期消费**策略（方向 A）：注解在编译
 
 ### 14.2 语法
 
-```
+```ebnf
 // 注解类型声明：附着于全局/命名空间 const
 annotation_decl:
     '#[Attribute' '(' param_list ')' ']' 'const' IDENTIFIER '=' '[' ']' ';'
