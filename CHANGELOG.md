@@ -8,6 +8,18 @@
 
 ### 新增
 
+- **cURL 扩展**（`ext/curl/`）：纯 phpc 实现 HTTP/HTTPS 客户端，**不依赖 libcurl C 库**。35 个函数 + 690 个常量 + 6 个类（CurlHandle/CurlMultiHandle/CurlShareHandle/CurlSharePersistentHandle/CURLFile/CURLStringFile）。
+  - **协议**：仅 HTTP/HTTPS（其他协议返回 CURLE_UNSUPPORTED_PROTOCOL），TLS/SSL 复用 ext/openssl（mbedTLS 3.6.6）
+  - **Socket**：复用 ext/stream 的 socket 抽象
+  - **认证**：仅 CURLAUTH_BASIC
+  - **文件上传**：支持 multipart/form-data（CURLFile 磁盘文件 + CURLStringFile 内存字符串）
+  - **功能**：curl_init/exec/setopt/setopt_array/getinfo/error/errno/strerror/version/escape/unescape/copy_handle/reset/pause/upkeep + curl_file_create + curl_multi_getcontent
+  - **Stub**：curl_multi_add_handle/remove_handle/exec/select/info_read/setopt 和 curl_share_setopt/init_persistent 抛异常（不支持并行/共享）
+  - **chunked 解码**：支持 Transfer-Encoding: chunked 响应解码
+  - **重定向**：支持 FOLLOWLOCATION + MAXREDIRS 重定向跟随
+  - 测试：`test/curl/curl_unit.php`（201 用例，无网络）+ `test/curl/curl_stub_test.php`（38 用例，无网络）+ `test/curl/curl_basic.php`（15 段 17 用例，@skip 需网络）
+  - 三编译器验证：TCC/GCC 16.1.0/Clang 22.1.4 全部编译通过
+
 - **`array<T>` 泛型数组类型系统**（`types.h`/`array.h`/`Type.php`/`TypeChecker.php`/`CodeGenerator.php`）：
   - **特化数组结构**：`array<T>` 在编译期单态化为独立 C 类型（`t_arr_int`/`t_arr_str`/`t_arr_float`/`t_arr_bool`/`t_arr_var`/`t_arr_ptr`），元素紧凑存储（`array<int>` 的 value 是 8 字节 `t_int`，比 `array<mixed>` 的 24 字节 `t_var` 节省 67%）
   - **协变转换机制**：`array<T>` 传给 `array<mixed>` 参数时自动调用 `tphp_fn_arr_{int|str|float|bool}_to_var`（O(n) 开销，重新分配 + 元素包装为 `t_var`）。内置数组函数通过 `arrayArgCode` 统一协变转换调用
@@ -35,6 +47,11 @@
 - **`stream_socket_accept` 错误处理契约**（`stream.h`）：真正的错误（accept 失败等）抛异常供用户 try-catch 捕获，EAGAIN/超时等非错误返回 `-1`，符合 AOT 错误处理原则（用户可通过异常捕获真正的错误，而非静默返回 false）。
 - **macOS `-framework` 链接支持**：TCC 不识别 macOS 的 `-framework X` 语法（会把 `X` 当作输入文件，报错 `file 'OpenGL' not found`）。`tphp.php` 在 #flag 处理中自动把 `-framework X` 转换为 `-Wl,-framework,X`（透传给系统 `ld`），`-F path` 同理转换为 `-Wl,-F,path`。`-Wl,` 开头的 token 分离到 `$lateLinkFlags`（链接器选项放在源文件之后，遵循单遍扫描顺序）
 - **gcc/clang 下特化排序/洗牌函数指针类型不兼容**（`array.h`）：`_TPHP_ARR_TYPED_SORT` 和 `_TPHP_ARR_TYPED_SHUFFLE` 宏在特化数组（`t_arr_int*`/`t_arr_str*` 等）上直接调用 `arr_stridx_free`/`arr_intidx_free`，但这两个函数接收 `t_array*`，gcc/clang 严格检查 `-Wincompatible-pointer-types` 报错。修复：调用前显式 cast 为 `(t_array*)`。特化数组结构与 `t_array` 前 6 个字段布局完全一致，cast 安全。TCC 比较宽松未报错，本地测试未发现。CI Windows gcc 全部 247 个测试编译失败，clang 因超时被取消。
+- **`isset`/`empty` 返回类型推导缺失**（`CodeGenerator.php`）：`inferCallReturnType()` 未覆盖 `isset`/`empty`，导致使用这些函数的表达式触发 "Unknown function return type" 编译错误。修复：在类型推导路径中添加 `isset`/`empty` 返回 `t_bool` 的处理。
+- **mbedTLS `mbedtls_test_get_last_error` 声明顺序**（`openssl.h`）：函数在声明前被调用，导致 gcc/clang 隐式非静态声明与后续 `static inline` 声明冲突。修复：将声明移到使用之前。
+- **mbedTLS `mbedtls_ssl_get_ciphersuite` 参数类型错误**（`openssl.h`）：Clang 22 将 int→pointer 转换视为 error。修复：直接调用 `mbedtls_ssl_get_ciphersuite(&c->ssl)` 获取名称，而非先取 ID 再传指针。
+- **gcc/clang 静态库归档命令不兼容**（`tphp.php`）：TCC 支持 `-ar cr` 创建静态库，但 gcc/clang 不识别 `-ar` 选项。修复：TCC 保持原逻辑，gcc/clang 改用系统 `ar` 命令（优先从编译器 bin 目录查找）。
+- **mbedTLS `aesni.c` 源文件缺失**（`tphp.php`）：`mbedtls_config.h` 在非 TCC 的 x86_64 平台启用 `MBEDTLS_AESNI_C`，但源文件列表未包含 `aesni.c`，导致 gcc/clang 链接时 `mbedtls_aesni_*` 符号未定义。修复：在 `$mbedtlsSrcFiles` 中添加 `aesni.c`。
 
 ## [0.2.0-beta.3] — 2026-07-19
 

@@ -15,6 +15,9 @@ class CodeGenerator implements ASTVisitor
     private array $varTypes = [];
     /** 变量可空性追踪：varName → true 表示可能为 null（来自 nullsafe ?-> 或 tryFrom()） */
     private array $varNullable = [];
+    /** 类型窄化追踪：varName → tphp_class_X（来自 if ($v instanceof X) 分支内）
+     *  用于 t_var 变量在 instanceof 分支内访问属性时生成正确的 C 类型转换 */
+    private array $narrowedTypes = [];
     /** 当前方法名字（用于 __METHOD__） */
     private string $currentMethodName = '';
     /** P2-6: 当前 PHP 函数名（全局函数用，方法用 currentMethodName） */
@@ -168,6 +171,8 @@ class CodeGenerator implements ASTVisitor
         'preg_last_error_msg' => 't_string', 'php_str' => 't_string', 'php_str_clone' => 't_string',
         'cstr_to_string' => 't_string',
         'random_bytes' => 't_string', 'gettype' => 't_string',
+        // ── 文件路径 (内置) ──
+        'dirname' => 't_string', 'basename' => 't_string',
         // ── iconv (内置) ──
         'iconv' => 't_string', 'iconv_substr' => 't_string',
         'iconv_mime_encode' => 't_string', 'iconv_mime_decode' => 't_string',
@@ -241,7 +246,7 @@ class CodeGenerator implements ASTVisitor
         'openssl_error_string' => 't_string', 'openssl_ssl_get_cipher_name' => 't_string',
         'openssl_ssl_get_version' => 't_string', 'openssl_encrypt' => 't_string',
         'openssl_decrypt' => 't_string', 'openssl_random_pseudo_bytes' => 't_string',
-        'openssl_digest' => 't_string',
+        'openssl_digest' => 't_string', 'openssl_ssl_read' => 't_string',
         'openssl_ctx_use_certificate_file' => 't_bool',
         'openssl_ctx_use_private_key_file' => 't_bool',
         'openssl_ssl_set_fd' => 't_bool', 'openssl_ssl_shutdown' => 't_bool',
@@ -2041,6 +2046,9 @@ class CodeGenerator implements ASTVisitor
                 if ($prop->type === 'string' && $prop->default instanceof StringLiteralExpr) {
                     // 字符串默认值：深拷贝到堆
                     $o[] = $this->ind("self->{$pname} = tphp_rt_str_dup({$def});");
+                } elseif ($prop->type === 'mixed' && $prop->default instanceof NullLiteralExpr) {
+                    // mixed（t_var）属性 null 默认值：需 VAR_NULL() 包装
+                    $o[] = $this->ind("self->{$pname} = VAR_NULL();");
                 } else {
                     $o[] = $this->ind("self->{$pname} = {$def};");
                 }
@@ -4007,7 +4015,12 @@ class CodeGenerator implements ASTVisitor
                 }
             }
             $objKey = ($expr->object instanceof VariableExpr) ? self::varName($expr->object->name) : '';
-            $objType = $this->varTypes[$objKey] ?? '';
+            // 优先使用类型窄化（instanceof 分支内）
+            if (isset($this->narrowedTypes[$objKey])) {
+                $objType = $this->narrowedTypes[$objKey];
+            } else {
+                $objType = $this->varTypes[$objKey] ?? '';
+            }
             // varTypes 存的类类型带 *（与 mapType 一致），hasClass/getClassPropType 期望不带 *
             if ($objType !== '' && str_ends_with($objType, '*')) {
                 $objType = rtrim($objType, '*');
@@ -4063,6 +4076,13 @@ class CodeGenerator implements ASTVisitor
             }
         }
         if ($expr instanceof ArrayAccessExpr) {
+            // 字符串字符访问 $str[$i]：变量类型为 t_string 时，返回 t_string
+            //   与 visitArrayAccess 的 tphp_fn_substr 代码生成保持一致
+            if ($expr->array instanceof VariableExpr
+                && ($this->varTypes[self::varName($expr->array->name)] ?? '') === 't_string'
+                && !($expr->index instanceof StringLiteralExpr)) {
+                return 't_string';
+            }
             // 优先：泛型数组快速路径（array<int>, array<string>, array<float>, array<bool>）
             //   返回 t_arr_{suffix}* 对应的元素类型，避免被默认分支误判为 t_int
             //   场景：explode() 返回 array<string>，$parts[0] 应推导为 t_string 而非 t_int
@@ -4305,6 +4325,8 @@ class CodeGenerator implements ASTVisitor
         // 内置函数返回类型 — 查注册表
         if ($expr->callee === null) {
             $name = $expr->name;
+            // 语言构造：isset / empty → t_bool
+            if ($name === 'isset' || $name === 'empty') return 't_bool';
             // 前缀规则：is_* / ctype_* → t_bool
             if (str_starts_with($name, 'is_')) return 't_bool';
             if (str_starts_with($name, 'ctype_')) return 't_bool';
@@ -4520,12 +4542,36 @@ class CodeGenerator implements ASTVisitor
         $target = $node->target->accept($this);
         $val = $node->value->accept($this);
         $propType = $this->getPropType($node->target);
+        // 源值为 t_var（mixed）时，需按目标属性类型解包
+        $srcType = $this->inferType($node->value);
+        $isSrcTVar = ($srcType === 't_var');
         if ($propType === 't_string') {
+            if ($isSrcTVar) {
+                // mixed → string：用 tphp_fn_strval 提取字符串
+                return "tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup(tphp_fn_strval({$val}));";
+            }
             return "tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup({$val});";
         }
         if ($propType === 't_array*') {
             // 属性持有数组引用：retain 新值，释放旧值（防止外层作用域释放后属性悬空）
+            if ($isSrcTVar) {
+                // mixed → array：从 t_var 解包 t_array* 指针
+                $arrVal = "({$val}).value._array";
+                return "tphp_fn_arr_retain({$arrVal}); if ({$target} != NULL) tphp_fn_arr_free({$target}); {$target} = {$arrVal};";
+            }
             return "tphp_fn_arr_retain({$val}); if ({$target} != NULL) tphp_fn_arr_free({$target}); {$target} = {$val};";
+        }
+        // mixed → 标量属性：按属性类型解包 t_var
+        if ($isSrcTVar) {
+            if ($propType === 't_int') {
+                return "{$target} = VAR_AS_INT({$val});";
+            }
+            if ($propType === 't_float') {
+                return "{$target} = (VAR_AS_FLOAT({$val}));";
+            }
+            if ($propType === 't_bool') {
+                return "{$target} = tphp_fn_boolval({$val});";
+            }
         }
         return "{$target} = {$val};";
     }
@@ -5007,9 +5053,14 @@ class CodeGenerator implements ASTVisitor
             }
         }
         $objKey = ($pa->object instanceof VariableExpr) ? self::varName($pa->object->name) : '';
-        $objType = ($objKey === '$this' || $objKey === 'self')
-            ? $this->className
-            : ($this->varTypes[$objKey] ?? '');
+        // 优先使用类型窄化（instanceof 分支内）
+        if (isset($this->narrowedTypes[$objKey])) {
+            $objType = $this->narrowedTypes[$objKey];
+        } else {
+            $objType = ($objKey === '$this' || $objKey === 'self')
+                ? $this->className
+                : ($this->varTypes[$objKey] ?? '');
+        }
         // 去掉尾部 *（指针类型）以匹配 SymbolTable key
         $objType = rtrim($objType, '*');
         // 静态属性访问: ClassName::$prop — 解析类名
@@ -6318,6 +6369,28 @@ class CodeGenerator implements ASTVisitor
         $rCode = $node->right->accept($this);
         $lt = $this->inferType($node->left);
         $rt = $this->inferType($node->right);
+
+        // instanceof → tp_obj_is_a check（必须在 t_var 解包之前处理，
+        //   因为 instanceof 需要对象指针而非 int 解包）
+        if ($node->operator === 'instanceof') {
+            // t_var 左操作数：提取对象指针（.value._object）
+            if ($lt === 't_var') {
+                $lCode = '(' . $lCode . ').value._object';
+            }
+            // 右操作数为类名（裸标识符，非 $variable）时，直接使用 tphp_class_<Name>
+            if ($node->right instanceof VariableExpr && !str_starts_with($node->right->name, '$')) {
+                $className = $node->right->name;
+                return 'tp_obj_is_a(' . $lCode . ', &_class_tphp_class_' . $className . ')';
+            }
+            $rCN = $node->right instanceof VariableExpr ? rtrim($this->varTypes[self::varName($node->right->name)] ?? '', '*') : '';
+            $rCN = ($rCN === '' && $node->right instanceof StringLiteralExpr) ? $node->right->value : $rCN;
+            // If right is a class name identifier (not variable), look up in classRefName
+            if ($node->right instanceof AST\IdentifierExpr ?? null) {
+                // Actually in PHP $obj instanceof ClassName, ClassName is parsed as a class reference
+            }
+            return 'tp_obj_is_a(' . $lCode . ', &_class_' . $rCode . ')';
+        }
+
         // 对 t_var 操作数解包
         // 两侧均为 t_var 时，算术/比较运算默认按 int 解包（PHP 数值语义）
         if ($lt === 't_var') {
@@ -6336,17 +6409,6 @@ class CodeGenerator implements ASTVisitor
         if ($rt === 't_string' && in_array($lt, ['t_int', 't_float', 't_bool'], true)) {
             $rCode = 'tphp_rt_parse_int(' . $rCode . ')';
         }
-
-        // instanceof → tp_obj_is_a check
-        if ($node->operator === 'instanceof') {
-            $rCN = $node->right instanceof VariableExpr ? rtrim($this->varTypes[self::varName($node->right->name)] ?? '', '*') : '';
-            $rCN = ($rCN === '' && $node->right instanceof StringLiteralExpr) ? $node->right->value : $rCN;
-            // If right is a class name identifier (not variable), look up in classRefName
-            if ($node->right instanceof AST\IdentifierExpr ?? null) {
-                // Actually in PHP $obj instanceof ClassName, ClassName is parsed as a class reference
-            }
-            return 'tp_obj_is_a(' . $lCode . ', &_class_' . $rCode . ')';
-        }
         // Map PHP === / !== to C == / !=
         $cOp = match ($node->operator) {
             '==='  => '==',
@@ -6361,7 +6423,33 @@ class CodeGenerator implements ASTVisitor
         $cond = $node->condition->accept($this);
         $then = $node->thenExpr->accept($this);
         $else = $node->elseExpr->accept($this);
+        // 类型对齐：当一个分支为 t_var（mixed），另一个为标量类型时，
+        //   将 t_var 解包为对应标量类型，避免 C 条件表达式类型不匹配
+        //   场景：$port = $handle->port != 0 ? $handle->port : $urlInfo["port"];
+        //   $handle->port 为 t_int，$urlInfo["port"] 为 t_var → 需解包
+        $thenType = $this->inferType($node->thenExpr);
+        $elseType = $this->inferType($node->elseExpr);
+        if ($thenType === 't_var' && $elseType !== 't_var') {
+            $then = $this->unwrapTVarToType($then, $elseType);
+        } elseif ($elseType === 't_var' && $thenType !== 't_var') {
+            $else = $this->unwrapTVarToType($else, $thenType);
+        }
         return '(' . $cond . ' ? ' . $then . ' : ' . $else . ')';
+    }
+
+    /**
+     * 将 t_var 表达式解包为目标标量类型
+     *   用于三元表达式、赋值等需要类型对齐的场景
+     */
+    private function unwrapTVarToType(string $code, string $targetType): string
+    {
+        return match ($targetType) {
+            't_int'    => "VAR_AS_INT({$code})",
+            't_float'  => "VAR_AS_FLOAT({$code})",
+            't_bool'   => "tphp_fn_boolval({$code})",
+            't_string' => "tphp_fn_strval({$code})",
+            default    => $code,
+        };
     }
 
     public function visitNullCoalesce(NullCoalesceExpr $node): string
@@ -6756,6 +6844,9 @@ class CodeGenerator implements ASTVisitor
         'floor'     => ['t_float'],
         'ceil'      => ['t_float'],
         'round'     => ['t_float'],
+        // 文件路径（内置）
+        'dirname'   => ['t_string', 't_int'],
+        'basename'  => ['t_string', 't_string'],
     ];
 
     /**
@@ -8142,6 +8233,10 @@ class CodeGenerator implements ASTVisitor
             } else {
                 $pTypes = $fnInfo !== null ? $fnInfo->paramTypes : [];
             }
+            // 回退：内置函数参数类型映射（dirname/basename 等未注册到 SymbolTable 的内置函数）
+            if (empty($pTypes) && isset(self::$builtinFnParamCtypes[$n])) {
+                $pTypes = self::$builtinFnParamCtypes[$n];
+            }
             if (empty($a)) return "{$fnName}()";
             // byRef 参数：形参是指针时要正确传参
             $callArgs = [];
@@ -8159,6 +8254,17 @@ class CodeGenerator implements ASTVisitor
                     }
                 } else {
                     $aCode = $arg->accept($this);
+                    // t_var (mixed) 参数：自动包裹 VAR_XXX
+                    if ($ct === 't_var') {
+                        $aCode = $this->wrapTvarAssign($arg, $aCode);
+                    } elseif (in_array($ct, ['t_string', 't_int', 't_float', 't_bool'], true)) {
+                        // 标量参数：实参为 t_var（mixed）时，按参数类型解包
+                        //   场景：dirname($urlInfo["path"]) — $urlInfo["path"] 为 t_var，参数声明 string
+                        $argType = $this->inferType($arg);
+                        if ($argType === 't_var') {
+                            $aCode = $this->unwrapTVarToType($aCode, $ct);
+                        }
+                    }
                     $callArgs[] = $isParamByRef ? '&' . $aCode : $aCode;
                 }
             }
@@ -8194,6 +8300,13 @@ class CodeGenerator implements ASTVisitor
                     if ($argCn !== $ptCn && $this->isSubclassOf($argCn, $ptCn)) {
                         $code = "({$pt}){$code}";
                     }
+                }
+            } elseif (in_array($pt, ['t_string', 't_int', 't_float', 't_bool'], true)) {
+                // 标量参数：实参为 t_var（mixed）时，按参数类型解包
+                //   场景：dirname($urlInfo["path"]) — $urlInfo["path"] 为 t_var，参数声明 string
+                $argType = $this->inferType($a);
+                if ($argType === 't_var') {
+                    $code = $this->unwrapTVarToType($code, $pt);
                 }
             }
             $args[] = $code;
@@ -9095,6 +9208,23 @@ class CodeGenerator implements ASTVisitor
         }
         $obj = $node->object->accept($this);
         $prop = ltrim($node->property, '$');
+        // t_var 对象属性访问：需提取对象指针 .value._object
+        //   场景1：foreach ($handle->postFields as $v) — $v 是 t_var，含 CURLFile 对象
+        //          $v->postname → $v.value._object->_parent.postname（未知具体类型，走默认路径）
+        //   场景2：if ($v instanceof CURLFile) { $v->postname } — 类型窄化后
+        //          $v->postname → ((tphp_class_CURLFile*)($v).value._object)->postname
+        if ($node->object instanceof VariableExpr && str_starts_with($node->object->name, '$')) {
+            $vn = self::varName($node->object->name);
+            if (($this->varTypes[$vn] ?? '') === 't_var') {
+                if (isset($this->narrowedTypes[$vn])) {
+                    // 类型窄化：instanceof 分支内，cast 到具体类指针
+                    $cn = $this->narrowedTypes[$vn];
+                    $obj = "(({$cn}*)({$obj}).value._object)";
+                } else {
+                    $obj = "({$obj}).value._object";
+                }
+            }
+        }
         // #cstruct 原生字段访问：$p->x → ((Point*)$p)->x
         //   当对象类型为已声明的 C 结构体指针时，直接 cast 访问字段
         if ($node->object instanceof VariableExpr && str_starts_with($node->object->name, '$')) {
@@ -9135,9 +9265,15 @@ class CodeGenerator implements ASTVisitor
         if ($obj === 'self') {
             $objCN = $this->className;
         } elseif ($node->object instanceof VariableExpr) {
-            $objType = $this->varTypes[self::varName($node->object->name)] ?? '';
-            // tphp_class_Dog* → tphp_class_Dog
-            $objCN = rtrim($objType, '*');
+            $vn = self::varName($node->object->name);
+            // 优先使用类型窄化（instanceof 分支内）
+            if (isset($this->narrowedTypes[$vn])) {
+                $objCN = $this->narrowedTypes[$vn];
+            } else {
+                $objType = $this->varTypes[$vn] ?? '';
+                // tphp_class_Dog* → tphp_class_Dog
+                $objCN = rtrim($objType, '*');
+            }
         }
         // Property Hook: get 拦截 — 不在 hook 体内时调用 getter
         if (!$this->inHookBody && $objCN !== '' && !ctype_upper($prop[0] ?? '')) {
@@ -9234,7 +9370,12 @@ class CodeGenerator implements ASTVisitor
         }
         $name = 'TPHP_CONST_' . strtoupper($node->name);
         // 有声明类型时校验一致性，并以声明类型注册；无则按字面量推导
+        // UnaryExpr（如 -1、~1）按操作数字面量类型推导
+        $isUnary = $node->value instanceof UnaryExpr;
         $litCType = self::$litTypeMap[$node->value::class] ?? null;
+        if ($isUnary && $litCType === null) {
+            $litCType = self::$litTypeMap[$node->value->expr::class] ?? null;
+        }
         if ($node->type !== null) {
             $declCType = self::mapType($node->type);
             if ($litCType !== null && $declCType !== $litCType) {
@@ -9262,6 +9403,28 @@ class CodeGenerator implements ASTVisitor
         }
         if ($node->value instanceof BoolLiteralExpr) {
             return '#define ' . $name . ' ' . ($node->value->value ? 'true' : 'false');
+        }
+        // UnaryExpr（如 -1、~1）：编译期求值为字面量
+        if ($isUnary) {
+            $operand = $node->value->expr;
+            $op = $node->value->operator;
+            if ($operand instanceof IntLiteralExpr) {
+                $iv = (int)$operand->value;
+                if ($op === '-') {
+                    return '#define ' . $name . ' ' . (-$iv);
+                }
+                if ($op === '~') {
+                    return '#define ' . $name . ' ' . (~$iv);
+                }
+            }
+            if ($operand instanceof FloatLiteralExpr) {
+                $fv = (float)$operand->value;
+                if ($op === '-') {
+                    $rv = -$fv;
+                    return '#define ' . $name . ' ' .
+                        (($rv == (float)(int)$rv) ? sprintf('%.1f', $rv) : rtrim(rtrim(sprintf('%.15g', $rv), '0'), '.'));
+                }
+            }
         }
         return '/* const ' . $node->name . ' */';
     }
@@ -9980,22 +10143,96 @@ class CodeGenerator implements ASTVisitor
         $this->scopeDepth++;
         $lines = [];
         $lines[] = "if ({$cond}) {";
+        // 类型窄化：if ($v instanceof X) 分支内，$v 视为 tphp_class_X* 类型
+        $narrowed = $this->applyTypeNarrowing($node->condition);
+        // 保存 declaredVars 快照，使兄弟分支（elseif/else）各自独立声明变量
+        //   场景：if (hasFile) { foreach($k=>$v) } else { foreach($k=>$v) }
+        //   无快照恢复时，$k 在 then 分支声明后，else 分支不会重复声明 → C 编译报 undeclared
+        $savedDeclared = $this->declaredVars;
         foreach ($node->thenBody as $s) $lines[] = $this->ind($s->accept($this));
+        $this->restoreTypeNarrowing($narrowed);
+        $thenDeclared = $this->declaredVars;
         $lines[] = '}';
         foreach ($node->elseifs as $eif) {
             $econd = $eif->condition->accept($this);
             $econd = $this->unwrapIfMixed($eif->condition, $econd, 't_bool');
             $lines[] = "else if ({$econd}) {";
+            $this->declaredVars = $savedDeclared;
+            $narrowed = $this->applyTypeNarrowing($eif->condition);
             foreach ($eif->body as $s) $lines[] = $this->ind($s->accept($this));
+            $this->restoreTypeNarrowing($narrowed);
+            $thenDeclared = array_merge($thenDeclared, $this->declaredVars);
             $lines[] = '}';
         }
         if (!empty($node->elseBody)) {
             $lines[] = 'else {';
+            $this->declaredVars = $savedDeclared;
             foreach ($node->elseBody as $s) $lines[] = $this->ind($s->accept($this));
+            $thenDeclared = array_merge($thenDeclared, $this->declaredVars);
             $lines[] = '}';
         }
+        // 合并所有分支的声明（PHP 函数级作用域，C 块作用域变量在 if 后仍可见）
+        $this->declaredVars = array_merge($savedDeclared, $thenDeclared);
         $this->scopeDepth--;
         return implode("\n", $lines);
+    }
+
+    /**
+     * 检测 if 条件中的 instanceof 模式，应用类型窄化
+     *   场景：if ($v instanceof CURLFile) { ... $v->postname ... }
+     *   效果：在分支内将 $v 的窄化类型设为 tphp_class_CURLFile
+     *   仅处理简单 instanceof 表达式（非 || 联合），&& 链中各 instanceof 也生效
+     * @return array 保存的旧窄化值，供 restoreTypeNarrowing 恢复
+     */
+    private function applyTypeNarrowing(ExprNode $cond): array
+    {
+        // 递归找 && 链中的 instanceof 子表达式（&& 左右侧均可窄化）
+        $allSaved = [];
+        $expr = $cond;
+        while ($expr instanceof BinaryExpr && $expr->operator === '&&') {
+            $allSaved = array_merge($allSaved, $this->applyTypeNarrowingSingle($expr->left));
+            $expr = $expr->right;
+        }
+        $allSaved = array_merge($allSaved, $this->applyTypeNarrowingSingle($expr));
+        return $allSaved;
+    }
+
+    /**
+     * 单个 instanceof 表达式的类型窄化
+     * @return array [varName => [old => oldVal, new => newVal]]
+     */
+    private function applyTypeNarrowingSingle(ExprNode $expr): array
+    {
+        if (!($expr instanceof BinaryExpr) || $expr->operator !== 'instanceof') {
+            return [];
+        }
+        if (!($expr->left instanceof VariableExpr) || !str_starts_with($expr->left->name, '$')) {
+            return [];
+        }
+        // 右操作数为类名（裸标识符，非 $variable）
+        if (!($expr->right instanceof VariableExpr) || str_starts_with($expr->right->name, '$')) {
+            return [];
+        }
+        $className = $expr->right->name;
+        $cn = 'tphp_class_' . $className;
+        $vn = self::varName($expr->left->name);
+        $saved = [$vn => ['old' => $this->narrowedTypes[$vn] ?? null, 'new' => $cn]];
+        $this->narrowedTypes[$vn] = $cn;
+        return $saved;
+    }
+
+    /**
+     * 恢复类型窄化到应用前的状态
+     */
+    private function restoreTypeNarrowing(array $saved): void
+    {
+        foreach ($saved as $vn => $info) {
+            if ($info['old'] === null) {
+                unset($this->narrowedTypes[$vn]);
+            } else {
+                $this->narrowedTypes[$vn] = $info['old'];
+            }
+        }
     }
 
     public function visitWhileStmt(WhileStmtNode $node): string
@@ -10398,6 +10635,11 @@ class CodeGenerator implements ASTVisitor
             $key = $this->propArrElemKey($node->array);
             if ($key !== null && isset($this->propArrElementTypes[$key])) {
                 $elemType = $this->propArrElementTypes[$key];
+            } else {
+                // 属性数组未注册元素类型时，默认 t_var（mixed 语义）
+                //   PHP 数组为动态类型，默认 t_int 会导致对象/字符串元素被错误解包
+                //   场景：$handle->postFields 含 CURLFile/CURLStringFile/string
+                $elemType = 't_var';
             }
         } elseif ($node->array instanceof CallExpr
             && $node->array->name === 'cases'
@@ -11216,6 +11458,12 @@ class CodeGenerator implements ASTVisitor
         // .= 是 PHP 字符串拼接赋值，C 无对应操作符，转译为 tphp_rt_str_concat
         if ($node->operator === '.=') {
             $vs = $this->castToStr($node->value);
+            // t_var 目标：需先解包为 t_string 参与 concat，再用 VAR_STRING 包装回去
+            //   场景：$path = $urlInfo["path"]; $path .= "?"; — $path 是 t_var
+            $tt = $this->inferType($node->target);
+            if ($tt === 't_var') {
+                return "{$t} = VAR_STRING(tphp_rt_str_concat(tphp_fn_strval({$t}), {$vs}))";
+            }
             return "{$t} = tphp_rt_str_concat({$t}, {$vs})";
         }
         // ??= 是 null 合并赋值：仅在目标为 null 时才赋值（惰性求值右式）
@@ -11621,6 +11869,16 @@ class CodeGenerator implements ASTVisitor
             }
         }
 
+        // 字符串字符访问 $str[$i]：变量类型为 t_string 时，用 substr 取单字符
+        //   不能走数组 getter（tphp_fn_arr_get_int_str 期望 t_array*）
+        if ($node->array instanceof VariableExpr
+            && ($this->varTypes[self::varName($node->array->name)] ?? '') === 't_string'
+            && !($node->index instanceof StringLiteralExpr)) {
+            $arr = $node->array->accept($this);
+            $idx = $node->index->accept($this);
+            return "tphp_fn_substr({$arr}, (t_int)({$idx}), 1)";
+        }
+
         $arr  = $node->array->accept($this);
         $idx  = $node->index->accept($this);
         $vn   = $node->array instanceof VariableExpr ? self::varName($node->array->name) : '';
@@ -11798,7 +12056,7 @@ class CodeGenerator implements ASTVisitor
                 // 未注册元素类型的 array 属性（如 public array $nums = []）：
                 //   回退到 TypeChecker 的 inferredType，若为 mixed 则元素是 t_var
                 //   避免 inferType 推导 t_var 但生成 typed getter 导致类型不匹配
-                $inferred = $this->inferredTypeToCType($node->inferredType);
+                $inferred = $node->inferredType !== null ? $this->inferredTypeToCType($node->inferredType) : null;
                 if ($inferred === 't_var') {
                     $et = 't_var';
                 }
@@ -12538,7 +12796,22 @@ class CodeGenerator implements ASTVisitor
     /** 查询方法第 $idx 个参数的 C 类型 */
     private function getMethodParamType(CallExpr $call, int $idx): string
     {
-        if ($call->callee === null) return '';
+        // 独立函数调用：查 SymbolTable 的函数参数类型
+        if ($call->callee === null) {
+            $fnName = self::mangleCName($call->name);
+            $fnInfo = $this->symbols->getFunc('tphp_fn_' . $fnName);
+            if ($fnInfo === null) {
+                $fnInfo = $this->symbols->getFunc('tphp_fn_' . $call->name);
+            }
+            if ($fnInfo !== null) {
+                return $fnInfo->paramTypes[$idx] ?? '';
+            }
+            // 回退：内置函数参数类型映射（dirname/basename 等未注册到 SymbolTable 的内置函数）
+            if (isset(self::$builtinFnParamCtypes[$call->name][$idx])) {
+                return self::$builtinFnParamCtypes[$call->name][$idx];
+            }
+            return '';
+        }
         // 查找方法所属类
         $cn = '';
         if ($call->callee instanceof VariableExpr) {

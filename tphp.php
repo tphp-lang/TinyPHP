@@ -1077,7 +1077,7 @@ if (is_file($cFile) && strpos(file_get_contents($cFile), 'openssl/src/openssl.h'
         'platform.c', 'platform_util.c', 'constant_time.c', 'error.c',
         'memory_buffer_alloc.c', 'version.c',
         'md.c', 'md5.c', 'sha1.c', 'sha256.c', 'sha512.c',
-        'aes.c', 'cipher.c', 'cipher_wrap.c',
+        'aes.c', 'aesni.c', 'cipher.c', 'cipher_wrap.c',
         'gcm.c', 'ccm.c', 'chacha20.c', 'chachapoly.c', 'poly1305.c',
         'cmac.c', 'block_cipher.c',
         'entropy.c', 'entropy_poll.c', 'ctr_drbg.c', 'hmac_drbg.c',
@@ -1177,12 +1177,31 @@ if (is_file($cFile) && strpos(file_get_contents($cFile), 'openssl/src/openssl.h'
         }
         if ($compileOk) {
             // 创建静态库 libmbedtls.a
-            $arCmd = sprintf(
-                '"%s" -ar cr "%s" %s 2>&1',
-                $ccExe,
-                str_replace('\\', '/', $mbedtlsLibPath),
-                implode(' ', array_map(fn($f) => '"' . str_replace('\\', '/', $f) . '"', $objFiles))
-            );
+            if ($isTCC) {
+                // TCC: use built-in -ar option
+                $arCmd = sprintf(
+                    '"%s" -ar cr "%s" %s 2>&1',
+                    $ccExe,
+                    str_replace('\\', '/', $mbedtlsLibPath),
+                    implode(' ', array_map(fn($f) => '"' . str_replace('\\', '/', $f) . '"', $objFiles))
+                );
+            } else {
+                // gcc/clang: use system ar (TCC's -ar option is not supported by gcc/clang)
+                $arExe = 'ar';
+                $ccBinDir = dirname($ccExe);
+                if ($ccBinDir !== '' && $ccBinDir !== '.') {
+                    $arCandidate = $ccBinDir . DIRECTORY_SEPARATOR . (PHP_OS_FAMILY === 'Windows' ? 'ar.exe' : 'ar');
+                    if (is_file($arCandidate)) {
+                        $arExe = $arCandidate;
+                    }
+                }
+                $arCmd = sprintf(
+                    '"%s" cr "%s" %s 2>&1',
+                    str_replace('\\', '/', $arExe),
+                    str_replace('\\', '/', $mbedtlsLibPath),
+                    implode(' ', array_map(fn($f) => '"' . str_replace('\\', '/', $f) . '"', $objFiles))
+                );
+            }
             $arOutput = [];
             $arRet = 0;
             $savedCwd3 = getcwd();

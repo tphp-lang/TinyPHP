@@ -318,7 +318,7 @@ class Parser
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected constant name')->lexeme;
         $this->declaredConsts[$name] = $this->currentNamespace;
         $this->consume(TokenType::EQUALS, 'Expected =');
-        $value = $this->parsePrimary(); // 只接受字面量
+        $value = $this->parseUnary(); // 接受字面量及一元表达式（如 -1）
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
         return new ConstNode($name, $value, $this->currentNamespace, $type, null, null, $attrDecl);
     }
@@ -1893,7 +1893,7 @@ class Parser
 
         $name = $this->consume(TokenType::IDENTIFIER, 'Expected constant name')->lexeme;
         $this->consume(TokenType::EQUALS, 'Expected =');
-        $value = $this->parsePrimary(); // 只接受字面量
+        $value = $this->parseUnary(); // 接受字面量及一元表达式（如 -1）
         $this->consume(TokenType::SEMICOLON, 'Expected ;');
         return new ConstStmtNode($name, $value, $type);
     }
@@ -2847,6 +2847,8 @@ class Parser
             TokenType::YIELD_KW, // Thread::yield()
             TokenType::SLEEP,    // Thread::sleep()
             TokenType::FOR_KW,   // Parallel::for()
+            // 可见性关键字也可作为属性/方法名（如 $obj->private）
+            TokenType::PUBLIC_KW, TokenType::PRIVATE_KW,
         ];
         if (!in_array($tok->type, $valid, true)) {
             $this->error("Expected method name, got '{$tok->lexeme}'");

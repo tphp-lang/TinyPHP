@@ -203,7 +203,7 @@ class TypeChecker implements ASTVisitor
         'openssl_error_string' => 'string', 'openssl_ssl_get_cipher_name' => 'string',
         'openssl_ssl_get_version' => 'string', 'openssl_encrypt' => 'string',
         'openssl_decrypt' => 'string', 'openssl_random_pseudo_bytes' => 'string',
-        'openssl_digest' => 'string',
+        'openssl_digest' => 'string', 'openssl_ssl_read' => 'string',
         'openssl_ctx_use_certificate_file' => 'bool',
         'openssl_ctx_use_private_key_file' => 'bool',
         'openssl_ssl_set_fd' => 'bool', 'openssl_ssl_shutdown' => 'bool',

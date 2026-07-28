@@ -1262,6 +1262,350 @@ zip_close($zip2);
 
 ---
 
+## curl — HTTP 客户端 ✅ 已完成
+
+> 文件: `ext/curl/src/curl.h`。按需引入 `#import curl`（自动依赖 stream + openssl）。
+>
+> **实现状态**: 已完成。纯 PHP（phpc）实现，**不依赖 libcurl C 库**。
+> HTTP 走 ext/stream 的 socket；HTTPS 走 ext/openssl 的 mbedTLS（3.6.6 静态编译）。
+> 仅支持 HTTP/HTTPS 协议（其他协议返回 CURLE_UNSUPPORTED_PROTOCOL）；仅支持 CURLAUTH_BASIC 认证。
+> 不支持 SOCKS 代理、curl_multi 并行、curl_share 共享（执行类 stub 抛 Exception，不静默成功）。
+> 包含顺序: openssl.h 必须在 stream.h 之前（`TPHP_STREAM_TLS_IMPLEMENTED` 守卫）。
+>
+> **与 PHP 原生差异**（类型安全考量）:
+> - `curl_init()` 返回 `CurlHandle`（不返回 `false`，失败抛 Exception）；不用 `?string`，默认空字符串。
+> - `curl_exec()` 始终返回 `bool`；响应体存于 `handle.lastResponse`，用 `curl_multi_getcontent()` 获取。
+> - `curl_getinfo()` 仅支持 `$option=0`（返回完整数组）；非 0 抛 Exception（避免 `mixed` 返回）。
+> - `curl_strerror()` 未知码返回空字符串（不返回 `?string`）。
+> - `curl_escape`/`curl_unescape` 失败抛 Exception（不返回 `false`）。
+> - CURLFile 用空字符串 `""` 替代 PHP 的 `null` 表示"未指定"。
+>
+> 测试:
+> - `test/curl/curl_unit.php`（无需网络，15+ 节覆盖全部 35 函数 + 690 常量全量遍历）。
+> - `test/curl/curl_stub_test.php`（无需网络，multi/share stub 拒绝 + 不支持协议/认证/代理）。
+> - `test/curl/curl_basic.php`（需网络，`@skip`，15 节真实 HTTP/HTTPS 集成测试）。
+
+### 常量
+
+> 共 **690 个常量**，定义于 `ext/curl/src/curl_constants.php`。以下按类别列出常用项，完整列表见源文件。
+
+#### CURLOPT_\* 传输选项（~250 个）
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `CURLOPT_URL` | 10002 | string: 请求 URL |
+| `CURLOPT_RETURNTRANSFER` | 19913 | bool: 返回响应体而不直接输出 |
+| `CURLOPT_POST` | 47 | bool: 发送 POST 请求 |
+| `CURLOPT_POSTFIELDS` | 10015 | string/array: POST 数据 |
+| `CURLOPT_HTTPHEADER` | 10023 | array: 自定义 HTTP 头 |
+| `CURLOPT_FOLLOWLOCATION` | 52 | bool: 跟随 3xx 重定向 |
+| `CURLOPT_MAXREDIRS` | 68 | int: 最大重定向次数 |
+| `CURLOPT_TIMEOUT` | 13 | int: 请求超时秒数 |
+| `CURLOPT_CONNECTTIMEOUT` | 78 | int: 连接超时秒数 |
+| `CURLOPT_TIMEOUT_MS` | 155 | int: 请求超时毫秒 |
+| `CURLOPT_CONNECTTIMEOUT_MS` | 156 | int: 连接超时毫秒 |
+| `CURLOPT_SSL_VERIFYPEER` | 64 | bool: 验证 SSL 证书 |
+| `CURLOPT_SSL_VERIFYHOST` | 81 | int: 验证 SSL hostname |
+| `CURLOPT_CAINFO` | 10065 | string: CA 证书文件 |
+| `CURLOPT_SSLCERT` | 10025 | string: 客户端证书 |
+| `CURLOPT_SSLKEY` | 10087 | string: 私钥文件 |
+| `CURLOPT_USERAGENT` | 10018 | string: User-Agent 头 |
+| `CURLOPT_REFERER` | 10016 | string: Referer 头 |
+| `CURLOPT_COOKIE` | 10022 | string: Cookie 头 |
+| `CURLOPT_COOKIEFILE` | 10031 | string: 读取 Cookie 文件 |
+| `CURLOPT_COOKIEJAR` | 10082 | string: 写入 Cookie 文件 |
+| `CURLOPT_PROXY` | 10004 | string: 代理地址 |
+| `CURLOPT_PROXYPORT` | 59 | int: 代理端口 |
+| `CURLOPT_PROXYTYPE` | 101 | int: 代理类型（HTTP/SOCKS4/SOCKS5） |
+| `CURLOPT_HTTPAUTH` | 107 | int: HTTP 认证方法 |
+| `CURLOPT_USERPWD` | 10005 | string: "user:pass" 认证 |
+| `CURLOPT_USERNAME` | 10113 | string: 用户名 |
+| `CURLOPT_PASSWORD` | 10115 | string: 密码 |
+| `CURLOPT_HTTPGET` | 80 | bool: 强制 GET |
+| `CURLOPT_NOBODY` | 44 | bool: 不下载响应体（HEAD） |
+| `CURLOPT_CUSTOMREQUEST` | 10036 | string: 自定义请求方法 |
+| `CURLOPT_VERBOSE` | 41 | bool: 详细输出 |
+| `CURLOPT_HEADER` | 42 | bool: 响应中包含 HTTP 头 |
+| `CURLOPT_UPLOAD` | 46 | bool: 上传模式 |
+| `CURLOPT_INFILESIZE` | 14 | int: 上传文件大小 |
+| `CURLOPT_HTTP_VERSION` | 84 | int: HTTP 版本 |
+| `CURLOPT_ACCEPT_ENCODING` | 10102 | string: Accept-Encoding 头 |
+| `CURLOPT_PORT` | 3 | int: 端口号 |
+| `CURLOPT_RANGE` | 10007 | string: Range 头 |
+| `CURLOPT_FILE` | 10001 | stream: 输出到文件（保留参数） |
+
+> 完整列表另含: CURLOPT_SSLVERSION / CURLOPT_SSLCERTTYPE / CURLOPT_SSLKEYPASSWD /
+> CURLOPT_PROXYUSERPWD / CURLOPT_NOPROGRESS / CURLOPT_IPRESOLVE / CURLOPT_FAILONERROR /
+> CURLOPT_ENCODING / CURLOPT_TRANSFERTEXT / CURLOPT_CRLF / CURLOPT_AUTOREFERER 等约 250 项。
+
+#### CURLINFO_\* 信息常量（~40 个）
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `CURLINFO_HTTP_CODE` | 0x2000001 | int: HTTP 状态码 |
+| `CURLINFO_TOTAL_TIME` | 0x3000001 | float: 总耗时 |
+| `CURLINFO_CONNECT_TIME` | 0x3000004 | float: 连接耗时 |
+| `CURLINFO_SIZE_DOWNLOAD` | 0x3000006 | float: 下载字节数 |
+| `CURLINFO_CONTENT_TYPE` | 0x100000C | string: Content-Type |
+| `CURLINFO_HEADER_SIZE` | 0x2000002 | int: 头部大小 |
+| `CURLINFO_REDIRECT_COUNT` | 0x2000008 | int: 重定向次数 |
+| `CURLINFO_EFFECTIVE_URL` | 0x1000001 | string: 最终 URL |
+| `CURLINFO_PRIMARY_IP` | 0x100000F | string: 主 IP |
+| `CURLINFO_PRIMARY_PORT` | 0x200010 | int: 主端口 |
+
+> 注: `curl_getinfo()` 仅支持 `$option=0`（返回完整数组），单 option 查询会抛 Exception。
+> 数组字段: url/content_type/http_code/header_size/request_size/filetime/ssl_verify_result/
+> redirect_count/total_time/namelookup_time/connect_time/pretransfer_time/size_upload/
+> size_download/speed_download/download_content_length/upload_content_length/starttransfer_time/
+> redirect_time/redirect_url/primary_ip/primary_port/local_ip/local_port/http_version/protocol/
+> scheme/appconnect_time/effective_method。
+
+#### CURLE_\* 错误码（~74 个）
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `CURLE_OK` | 0 | 无错误 |
+| `CURLE_UNSUPPORTED_PROTOCOL` | 1 | 不支持的协议（非 http/https） |
+| `CURLE_COULDNT_RESOLVE_HOST` | 6 | DNS 解析失败 |
+| `CURLE_COULDNT_CONNECT` | 7 | 连接失败 |
+| `CURLE_OPERATION_TIMEDOUT` | 28 | 操作超时 |
+| `CURLE_TOO_MANY_REDIRECTS` | 47 | 重定向次数超限 |
+| `CURLE_BAD_PASSWORD_ENTERED` | 46 | 认证失败 |
+| `CURLE_SSL_CONNECT_ERROR` | 35 | SSL 连接错误 |
+| `CURLE_PEER_FAILED_VERIFICATION` | 60 | 证书验证失败 |
+| `CURLE_RECV_ERROR` | 56 | 接收错误 |
+| `CURLE_SEND_ERROR` | 55 | 发送错误 |
+| `CURLE_BAD_FUNCTION_ARGUMENT` | 43 | 参数错误 |
+
+#### CURLAUTH_\* / CURLPROXY_\* 认证与代理
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `CURLAUTH_NONE` | 0 | 无认证 |
+| `CURLAUTH_BASIC` | 1 | Basic 认证（仅此项支持） |
+| `CURLAUTH_DIGEST` | 2 | Digest 认证（不支持） |
+| `CURLAUTH_NEGOTIATE` | 4 | Negotiate（不支持） |
+| `CURLAUTH_NTLM` | 8 | NTLM（不支持） |
+| `CURLAUTH_ANY` | -17 | 任意（回退到 Basic） |
+| `CURLPROXY_HTTP` | 0 | HTTP 代理 |
+| `CURLPROXY_SOCKS4` | 4 | SOCKS4（不支持） |
+| `CURLPROXY_SOCKS5` | 5 | SOCKS5（不支持） |
+
+#### 其他常量类别
+
+| 类别 | 前缀 | 说明 |
+|------|------|------|
+| HTTP 版本 | `CURL_HTTP_VERSION_*` | NONE/1_0/1_1/2_0/2TLS/3_0/3ONLY |
+| 暂停标志 | `CURLPAUSE_*` | RECV/SEND/ALL/CONT |
+| 协议位掩码 | `CURLPROTO_*` | HTTP/HTTPS/FTP/... |
+| 版本特性 | `CURL_VERSION_*` | IPV6/SSL/LARGEFILE/... |
+| Multi 选项 | `CURLMOPT_*` | PIPELINING/MAXCONNECTS/... |
+| SSH 选项 | `CURLSSH_*` | AUTH_PUBLICKEY/AUTH_PASSWORD/... |
+| SSL 选项 | `CURLSSLSET_*` | OK/NO_BACKENDS/... |
+| RTSP 请求 | `CURL_RTSPREQ_*` | NONE/DESCRIBE/SETUP/PLAY/... |
+| FTP SSL | `CURLFTPSSL_*` | NONE/TRY/CONTROL/ALL |
+| 使用 SSL | `CURLUSESSL_*` | NONE/TRY/CONTROL/ALL |
+| 代理错误 | `CURLPX_*` | OK/BAD_ADDRESS/... |
+
+### 类
+
+| 类 | 说明 |
+|------|------|
+| `CurlHandle` | cURL 会话句柄（final）。含 URL/method/headers/body/认证/代理/SSL/上传等全部配置字段 |
+| `CurlMultiHandle` | 多句柄容器（final，空类，仅类型标记）。执行类函数抛 Exception |
+| `CurlShareHandle` | 共享句柄容器（final，空类，仅类型标记）。curl_share_setopt 抛 Exception |
+| `CurlSharePersistentHandle` | 持久化共享句柄（final）。`public readonly array $options` |
+| `CURLFile` | 磁盘文件上传类（multipart/form-data） |
+| `CURLStringFile` | 字符串内容作为文件上传（since PHP 8.0） |
+
+```php
+class CURLFile
+{
+    public string $name = "";       // 磁盘文件路径
+    public string $mime = "";       // MIME 类型（空=按扩展名推导）
+    public string $postname = "";   // 上传文件名（空=basename）
+
+    public function __construct(string $filename, string $mime_type = "", string $posted_filename = "");
+    public function getFilename(): string;
+    public function getMimeType(): string;
+    public function getPostFilename(): string;
+    public function setMimeType(string $mime_type): void;
+    public function setPostFilename(string $posted_filename): void;
+}
+
+class CURLStringFile
+{
+    public string $data;     // 文件内容字符串
+    public string $postname; // 上传文件名（必须）
+    public string $mime;     // MIME 类型（默认 application/octet-stream）
+
+    public function __construct(string $data, string $postname, string $mime = "application/octet-stream");
+}
+```
+
+### 函数
+
+#### Easy Handle（18 个，完整实现）
+
+| 函数 | 说明 |
+|------|------|
+| `curl_init(string $url = ""): CurlHandle` | 初始化 cURL 会话（默认空 URL） |
+| `curl_close(CurlHandle $handle): void` | 关闭 cURL 会话，释放资源 |
+| `curl_reset(CurlHandle $handle): void` | 重置句柄所有选项为默认值（保留句柄） |
+| `curl_copy_handle(CurlHandle $handle): CurlHandle` | 深拷贝句柄（含所有选项） |
+| `curl_upkeep(CurlHandle $handle): bool` | 维持连接活跃（保活探测） |
+| `curl_pause(CurlHandle $handle, int $flags): int` | 暂停/恢复传输（CURLPAUSE_*） |
+| `curl_setopt(CurlHandle $handle, int $option, mixed $value): bool` | 设置单个传输选项 |
+| `curl_setopt_array(CurlHandle $handle, array $options): bool` | 批量设置多个选项 |
+| `curl_exec(CurlHandle $handle): bool` | 执行会话；响应体用 curl_multi_getcontent 获取 |
+| `curl_error(CurlHandle $handle): string` | 返回最后一次操作的错误描述 |
+| `curl_errno(CurlHandle $handle): int` | 返回最后一次操作的错误码（CURLE_*） |
+| `curl_strerror(int $error_code): string` | 错误码 → 描述（静态函数） |
+| `curl_version(): array` | 返回版本信息（version/ssl_version/protocols/...） |
+| `curl_escape(CurlHandle $handle, string $string): string` | URL 编码（RFC 3986） |
+| `curl_unescape(CurlHandle $handle, string $string): string` | URL 解码 |
+| `curl_file_create(string $filename, string $mime_type = "", string $posted_filename = ""): CURLFile` | 创建 CURLFile 对象 |
+| `curl_getinfo(CurlHandle $handle, int $option = 0): array\|Exception` | 获取传输信息数组（$option=0 返回全部） |
+| `curl_multi_getcontent(CurlHandle $handle): string` | 获取 curl_exec 后的响应体字符串 |
+
+#### Multi Handle（11 个，6 个 stub 抛 Exception）
+
+| 函数 | 说明 |
+|------|------|
+| `curl_multi_init(): CurlMultiHandle` | 创建 multi 句柄 |
+| `curl_multi_close(CurlMultiHandle $multi_handle): void` | 关闭 multi 句柄（无操作） |
+| `curl_multi_errno(CurlMultiHandle $multi_handle): int` | 返回 multi 错误码（始终 0） |
+| `curl_multi_strerror(int $error_code): string` | multi 错误码 → 描述（委托 curl_strerror） |
+| `curl_multi_get_handles(CurlMultiHandle $multi_handle): array` | 返回已添加 easy 句柄列表（stub 返回空） |
+| `curl_multi_add_handle(CurlMultiHandle $multi_handle, CurlHandle $handle): int\|Exception` | stub，抛 Exception（无异步 I/O） |
+| `curl_multi_remove_handle(CurlMultiHandle $multi_handle, CurlHandle $handle): int\|Exception` | stub，抛 Exception |
+| `curl_multi_exec(CurlMultiHandle $multi_handle, int &$still_running): int\|Exception` | stub，抛 Exception（用顺序 curl_exec 替代） |
+| `curl_multi_select(CurlMultiHandle $multi_handle, float $timeout = 1.0): int\|Exception` | stub，抛 Exception |
+| `curl_multi_info_read(CurlMultiHandle $multi_handle, int &$queued_messages = 0): array\|Exception` | stub，抛 Exception |
+| `curl_multi_setopt(CurlMultiHandle $multi_handle, int $option, int $value): bool\|Exception` | stub，抛 Exception |
+
+#### Share Handle（6 个，2 个 stub 抛 Exception）
+
+| 函数 | 说明 |
+|------|------|
+| `curl_share_init(): CurlShareHandle` | 创建 share 句柄 |
+| `curl_share_close(CurlShareHandle $share_handle): void` | 关闭 share 句柄（无操作，PHP 8.5 已弃用） |
+| `curl_share_errno(CurlShareHandle $share_handle): int` | 返回 share 错误码（始终 0） |
+| `curl_share_strerror(int $error_code): string` | share 错误码 → 描述（委托 curl_strerror） |
+| `curl_share_setopt(CurlShareHandle $share_handle, int $option, int $value): bool\|Exception` | stub，抛 Exception（无共享连接池） |
+| `curl_share_init_persistent(array $share_options): CurlSharePersistentHandle\|Exception` | stub，抛 Exception |
+
+### 示例
+
+```php
+#import stream
+#import openssl
+#import curl
+
+class Main
+{
+    public function main(): void
+    {
+        // ── HTTP GET ──────────────────────────────────────
+        $ch = curl_init("http://httpbin.org/get");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_exec($ch);
+        $body = curl_multi_getcontent($ch);
+        $info = curl_getinfo($ch);          // 完整信息数组
+        echo $info["http_code"] . "\n";      // 200
+        curl_close($ch);
+
+        // ── HTTPS GET（自动 TLS） ────────────────────────
+        $ch = curl_init("https://example.com");
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_SSL_VERIFYPEER => true,
+        ]);
+        if (curl_exec($ch)) {
+            echo curl_multi_getcontent($ch);
+        } else {
+            echo curl_error($ch);            // 错误描述
+            echo curl_errno($ch);             // 错误码 (CURLE_*)
+        }
+        curl_close($ch);
+
+        // ── POST JSON ────────────────────────────────────
+        $ch = curl_init("http://httpbin.org/post");
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => '{"key":"value"}',
+            CURLOPT_HTTPHEADER      => ["Content-Type: application/json"],
+            CURLOPT_RETURNTRANSFER => true,
+        ]);
+        curl_exec($ch);
+        echo curl_multi_getcontent($ch);
+        curl_close($ch);
+
+        // ── Basic Auth ───────────────────────────────────
+        $ch = curl_init("http://httpbin.org/basic-auth/user/pass");
+        curl_setopt_array($ch, [
+            CURLOPT_HTTPAUTH        => CURLAUTH_BASIC,
+            CURLOPT_USERPWD         => "user:pass",
+            CURLOPT_RETURNTRANSFER => true,
+        ]);
+        curl_exec($ch);
+        echo curl_getinfo($ch)["http_code"];  // 200
+        curl_close($ch);
+
+        // ── CURLFile 文件上传 ────────────────────────────
+        $file = new CURLFile("/path/to/upload.txt", "text/plain", "upload.txt");
+        $ch = curl_init("http://httpbin.org/post");
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => ["file" => $file],
+            CURLOPT_RETURNTRANSFER => true,
+        ]);
+        curl_exec($ch);
+        echo curl_multi_getcontent($ch);
+        curl_close($ch);
+
+        // ── CURLStringFile 字符串上传 ────────────────────
+        $sf = new CURLStringFile("hello world", "hello.txt", "text/plain");
+        $ch = curl_init("http://httpbin.org/post");
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => ["file" => $sf],
+            CURLOPT_RETURNTRANSFER => true,
+        ]);
+        curl_exec($ch);
+        curl_close($ch);
+
+        // ── curl_strerror / curl_version ────────────────
+        echo curl_strerror(CURLE_OK);          // "No error"
+        $ver = curl_version();
+        echo $ver["version"];                   // 版本号字符串
+        echo implode(",", $ver["protocols"]);  // http,https
+
+        // ── curl_escape / curl_unescape ──────────────────
+        $ch = curl_init();
+        echo curl_escape($ch, "hello world!"); // hello%20world%21
+        echo curl_unescape($ch, "hello%20world"); // hello world
+        curl_close($ch);
+
+        // ── 不支持协议显式拒绝（不静默） ──────────────────
+        $ch = curl_init("ftp://example.com");
+        curl_exec($ch);                         // 返回 false
+        echo curl_errno($ch);                   // 1 (CURLE_UNSUPPORTED_PROTOCOL)
+        curl_close($ch);
+    }
+}
+```
+
+> 测试:
+> - `test/curl/curl_unit.php`（无需网络）— 15+ 节覆盖全部 35 函数签名 + 690 常量全量遍历验证。
+> - `test/curl/curl_stub_test.php`（无需网络）— multi/share stub 拒绝 + 不支持协议/认证/代理。
+> - `test/curl/curl_basic.php`（`@skip`，需网络）— 15 节真实 HTTP/HTTPS 集成测试。
+
+---
+
 ## stream — Socket Stream
 
 > 文件: `ext/stream/src/stream.h`。按需引入 `#import stream`。

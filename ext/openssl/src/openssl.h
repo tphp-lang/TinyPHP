@@ -115,6 +115,9 @@ static inline void _openssl_throw(const char* msg) {
     tp_throw_ex(new_tphp_class_Exception(s));
 }
 
+// 兼容性宏：mbedtls_test_get_last_error() 简化为 0（mbedTLS 无全局错误队列）
+static inline int mbedtls_test_get_last_error(void) { return 0; }
+
 // ── 内部：获取 mbedTLS 错误字符串 ───────────────────────────
 static inline t_string _openssl_get_error(void) {
     char buf[256];
@@ -128,9 +131,6 @@ static inline t_string _openssl_get_error(void) {
         .is_local = false, .is_lit = false
     });
 }
-
-// 兼容性宏：mbedtls_test_get_last_error() 简化为 0（mbedTLS 无全局错误队列）
-static inline int mbedtls_test_get_last_error(void) { return 0; }
 
 // ── 内部：mbedtls 帮助函数 ─────────────────────────────────
 
@@ -427,8 +427,7 @@ static inline t_string tphp_fn_openssl_ssl_get_cipher_name(t_int ssl) {
         return (t_string){0};
     }
     _tphp_ssl_ctx_t* c = (_tphp_ssl_ctx_t*)(intptr_t)ssl;
-    int suite = mbedtls_ssl_get_ciphersuite_id_from_ssl(&c->ssl);
-    const char* name = mbedtls_ssl_get_ciphersuite(suite);
+    const char* name = mbedtls_ssl_get_ciphersuite(&c->ssl);
     if (name == NULL) name = "";
     return tphp_rt_str_dup((t_string){.data = (char*)name, .length = (int)strlen(name), .is_local = false, .is_lit = false});
 }

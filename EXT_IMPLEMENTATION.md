@@ -30,7 +30,7 @@
 | 4  | [zlib (gzip)](#4-zlib-gzip) ✅ 已完成(内置) | ⭐⭐⭐   | 内置 zlib 1.3.2 源码 | 29  |
 | 5  | [stream](#5-stream) ✅ 已完成 | ⭐⭐⭐⭐  | winsock2(Windows)/libc(POSIX) | 21  |
 | 6  | [SQLite](#6-sqlite) ✅ 已完成 | ⭐⭐⭐⭐  | 内置 SQLite 3.46.0 amalgamation | 11  |
-| 7  | [cURL](#7-curl)              | ⭐⭐⭐⭐  | libcurl        | 8   |
+| 7  | [cURL](#7-curl) ✅ 已完成 | ⭐⭐⭐⭐  | ext/openssl + ext/stream（纯 phpc，不依赖 libcurl） | 35  |
 | 8  | [OpenSSL](#8-openssl) ✅ 已完成 | ⭐⭐⭐⭐⭐ | 内置 mbedTLS 3.6.6 源码（静态编译，零运行时依赖） | 21  |
 | 9  | [fileinfo](#9-fileinfo) ✅   | ⭐⭐⭐   | 内置魔数表       | 4   |
 | 10 | [iconv](#10-iconv) ✅ 已完成 | ⭐⭐⭐   | libiconv/系统    | 8   |
@@ -70,9 +70,30 @@
 
 > 已实现于 ext/sqlite3/sqlite3.h + ext/sqlite3/src/sqlite3.php（函数式 API，内置 SQLite 3.46.0 amalgamation 静态编译），文档见 FUNCTIONS.md "sqlite3 — SQLite 数据库" 章节。
 
-## 7. cURL
+## 7. cURL ✅ 已完成
 
-### 推荐参考库
+> 已实现于 `ext/curl/src/curl.php` + `ext/curl/src/curl_constants.php` + `ext/curl/src/curl_file.php`（纯 phpc 实现，不依赖 libcurl C 库）。
+> 文档见 FUNCTIONS.md "curl — HTTP 客户端" 章节。
+>
+> **设计目标**：纯 PHP（phpc）实现 HTTP/HTTPS 客户端，**不依赖 libcurl**。
+> **TLS/SSL**：复用 ext/openssl（mbedTLS 3.6.6 静态编译）。
+> **Socket**：复用 ext/stream 的 socket 抽象。
+> **协议支持**：仅 HTTP/HTTPS（其他协议返回 CURLE_UNSUPPORTED_PROTOCOL）。
+> **认证**：仅 CURLAUTH_BASIC（其他返回错误）。
+> **不支持**：SOCKS 代理、curl_multi 并行、curl_share 共享（stub 抛异常）。
+> **文件上传**：支持 multipart/form-data（CURLFile + CURLStringFile）。
+
+| 属性         | 值                                           |
+| ---------- | ------------------------------------------- |
+| **外部依赖**   | 无（复用 ext/openssl + ext/stream） |
+| **实现行数**   | ~1805 行 phpc（curl.php）+ ~690 行常量 + ~200 行类定义 |
+| **PHP 参考** | `ext/curl/interface.c`（API 参考） |
+| **函数数**    | 35（含 multi/share stub） |
+| **常量数**    | 690 |
+| **类数**     | 6（CurlHandle/CurlMultiHandle/CurlShareHandle/CurlSharePersistentHandle/CURLFile/CURLStringFile） |
+| **难度**     | ⭐⭐⭐⭐ |
+
+### 7.1 推荐参考库
 
 | 库                                     | 说明                      | 链接                                        |
 | ------------------------------------- | ----------------------- | ----------------------------------------- |
@@ -80,134 +101,176 @@
 | **PHP 源码** **`ext/curl/interface.c`** | 完整包装层                   | \~180KB, 900+ 行核心函数                       |
 | **curl\_easy\_setopt 手册**             | 所有选项常量定义                | curl.se/libcurl/c/curl\_easy\_setopt.html |
 
-### 完整 API
+### 7.2 完整 API
 
 ```php
 // ================================================================
-// 常用选项常量 (CURLOPT_*)
-// 完整列表: https://curl.se/libcurl/c/curl_easy_setopt.html
-// ================================================================
-const CURLOPT_URL = 10002;           // string: 请求 URL
-const CURLOPT_RETURNTRANSFER = 19913; // bool:  返回响应体而不直接输出
-const CURLOPT_POST = 47;            // bool:  发送 POST 请求
-const CURLOPT_POSTFIELDS = 10015;   // string: POST 数据
-const CURLOPT_HTTPHEADER = 10023;   // array:  自定义 HTTP 头
-const CURLOPT_FOLLOWLOCATION = 52;   // bool:  跟随 3xx 重定向
-const CURLOPT_MAXREDIRS = 68;        // int:   最大重定向次数
-const CURLOPT_TIMEOUT = 13;          // int:   请求超时秒数
-const CURLOPT_CONNECTTIMEOUT = 78;   // int:   连接超时秒数
-const CURLOPT_SSL_VERIFYPEER = 64;   // bool:  验证 SSL 证书
-const CURLOPT_SSL_VERIFYHOST = 81;   // int:   验证 SSL hostname
-const CURLOPT_USERAGENT = 10018;     // string: User-Agent 头
-const CURLOPT_REFERER = 10016;       // string: Referer 头
-const CURLOPT_COOKIE = 10022;        // string: Cookie 头
-const CURLOPT_COOKIEFILE = 10031;    // string: 读取 Cookie 文件
-const CURLOPT_COOKIEJAR = 10082;     // string: 写入 Cookie 文件
-const CURLOPT_PROXY = 10004;         // string: 代理地址
-const CURLOPT_PROXYPORT = 59;        // int:   代理端口
-const CURLOPT_PROXYTYPE = 101;       // int:   代理类型 (HTTP/SOCKS4/SOCKS5)
-const CURLOPT_HTTPAUTH = 107;        // int:   HTTP 认证方法
-const CURLOPT_USERPWD = 10005;       // string: "user:pass" 认证
-const CURLOPT_HTTPGET = 80;          // bool:  强制 GET
-const CURLOPT_NOBODY = 44;           // bool:  不下载响应体 (HEAD)
-const CURLOPT_CUSTOMREQUEST = 10036; // string: 自定义请求方法 (PUT/DELETE等)
-const CURLOPT_VERBOSE = 41;          // bool:  详细输出
-const CURLOPT_HEADER = 42;           // bool:  响应中包含 HTTP 头
-const CURLOPT_NOPROGRESS = 43;       // bool:  关闭进度条
-const CURLOPT_UPLOAD = 46;           // bool:  上传模式
-const CURLOPT_INFILESIZE = 14;       // int:   上传文件大小
-const CURLOPT_HTTP_VERSION = 84;     // int:   HTTP 版本 (1.0/1.1/2/3)
-const CURLOPT_IPRESOLVE = 113;       // int:   IP 解析 (IPv4/IPv6)
-
-// ================================================================
-// CURLINFO_* 常量 (用于 curl_getinfo)
-// ================================================================
-const CURLINFO_HTTP_CODE = 0x2000001;       // int:   HTTP 状态码
-const CURLINFO_TOTAL_TIME = 0x3000001;      // float: 总耗时
-const CURLINFO_SIZE_DOWNLOAD = 0x3000006;   // float: 下载字节数
-const CURLINFO_CONTENT_TYPE = 0x100000C;    // string: Content-Type
-
-// ================================================================
-// 函数
+// 类（6 个）
 // ================================================================
 
-/**
- * curl_init(string $url = ""): CurlHandle|false
- *
- * 初始化 cURL 会话，返回句柄。
- */
-function curl_init(string $url = ""): CurlHandle|false;
+final class CurlHandle
+{
+    // cURL 会话句柄（含 URL/method/headers/body/认证/代理/SSL/上传等全部配置字段）
+    // public string $url, $method, $userAgent, $cookie, ...
+    // public bool  $returnTransfer, $followLocation, $sslVerifyPeer, ...
+    // public int   $timeout, $maxRedirs, $httpAuth, $proxyType, ...
+}
 
-/**
- * curl_setopt(CurlHandle $ch, int $option, mixed $value): bool
- *
- * 设置 cURL 传输选项。最常用的函数。
- *
- * @param CurlHandle $ch cURL 句柄
- * @param int $option CURLOPT_* 常量
- * @param mixed $value 选项值 (string/int/bool/array)
- * @return bool 成功返回 true
- */
-function curl_setopt(CurlHandle $ch, int $option, mixed $value): bool;
+final class CurlMultiHandle
+{
+    // 空类（仅类型标记；curl_multi_exec 等执行类函数抛 Exception）
+}
 
-/**
- * curl_setopt_array(CurlHandle $ch, array $options): bool
- *
- * 批量设置多个选项。
- * $options 键为 CURLOPT_* 常量, 值为选项值。
- * 失败时立即停止处理后续选项。
- */
-function curl_setopt_array(CurlHandle $ch, array $options): bool;
+final class CurlShareHandle
+{
+    // 空类（仅类型标记；curl_share_setopt 抛 Exception）
+}
 
-/**
- * curl_exec(CurlHandle $ch): string|bool
- *
- * 执行 cURL 会话，返回响应体字符串。
- * 需要先设置 CURLOPT_RETURNTRANSFER = 1。
- * 失败返回 false。
- */
-function curl_exec(CurlHandle $ch): string|bool;
+final class CurlSharePersistentHandle
+{
+    public readonly array $options;
+    // 持久化共享句柄（curl_share_init_persistent 抛 Exception）
+}
 
-/**
- * curl_getinfo(CurlHandle $ch, int $option = 0): mixed
- *
- * 获取传输信息。$option=0 返回所有信息数组。
- * 常用 option: CURLINFO_HTTP_CODE, CURLINFO_TOTAL_TIME
- */
-function curl_getinfo(CurlHandle $ch, int $option = 0): mixed;
+class CURLFile
+{
+    public string $name = "";       // 磁盘文件路径
+    public string $mime = "";       // MIME 类型（空=自动推导）
+    public string $postname = "";   // 上传文件名（空=basename）
 
-/**
- * curl_error(CurlHandle $ch): string
- *
- * 返回最后一次 cURL 操作的错误描述文本。
- */
-function curl_error(CurlHandle $ch): string;
+    public function __construct(string $filename, string $mime_type = "", string $posted_filename = "");
+    public function getFilename(): string;
+    public function getMimeType(): string;
+    public function getPostFilename(): string;
+    public function setMimeType(string $mime_type): void;
+    public function setPostFilename(string $posted_filename): void;
+}
 
-/**
- * curl_errno(CurlHandle $ch): int
- *
- * 返回最后一次 cURL 操作的错误码 (CURLE_*)
- */
-function curl_errno(CurlHandle $ch): int;
+class CURLStringFile
+{
+    public string $data;     // 文件内容字符串
+    public string $postname; // 上传文件名
+    public string $mime;     // MIME 类型（默认 application/octet-stream）
 
-/**
- * curl_close(CurlHandle $ch): void
- *
- * 关闭 cURL 会话，释放所有资源。
- */
-function curl_close(CurlHandle $ch): void;
+    public function __construct(string $data, string $postname, string $mime = "application/octet-stream");
+}
 
-/**
- * curl_version(): array
- *
- * 返回 cURL 版本信息数组:
- *   ["version_number"] => int
- *   ["version"] => string
- *   ["ssl_version"] => string
- *   ["libz_version"] => string
- *   ["protocols"] => array of string
- */
+// ================================================================
+// Easy Handle 函数（18 个，完整实现）
+// ================================================================
+
+/** 初始化 cURL 会话（默认空 URL） */
+function curl_init(string $url = ""): CurlHandle;
+
+/** 关闭 cURL 会话，释放资源 */
+function curl_close(CurlHandle $handle): void;
+
+/** 重置句柄所有选项为默认值（保留句柄本身） */
+function curl_reset(CurlHandle $handle): void;
+
+/** 深拷贝 cURL 句柄（含所有选项） */
+function curl_copy_handle(CurlHandle $handle): CurlHandle;
+
+/** 维持连接活跃（保活探测），无活动时返回 false */
+function curl_upkeep(CurlHandle $handle): bool;
+
+/** 暂停/恢复传输（CURLPAUSE_RECV / CURLPAUSE_SEND / CURLPAUSE_ALL / CURLPAUSE_CONT） */
+function curl_pause(CurlHandle $handle, int $flags): int;
+
+/** 设置单个传输选项（CURLOPT_*） */
+function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool;
+
+/** 批量设置多个选项（键为 CURLOPT_* 常量） */
+function curl_setopt_array(CurlHandle $handle, array $options): bool;
+
+/** 执行 cURL 会话；响应体存于 handle.lastResponse，用 curl_multi_getcontent 获取 */
+function curl_exec(CurlHandle $handle): bool;
+
+/** 返回最后一次操作的错误描述文本 */
+function curl_error(CurlHandle $handle): string;
+
+/** 返回最后一次操作的错误码（CURLE_*） */
+function curl_errno(CurlHandle $handle): int;
+
+/** 错误码 → 描述文本（静态函数，不需句柄） */
+function curl_strerror(int $error_code): string;
+
+/** 返回 cURL 版本信息数组（version/version_number/ssl_version/protocols/...） */
 function curl_version(): array;
+
+/** URL 编码（RFC 3986） */
+function curl_escape(CurlHandle $handle, string $string): string;
+
+/** URL 解码 */
+function curl_unescape(CurlHandle $handle, string $string): string;
+
+/** 创建 CURLFile 对象（multipart 文件上传） */
+function curl_file_create(string $filename, string $mime_type = "", string $posted_filename = ""): CURLFile;
+
+/** 获取传输信息数组（$option=0 返回全部；非 0 抛 Exception） */
+function curl_getinfo(CurlHandle $handle, int $option = 0): array|Exception;
+
+/** 获取 curl_exec 执行后的响应体字符串 */
+function curl_multi_getcontent(CurlHandle $handle): string;
+
+// ================================================================
+// Multi Handle 函数（11 个，6 个 stub 抛 Exception）
+// ================================================================
+
+/** 创建 multi 句柄 */
+function curl_multi_init(): CurlMultiHandle;
+
+/** 关闭 multi 句柄（无操作） */
+function curl_multi_close(CurlMultiHandle $multi_handle): void;
+
+/** 返回 multi 错误码（始终 0） */
+function curl_multi_errno(CurlMultiHandle $multi_handle): int;
+
+/** multi 错误码 → 描述（委托 curl_strerror） */
+function curl_multi_strerror(int $error_code): string;
+
+/** 返回已添加的 easy 句柄列表（stub 返回空数组） */
+function curl_multi_get_handles(CurlMultiHandle $multi_handle): array;
+
+/** 添加 easy 句柄到 multi —— stub，抛 Exception（无异步 I/O） */
+function curl_multi_add_handle(CurlMultiHandle $multi_handle, CurlHandle $handle): int|Exception;
+
+/** 从 multi 移除 easy 句柄 —— stub，抛 Exception */
+function curl_multi_remove_handle(CurlMultiHandle $multi_handle, CurlHandle $handle): int|Exception;
+
+/** 执行 multi 请求 —— stub，抛 Exception（用顺序 curl_exec 替代） */
+function curl_multi_exec(CurlMultiHandle $multi_handle, int &$still_running): int|Exception;
+
+/** 等待 multi 句柄活动 —— stub，抛 Exception */
+function curl_multi_select(CurlMultiHandle $multi_handle, float $timeout = 1.0): int|Exception;
+
+/** 获取 multi 传输信息 —— stub，抛 Exception */
+function curl_multi_info_read(CurlMultiHandle $multi_handle, int &$queued_messages = 0): array|Exception;
+
+/** 设置 multi 选项 —— stub，抛 Exception */
+function curl_multi_setopt(CurlMultiHandle $multi_handle, int $option, int $value): bool|Exception;
+
+// ================================================================
+// Share Handle 函数（6 个，2 个 stub 抛 Exception）
+// ================================================================
+
+/** 创建 share 句柄 */
+function curl_share_init(): CurlShareHandle;
+
+/** 关闭 share 句柄（无操作，PHP 8.5 已弃用但保留兼容） */
+function curl_share_close(CurlShareHandle $share_handle): void;
+
+/** 返回 share 错误码（始终 0） */
+function curl_share_errno(CurlShareHandle $share_handle): int;
+
+/** share 错误码 → 描述（委托 curl_strerror） */
+function curl_share_strerror(int $error_code): string;
+
+/** 设置 share 选项 —— stub，抛 Exception（无共享连接池） */
+function curl_share_setopt(CurlShareHandle $share_handle, int $option, int $value): bool|Exception;
+
+/** 创建持久化共享句柄 —— stub，抛 Exception */
+function curl_share_init_persistent(array $share_options): CurlSharePersistentHandle|Exception;
 ```
 
 ***
