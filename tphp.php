@@ -1261,8 +1261,8 @@ $projectRoot = dirname($includeDir);
 //   Linux/macOS 命令行限制很高（ARG_MAX 通常 128KB+），不触发。
 $respThreshold = 8000;
 $fullCmd = sprintf(
-    '"%s" %s -I"%s" -I"%s" %s%s%s -o "%s" "%s"%s%s 2>&1',
-    $ccExe, $bFlag, $includeDir, $projectRoot, $extraFlags, $linkFlags, $sharedFlag, $outExe, $cFile, $extraSrcs, $lateLinkFlags
+    '"%s" %s -I"%s" -I"%s" %s%s -o "%s" "%s"%s%s%s 2>&1',
+    $ccExe, $bFlag, $includeDir, $projectRoot, $extraFlags, $sharedFlag, $outExe, $cFile, $extraSrcs, $linkFlags, $lateLinkFlags
 );
 $responseFile = '';
 if (PHP_OS_FAMILY === 'Windows' && strlen($fullCmd) > $respThreshold) {
@@ -1273,12 +1273,12 @@ if (PHP_OS_FAMILY === 'Windows' && strlen($fullCmd) > $respThreshold) {
     // 链接库必须在源文件之后（链接器单遍扫描）
     $respLines = [];
     if ($extraFlags !== '')  $respLines[] = trim($extraFlags);
-    if ($linkFlags !== '')   $respLines[] = trim($linkFlags);
     if ($sharedFlag !== '')  $respLines[] = trim($sharedFlag);
     $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cFile) . '"';
     foreach ($allCFiles as $cf) {
         $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cf) . '"';
     }
+    if ($linkFlags !== '')   $respLines[] = trim($linkFlags);
     if ($lateLinkFlags !== '') $respLines[] = trim($lateLinkFlags);
     file_put_contents($responseFile, implode("\n", $respLines));
     $cmd = sprintf(
@@ -1376,20 +1376,20 @@ if ($retval !== 0 || !file_exists($outExe) || filesize($outExe) < 64) {
                 $newExtraSrcs = !empty($allFallbackSrcs) ? ' "' . implode('" "', $allFallbackSrcs) . '"' : '';
                 // 统一 Response File 机制（与主路径一致）
                 $cmd2Full = sprintf(
-                    '"%s" %s -I"%s" -I"%s" %s%s%s -o "%s" "%s"%s%s 2>&1',
-                    $ccExe, $bFlag, $includeDir, $projectRoot, $extraFlags, $linkFlags, $sharedFlag, $outExe, $cFile, $newExtraSrcs, $newLateLink
+                    '"%s" %s -I"%s" -I"%s" %s%s -o "%s" "%s"%s%s%s 2>&1',
+                    $ccExe, $bFlag, $includeDir, $projectRoot, $extraFlags, $sharedFlag, $outExe, $cFile, $newExtraSrcs, $linkFlags, $newLateLink
                 );
                 $fallbackRespFile = '';
                 if (PHP_OS_FAMILY === 'Windows' && strlen($cmd2Full) > $respThreshold) {
                     $fallbackRespFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '_rsp2.txt';
                     $respLines = [];
                     if ($extraFlags !== '')  $respLines[] = trim($extraFlags);
-                    if ($linkFlags !== '')   $respLines[] = trim($linkFlags);
                     if ($sharedFlag !== '')  $respLines[] = trim($sharedFlag);
                     $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cFile) . '"';
                     foreach ($allFallbackSrcs as $cf) {
                         $respLines[] = '"' . str_replace('/', DIRECTORY_SEPARATOR, $cf) . '"';
                     }
+                    if ($linkFlags !== '')   $respLines[] = trim($linkFlags);
                     if ($newLateLink !== '') $respLines[] = trim($newLateLink);
                     file_put_contents($fallbackRespFile, implode("\n", $respLines));
                     $cmd2 = sprintf(
