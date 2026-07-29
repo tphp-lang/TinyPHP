@@ -17,3 +17,8 @@ _test_fio.txt
 /t_*.jpg
 /t_*.tif
 /test_exif.jpg
+/test_*.bmp
+/test_*.wbmp
+/test_*.xbm
+/tga_test*.tga
+/font_test_custom.gdf

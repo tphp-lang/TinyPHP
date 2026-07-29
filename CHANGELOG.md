@@ -8,6 +8,13 @@
 
 ### 新增
 
+- **GD 扩展**（`ext/gd/`）：纯 phpc 实现图像处理，**不依赖 libgd / libpng / libjpeg / libfreetype**。~90 个函数 + 89 个常量 + 2 个类（GdImage / GdFont），~6000 行 phpc。
+  - **支持格式**：PNG（zlib 压缩）/ GIF（LZW 编解码）/ BMP（含 RLE8/4 压缩）/ GD / GD2（RAW 模式）/ WBMP / XBM / TGA（type 2/10，24/32bpp，RLE）共 8 种完整编解码
+  - **不支持格式**：JPEG / WebP / AVIF / XPM / FreeType 字体渲染（调用时抛 `RuntimeException` 明确报错，不静默返回 false）
+  - **功能**：创建/颜色管理（17 个）/ 绘图（15 个，Bresenham 直线/弧形/椭圆/扫描线填充多边形）/ 字体（7 个）/ 复制缩放（5 个，双线性插值）/ 变换（8 个，仿射矩阵）/ 滤镜（13 种 + 卷积 + 伽马校正）/ 状态属性（14 个）/ 编解码（16 个支持 + 13 个不支持 stub）
+  - **gd_info/imagetypes 真实反映能力**：JPEG/WebP/AVIF/XPM/FreeType Support 为 false
+  - 测试：`test/gd/`（17 个测试文件，762 断言），TCC/GCC 16.1.0/Clang 22.1.7 全部通过
+
 - **cURL 扩展**（`ext/curl/`）：纯 phpc 实现 HTTP/HTTPS 客户端，**不依赖 libcurl C 库**。35 个函数 + 690 个常量 + 6 个类（CurlHandle/CurlMultiHandle/CurlShareHandle/CurlSharePersistentHandle/CURLFile/CURLStringFile）。
   - **协议**：仅 HTTP/HTTPS（其他协议返回 CURLE_UNSUPPORTED_PROTOCOL），TLS/SSL 复用 ext/openssl（mbedTLS 3.6.6）
   - **Socket**：复用 ext/stream 的 socket 抽象

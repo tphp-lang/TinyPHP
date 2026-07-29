@@ -286,7 +286,7 @@ $tid = Thread::id();
 
 ### 扩展系统
 
-对标 PHP extension，`#import` 按需引入。已内置 `pcntl`、`posix`、`stream`、`openssl`、`curl`、`sqlite3`、`pdo`(SQLite+MySQL)、`zlib`、`zip`、`iconv`、`exif`、`fileinfo`、`calendar`、`filter`、`hash` 扩展：
+对标 PHP extension，`#import` 按需引入。已内置 `pcntl`、`posix`、`stream`、`openssl`、`curl`、`sqlite3`、`pdo`(SQLite+MySQL)、`zlib`、`zip`、`iconv`、`exif`、`fileinfo`、`calendar`、`filter`、`hash`、`gd` 扩展：
 
 ```php
 <?php

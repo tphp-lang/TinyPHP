@@ -978,7 +978,10 @@ class CodeGenerator implements ASTVisitor
         foreach ($node->includes as $inc) {
             $file = is_array($inc) ? ($inc['file'] ?? '') : $inc;
             $normalized = str_replace('\\', '/', $file);
-            if (str_contains($normalized, '/ext/')) {
+            // ext/ 和 os/ 路径的 #include 放在 common.h 之后：
+            //   - ext/ 头文件依赖 common.h 的前向声明
+            //   - os/ 头文件（zlib.h/zip.h 等）依赖 common.h 的 types.h/exception.h
+            if (str_contains($normalized, '/ext/') || str_starts_with($normalized, 'os/') || str_contains($normalized, '/os/')) {
                 $userIncAfter[] = $inc;
             } else {
                 $userIncBefore[] = $inc;
@@ -3085,6 +3088,21 @@ class CodeGenerator implements ASTVisitor
                     };
                 }
             }
+            // t_var 变量 + smartcast 缩窄 → 对象指针返回类型转换
+            //   如 function f(mixed $x): GdFont { if ($x instanceof GdFont) { return $x; } }
+            //   $x 为 t_var，instanceof 分支内缩窄为 GdFont，返回类型 tphp_class_GdFont*
+            //   需生成 ((tphp_class_GdFont*)($x).value._object) 提取对象指针
+            if ($node->expr instanceof VariableExpr
+                && str_starts_with($node->expr->name, '$')
+                && str_starts_with($this->currentRetType, 'tphp_class_')
+                && str_ends_with($this->currentRetType, '*')) {
+                $vn = self::varName($node->expr->name);
+                if (($this->varTypes[$vn] ?? '') === 't_var'
+                    && isset($this->narrowedTypes[$vn])) {
+                    $cn = $this->narrowedTypes[$vn];
+                    $code = "(({$cn}*)({$vn}).value._object)";
+                }
+            }
             if ($this->currentRetType === 't_var') {
                 $code = $this->wrapTvarAssign($node->expr, $code);
             }
@@ -3264,7 +3282,21 @@ class CodeGenerator implements ASTVisitor
         }
 
         // null 赋值 → PHP 类型为 null，C 类型用 void* 占位
+        //   有显式类型声明时（如 GdImage $im = null;）使用声明的类型，保留属性访问所需的类信息
         if ($node->expr instanceof NullLiteralExpr) {
+            if ($node->type !== null) {
+                $cType = self::mapType($node->type);
+                $this->varTypes[$var] = $cType;
+                if (!$isDeclared) {
+                    $declType = $cType;
+                    if ($this->scopeDepth > 0) {
+                        $this->funcScopeDecls[$var] = $declType;
+                        return "{$var} = null;";
+                    }
+                    return "{$declType} {$var} = null;";
+                }
+                return "{$var} = null;";
+            }
             $this->varTypes[$var] = 'null';
             if (!$isDeclared) {
                 if ($this->scopeDepth > 0) {
@@ -8008,6 +8040,34 @@ class CodeGenerator implements ASTVisitor
 
         // isset($var) → 非 null 检测（非指针类型始终 true）
         if ($node->callee === null && $node->name === 'isset') {
+            // Special case: isset($arr['key']) → 混合数组键存在性检查
+            //   t_array* (mixed): tphp_fn_arr_get_str/int(arr, idx) != NULL
+            //   t_var (holding array): extract .value._array first
+            //   避免 *tphp_fn_arr_get_str(...) 返回 t_var 结构体无法转为 void*
+            if (!empty($node->args) && $node->args[0] instanceof ArrayAccessExpr) {
+                $arg = $node->args[0];
+                $arrExpr = $arg->array;
+                $vt = '';
+                if ($arrExpr instanceof VariableExpr) {
+                    $vt = $this->varTypes[self::varName($arrExpr->name)] ?? '';
+                } elseif ($arrExpr instanceof PropertyAccessExpr) {
+                    $vt = $this->inferType($arrExpr);
+                }
+                // Only handle t_array* (mixed array) and t_var (holding array)
+                // Typed arrays (t_arr_int* etc.) fall through to existing logic
+                if ($vt === 't_array*' || $vt === 't_var') {
+                    $arrCode = $arrExpr->accept($this);
+                    if ($vt === 't_var') {
+                        $arrCode = "(({$arrCode}).value._array)";
+                    }
+                    $idxCode = $arg->index->accept($this);
+                    $idxType = $this->inferType($arg->index);
+                    if ($idxType === 't_string' || $arg->index instanceof StringLiteralExpr) {
+                        return "(tphp_fn_arr_get_str({$arrCode}, {$idxCode}) != NULL)";
+                    }
+                    return "(tphp_fn_arr_get_int({$arrCode}, (t_int)({$idxCode})) != NULL)";
+                }
+            }
             $args = array_map(fn($a) => $a->accept($this), $node->args);
             $code = !empty($args) ? $args[0] : 'null';
             $type = !empty($node->args) ? $this->inferType($node->args[0]) : 'null';
@@ -9103,6 +9163,22 @@ class CodeGenerator implements ASTVisitor
                     if ($kt === 'null')       return "VAR_NULL()";
                     if ($kt && (str_contains($kt, 'tphp_class_') || str_contains($kt, 'tphp_enum_')))
                         return "VAR_OBJ({$code})";
+                }
+                // arrElementTypes 追踪（动态字符串键 $a[$key]）：visitArrayAccess 生成 typed getter
+                //   如 $dict[$key] = $freeEnt（int）→ arrElementTypes['dict']='t_int'
+                //   visitArrayAccess 生成 tphp_fn_arr_get_str_int 返回 t_int，需 VAR_INT 包装
+                //   仅对动态键生效：字面量键已有 arrValueTypes 精确追踪，arrElementTypes 可能与之冲突
+                if (!($expr->index instanceof StringLiteralExpr) && $expr->array instanceof VariableExpr) {
+                    $at = self::varName($expr->array->name);
+                    $et = $this->arrElementTypes[$at] ?? '';
+                    if ($et === 't_int' || $et === 't_bool')   return "VAR_INT({$code})";
+                    if ($et === 't_float')    return "VAR_FLOAT({$code})";
+                    if ($et === 't_array*')   return "VAR_ARRAY({$code})";
+                    if ($et === 't_callback') return "VAR_CALLBACK({$code})";
+                    if ($et === 'null')       return "VAR_NULL()";
+                    if ($et && (str_contains($et, 'tphp_class_') || str_contains($et, 'tphp_enum_')))
+                        return "VAR_OBJ({$code})";
+                    if ($et === 't_string')   return "VAR_STRING({$code})";
                 }
                 return "VAR_STRING({$code})";
             }

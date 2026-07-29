@@ -2258,6 +2258,111 @@ function sqlite_version(): string
 
 ---
 
+## gd — 图像处理 ✅ 已完成
+
+> 文件: `ext/gd/src/gd.php` + `gd_constants.php` + `gd_fonts.php` + `gd_codec_png.php`，按需引入 `#import gd`
+>
+> **纯 phpc 实现**，无自定义 C 代码，不依赖 libgd / libpng / libjpeg / libfreetype。
+> 仅复用 TinyPHP 已内置的 zlib 1.3.2 源码（用于 PNG 编解码）。
+> **支持格式**: PNG / GIF / BMP / GD / GD2 / WBMP / XBM / TGA（8 种完整编解码）
+> **不支持**: JPEG / WebP / AVIF / XPM / FreeType 字体渲染（调用时抛 `RuntimeException`，不静默返回 false）
+> **数据模型**: `GdImage` 对象维护像素数组（`array<int>`），真彩色每元素 `0x7FRRGGBB`，调色板每元素为索引
+
+### 类
+
+```php
+final class GdImage {
+    public int $width, $height;
+    public bool $trueColor;
+    public array $pixels;      // 真彩色: 0x7FRRGGBB, 调色板: 索引
+    public array $palette;     // 调色板颜色表
+    public bool $alphaBlending, $saveAlpha, $interlace;
+    public array $clip, $style;
+    public int $thickness, $transparentColor, $resolutionX, $resolutionY, $interpolationMethod;
+    public mixed $brush = null, $tile = null;
+}
+
+final class GdFont {
+    public int $width, $height;
+    public array $glyphs;      // 字符位图数组
+}
+```
+
+### 常量（89 个）
+
+| 类别 | 常量示例 | 说明 |
+|------|---------|------|
+| 图像类型 | `IMG_GIF` `IMG_PNG` `IMG_BMP` `IMG_WBMP` `IMG_XPM` `IMG_WEBP` `IMG_AVIF` `IMG_TGA` | `imagetypes()` 位掩码 |
+| 特殊颜色 | `IMG_COLOR_TILED` `IMG_COLOR_STYLED` `IMG_COLOR_BRUSHED` `IMG_COLOR_STYLEDBRUSHED` `IMG_COLOR_TRANSPARENT` | 绘图特殊颜色 |
+| 弧形 | `IMG_ARC_ROUNDED` `IMG_ARC_PIE` `IMG_ARC_CHORD` `IMG_ARC_NOFILL` `IMG_ARC_EDGED` | `imagefilledarc` 样式 |
+| GD2 格式 | `IMG_GD2_RAW` `IMG_GD2_COMPRESSED` | GD2 编码模式 |
+| 翻转 | `IMG_FLIP_HORIZONTAL` `IMG_FLIP_VERTICAL` `IMG_FLIP_BOTH` | `imageflip` 模式 |
+| 图层效果 | `IMG_EFFECT_REPLACE` `IMG_EFFECT_ALPHABLEND` `IMG_EFFECT_NORMAL` `IMG_EFFECT_OVERLAY` `IMG_EFFECT_MULTIPLY` | `imagelayereffect` |
+| 裁剪 | `IMG_CROP_DEFAULT` `IMG_CROP_TRANSPARENT` `IMG_CROP_BLACK` `IMG_CROP_WHITE` `IMG_CROP_SIDES` `IMG_CROP_THRESHOLD` | `imagecropauto` 模式 |
+| 插值方法 | `IMG_BELL` `IMG_BILINEAR_FIXED` `IMG_BICUBIC` `IMG_BICUBIC_FIXED` `IMG_BOX` `IMG_BSPLINE` `IMG_CATMULLROM` `IMG_GAUSSIAN` `IMG_HERMITE` `IMG_HAMMING` `IMG_HANNING` `IMG_MITCHELL` `IMG_NEAREST_NEIGHBOUR` `IMG_TRIANGLE` 等 | `imagesetinterpolation` |
+| 仿射 | `IMG_AFFINE_TRANSLATE` `IMG_AFFINE_SCALE` `IMG_AFFINE_ROTATE` `IMG_AFFINE_SHEAR_HORIZONTAL` `IMG_AFFINE_SHEAR_VERTICAL` | `imageaffinematrixget` 类型 |
+| 滤镜 | `IMG_FILTER_NEGATE` `IMG_FILTER_GRAYSCALE` `IMG_FILTER_BRIGHTNESS` `IMG_FILTER_CONTRAST` `IMG_FILTER_COLORIZE` `IMG_FILTER_EDGEDETECT` `IMG_FILTER_GAUSSIAN_BLUR` `IMG_FILTER_SELECTIVE_BLUR` `IMG_FILTER_EMBOSS` `IMG_FILTER_MEAN_REMOVAL` `IMG_FILTER_SMOOTH` `IMG_FILTER_PIXELATE` `IMG_FILTER_SCATTER` | `imagefilter` 类型 |
+| PNG 过滤 | `PNG_NO_FILTER` `PNG_FILTER_NONE` `PNG_FILTER_SUB` `PNG_FILTER_UP` `PNG_FILTER_AVG` `PNG_FILTER_PAETH` `PNG_ALL_FILTERS` | `imagepng` filters |
+| 版本 | `GD_VERSION` `GD_MAJOR_VERSION` `GD_MINOR_VERSION` `GD_RELEASE_VERSION` `GD_EXTRA_VERSION` `GD_BUNDLED` | GD 版本信息 |
+
+### 函数分组
+
+| 分组 | 函数数 | 函数列表 |
+|------|--------|---------|
+| 创建/销毁/信息 | 9 | `imagecreate` `imagecreatetruecolor` `imagedestroy` `imagecreatefromstring` `imagesx` `imagesy` `imageistruecolor` `gd_info` `imagetypes` |
+| 颜色管理 | 17 | `imagecolorallocate` `imagecolorallocatealpha` `imagecolorat` `imagecolorsforindex` `imagecolorclosest` `imagecolorclosestalpha` `imagecolorclosesthwb` `imagecolorexact` `imagecolorexactalpha` `imagecolorresolve` `imagecolorresolvealpha` `imagecolordeallocate` `imagecolorset` `imagecolorstotal` `imagecolortransparent` `imagepalettecopy` `imagecolormatch` |
+| 绘图 | 15 | `imagesetpixel` `imageline` `imagedashedline` `imagerectangle` `imagefilledrectangle` `imagesetthickness` `imagearc` `imageellipse` `imagefilledellipse` `imagefilledarc` `imagefill` `imagefilltoborder` `imagepolygon` `imageopenpolygon` `imagefilledpolygon` |
+| 字体与文字 | 7 | `imagefontwidth` `imagefontheight` `imagechar` `imagecharup` `imagestring` `imagestringup` `imageloadfont` |
+| 复制与缩放 | 5 | `imagecopy` `imagecopymerge` `imagecopymergegray` `imagecopyresized` `imagecopyresampled` |
+| 变换 | 8 | `imageflip` `imagerotate` `imagecrop` `imagecropauto` `imagescale` `imageaffine` `imageaffinematrixget` `imageaffinematrixconcat` |
+| 滤镜与卷积 | 4 | `imagefilter`（13 种滤镜）`imageconvolution` `imagegammacorrect` `imageantialias` |
+| 状态与属性 | 14 | `imagetruecolortopalette` `imagepalettetotruecolor` `imagealphablending` `imagesavealpha` `imagelayereffect` `imagesetstyle` `imagesetbrush` `imagesettile` `imagesetclip` `imagegetclip` `imagegetinterpolation` `imagesetinterpolation` `imageresolution` `imageinterlace` |
+| 编解码（支持） | 16 | `imagecreatefrompng` `imagepng` `imagecreatefromgif` `imagegif` `imagecreatefrombmp` `imagebmp` `imagecreatefromgd` `imagegd` `imagecreatefromgd2` `imagecreatefromgd2part` `imagegd2` `imagecreatefromwbmp` `imagewbmp` `imagecreatefromxbm` `imagexbm` `imagecreatefromtga` |
+| 编解码（不支持） | 13 | `imagecreatefromjpeg` `imagejpeg` `imagecreatefromwebp` `imagewebp` `imagecreatefromavif` `imageavif` `imagecreatefromxpm` `imagettftext` `imagefttext` `imagettfbbox` `imageftbbox` `imagegrabwindow` `imagegrabscreen` |
+
+### 差异说明
+
+- 所有 `GdImage|false` 返回类型改为 `GdImage|Exception`（失败抛 Exception，不返回 false）
+- `gd_info()` / `imagetypes()` 真实反映能力：JPEG/WebP/AVIF/XPM/FreeType Support 为 false
+- 不支持的格式调用时抛 `RuntimeException`，消息明确指出格式名称
+- `imagefilter` 参数为固定 4 个 `int $arg`（PHP 用 `...$args` 可变参数）
+- `imageinterlace` / `imageresolution` 使用 `-1` / `null` 默认值实现 getter/setter 双模式
+- `imagepolygon` / `imageopenpolygon` / `imagefilledpolygon` 第三参数为 `int $num_points_or_color`，第四参数为 `int $color = -1`
+
+### 示例
+
+```php
+#import gd
+
+// 1. 创建缩略图（PNG 格式）
+$src = imagecreatefrompng("photo.png");
+$w = imagesx($src); $h = imagesy($src);
+$thumb = imagecreatetruecolor(150, 150);
+imagecopyresampled($thumb, $src, 0, 0, 0, 0, 150, 150, $w, $h);
+imagepng($thumb, "thumb.png", 6);
+imagedestroy($src);
+imagedestroy($thumb);
+
+// 2. GIF 调色板图像
+$img = imagecreate(100, 50);
+$bg = imagecolorallocate($img, 255, 255, 255);
+$black = imagecolorallocate($img, 0, 0, 0);
+imagestring($img, 3, 10, 10, "Hello GIF", $black);
+imagegif($img, "hello.gif");
+imagedestroy($img);
+
+// 3. 滤镜效果
+$img = imagecreatefrompng("photo.png");
+imagefilter($img, IMG_FILTER_GRAYSCALE);
+imagefilter($img, IMG_FILTER_BRIGHTNESS, 50);
+imagepng($img, "grayscale.png");
+imagedestroy($img);
+```
+
+> 测试: `test/gd/`（17 个测试文件，762 断言），TCC/GCC 16.1.0/Clang 22.1.7 全部通过
+
+---
+
 ## 异常
 
 > 文件: `object/try.h`
