@@ -41,9 +41,12 @@
 #include <setjmp.h>
 
 // Exception frame — linked list on C stack
+//   thrown 字段必须 volatile：setjmp/longjmp 之间通过指针间接修改，
+//   -O2 下编译器可能缓存 thrown 到寄存器（C11 7.13.2: 非 volatile 局部变量
+//   在 longjmp 后值不确定），导致 catch 块误判 → 未捕获异常重抛 → 无限 longjmp 崩溃
 typedef struct _tp_ex_frame {
     jmp_buf                     jmp_buf;
-    int32_t                     thrown;
+    volatile int32_t            thrown;
     char                       *msg;      // 动态分配的消息（malloc，非 str_pool），NULL 表示无消息
     void                       *ex_obj;   // 抛出的 Exception 对象指针（tp_throw 时为 NULL）
     struct _tp_ex_frame        *prev;
