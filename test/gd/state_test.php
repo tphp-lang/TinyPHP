@@ -198,14 +198,14 @@ class Main
         echo "25. default res: " . $res[0] . "," . $res[1] . "\n";
 
         // 设置 X=150, Y=300
-        $r = imageresolution($tc2, 150, 300);
-        echo "26. set res(150,300): " . ($r ? "1" : "0") . "\n";
+        $ok1 = imageresolution($tc2, 150, 300);
+        echo "26. set res(150,300): " . intval($ok1) . "\n";
         $res = imageresolution($tc2);
         echo "27. get res: " . $res[0] . "," . $res[1] . "\n";
 
         // 仅设置 X=72，Y 应同时变为 72
-        $r = imageresolution($tc2, 72);
-        echo "28. set res(72): " . ($r ? "1" : "0") . "\n";
+        $ok2 = imageresolution($tc2, 72);
+        echo "28. set res(72): " . intval($ok2) . "\n";
         $res = imageresolution($tc2);
         echo "29. get res: " . $res[0] . "," . $res[1] . "\n";
 
@@ -219,14 +219,14 @@ class Main
         echo "30. default interlace: " . $il . "\n";
 
         // 设置 interlace=1
-        $r = imageinterlace($tc2, 1);
-        echo "31. set interlace=1: " . ($r ? "1" : "0") . "\n";
+        $ok3 = imageinterlace($tc2, 1);
+        echo "31. set interlace=1: " . intval($ok3) . "\n";
         $il = imageinterlace($tc2);
         echo "32. get interlace: " . $il . "\n";
 
         // 设置 interlace=0
-        $r = imageinterlace($tc2, 0);
-        echo "33. set interlace=0: " . ($r ? "1" : "0") . "\n";
+        $ok4 = imageinterlace($tc2, 0);
+        echo "33. set interlace=0: " . intval($ok4) . "\n";
         $il = imageinterlace($tc2);
         echo "34. get interlace: " . $il . "\n";
 

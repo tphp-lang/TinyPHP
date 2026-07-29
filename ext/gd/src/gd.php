@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 // gd_constants.php 由 #import gd 自动加载（同目录下的 .php 文件一起加载）
 // 常量定义见 gd_constants.php（IMG_AVIF/GIF/JPG/PNG/...、IMG_COLOR_*、IMG_ARC_* 等）

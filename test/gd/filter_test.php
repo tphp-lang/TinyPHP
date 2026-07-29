@@ -80,7 +80,6 @@
 #debug 18. antialias enable: OK
 #debug 18. antialias disable: OK
 #debug
-#debug
 #debug === All passed ===
 
 class Main

@@ -7,6 +7,9 @@
 #ifndef _CRT_RAND_S
 #define _CRT_RAND_S  // 启用 rand_s() (Windows CRT)
 #endif
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE  // 启用 sincos() 等 GNU 扩展（GCC -O2 会将 sin+cos 合并为 sincos）
+#endif
 
 #include <stdlib.h>
 #include <math.h>
