@@ -131,9 +131,14 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
 //     - prev（TP_TRY 前设置，不被 longjmp 修改）
 //     - thrown/msg/ex_obj 的初始值（TP_TRY 前设置，不被 longjmp 修改）
 //   catch 宏通过全局 _tp_ex_top 读取 thrown/msg/ex_obj 的 longjmp 后值
+//   _tp_need_rethrow / _tp_rethrow_obj / _tp_rethrow_msg：
+//     供 TP_FINALLY 保存未处理异常状态，TP_END_TRY 据此重抛。
 #define TP_TRY \
     do { \
         tp_ex_frame _tp_f; \
+        int _tp_need_rethrow = 0; \
+        void *_tp_rethrow_obj = NULL; \
+        char *_tp_rethrow_msg = NULL; \
         _tp_f.thrown  = 0; \
         _tp_f.msg     = NULL; \
         _tp_f.ex_obj  = NULL; \
@@ -205,17 +210,50 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
             } \
             free(_tp_c_msg);
 
+// TP_FINALLY：执行 finally 块。
+//   若有未处理异常（thrown=1）：保存异常状态到局部变量，设置 _tp_need_rethrow，
+//   清除当前帧并 _tp_ex_top=prev，使 finally 块内 throw 新异常能到父帧。
+//   TP_END_TRY 检查 _tp_need_rethrow 决定是否重抛原异常。
+//   若无异常（thrown=0 或已被 catch 处理）：_tp_ex_top=prev（仅正常完成时需要）。
 #define TP_FINALLY \
         } \
-        if (_tp_ex_top == (tp_ex_frame*)&_tp_f) { _tp_ex_top = _tp_ex_top->prev; } \
+        if (_tp_ex_top == (tp_ex_frame*)&_tp_f && _tp_ex_top->thrown) { \
+            _tp_need_rethrow = 1; \
+            _tp_rethrow_obj = _tp_ex_top->ex_obj; \
+            _tp_rethrow_msg = _tp_ex_top->msg; \
+            _tp_ex_top->thrown = 0; \
+            _tp_ex_top->msg = NULL; \
+            _tp_ex_top->ex_obj = NULL; \
+            _tp_ex_top = _tp_ex_top->prev; \
+        } else if (_tp_ex_top == (tp_ex_frame*)&_tp_f) { \
+            _tp_ex_top = _tp_ex_top->prev; \
+        } \
         {
 
-// 结束：若本帧捕获了异常但未被任何 catch 处理，则向上重新抛出
-//   通过 _tp_ex_top == &_tp_f 检查是否有未被处理的异常
+// 结束：重抛未被 catch 处理的异常。
+//   两条重抛路径：
+//     1. _tp_need_rethrow：TP_FINALLY 保存的异常（finally 块正常完成，无新 throw）
+//     2. _tp_ex_top == &_tp_f && thrown：无 finally 时，异常未被 catch 处理
 //   若 _tp_ex_top != &_tp_f，说明异常已被 catch 处理（_tp_ex_top 已恢复到父帧）
 #define TP_END_TRY \
         } \
-        if (_tp_ex_top == (tp_ex_frame*)&_tp_f && _tp_ex_top->thrown) { \
+        if (_tp_need_rethrow) { \
+            void *_tp_r_obj = _tp_rethrow_obj; \
+            char *_tp_r_msg = _tp_rethrow_msg; \
+            tp_ex_frame *_tp_r_prev = _tp_ex_top; \
+            if (_tp_r_prev != NULL) { \
+                _tp_r_prev->thrown  = 1; \
+                _tp_r_prev->ex_obj  = _tp_r_obj; \
+                if (_tp_r_obj == NULL && _tp_r_msg != NULL) { \
+                    free(_tp_r_prev->msg); \
+                    _tp_r_prev->msg = _tp_dup_msg(_tp_r_msg); \
+                } \
+                free(_tp_r_msg); \
+                _tp_do_longjmp(_tp_r_prev); \
+            } else { \
+                free(_tp_r_msg); \
+            } \
+        } else if (_tp_ex_top == (tp_ex_frame*)&_tp_f && _tp_ex_top->thrown) { \
             void *_tp_r_obj = _tp_ex_top->ex_obj; \
             char *_tp_r_msg = _tp_ex_top->msg; \
             tp_ex_frame *_tp_r_prev = _tp_ex_top->prev; \
