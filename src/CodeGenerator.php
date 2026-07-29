@@ -11202,7 +11202,7 @@ class CodeGenerator implements ASTVisitor
                     $resolvedCn = $this->symbols->resolveClass($t);
                     $isClass = $resolvedCn !== null || $t === 'Exception' || $this->symbols->hasClass('tphp_class_' . $t);
                     if (!$isClass) { $allClass = false; break; }
-                    $conds[] = 'tp_obj_is_a(_tp_f.ex_obj, &_class_tphp_class_' . $t . ')';
+                    $conds[] = 'tp_obj_is_a(_tp_ex_top->ex_obj, &_class_tphp_class_' . $t . ')';
                 }
                 if ($allClass && !empty($conds)) {
                     $this->varTypes[$cv] = 'tphp_class_Exception*';
