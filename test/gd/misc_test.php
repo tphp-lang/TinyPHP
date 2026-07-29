@@ -14,39 +14,39 @@
 #debug === GD Misc Test (Missing Coverage) ===
 #debug
 #debug -- imagecolorclosestalpha --
-#debug 1. tc closestalpha(255,0,0,64): 1090453504
-#debug 2. pal closestalpha(250,5,5,0): 0
+#debug 1. tc closestalpha(255,0,0,64): OK
+#debug 2. pal closestalpha(250,5,5,0): OK
 #debug
 #debug -- imagecolorexactalpha --
-#debug 3. tc exactalpha(255,0,0,64): 1090453504
-#debug 4. pal exactalpha(0,255,0,0): 1
-#debug 5. pal exactalpha(0,255,0,64): -1
+#debug 3. tc exactalpha(255,0,0,64): OK
+#debug 4. pal exactalpha(0,255,0,0): OK
+#debug 5. pal exactalpha(0,255,0,64): OK
 #debug
 #debug -- imagecolorresolvealpha --
-#debug 6. tc resolvealpha(255,0,0,64): 1090453504
-#debug 7. pal resolvealpha(0,255,0,0): 1
-#debug 8. pal resolvealpha(200,200,200,0): 3
+#debug 6. tc resolvealpha(255,0,0,64): OK
+#debug 7. pal resolvealpha(0,255,0,0): OK
+#debug 8. pal resolvealpha(200,200,200,0): OK
 #debug
 #debug -- imagecolorclosesthwb --
-#debug 9. tc closesthwb(255,0,0): 16711680
-#debug 10. pal closesthwb(250,5,5): 0
+#debug 9. tc closesthwb(255,0,0): OK
+#debug 10. pal closesthwb(250,5,5): OK
 #debug
 #debug -- imagecolormatch --
-#debug 11. match returns: 1
-#debug 12. palette[0] after match: 16711680
-#debug 13. match invalid (pal,tc): 0
+#debug 11. match returns: OK
+#debug 12. palette[0] after match: OK
+#debug 13. match invalid (pal,tc): OK
 #debug
 #debug -- imagelayereffect --
-#debug 14. effect REPLACE -> blending: 0
-#debug 15. effect NORMAL -> blending: 1
-#debug 16. effect returns true: 1
+#debug 14. effect REPLACE -> blending: OK
+#debug 15. effect NORMAL -> blending: OK
+#debug 16. effect returns true: OK
 #debug
 #debug -- imagecreatefromstring --
-#debug 17. png string w/h: 4x4
-#debug 18. png string pixel(0,0): 16711680
-#debug 19. png string pixel(1,1): 65280
-#debug 20. too short throws: 1
-#debug 21. unknown format throws: 1
+#debug 17. png string w/h: OK
+#debug 18. png string pixel(0,0): OK
+#debug 19. png string pixel(1,1): OK
+#debug 20. too short throws: OK
+#debug 21. unknown format throws: OK
 #debug
 #debug === All passed ===
 
