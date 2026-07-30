@@ -33,11 +33,13 @@
 | `ext/pdo` (PDO 统一 API + SQLite 驱动) | `ext/pdo/pdo.h` + `ext/pdo/src/pdo.php` | 33 |
 | `ext/pdo_mysql` (MySQL 驱动，纯 C 协议) | `ext/pdo_mysql/pdo_mysql.h` | 0（复用 PDO API） |
 | `ext/sqlite3` (函数式 SQLite) | `ext/sqlite3/sqlite3.h` + `ext/sqlite3/src/sqlite3.php` | 11 |
+| `ext/pgsql` (PostgreSQL，纯 C 协议) | `ext/pgsql/src/pgsql.php` + `pgsql_constants.php` | 78 |
+| `ext/pdo_pgsql` (PostgreSQL PDO 驱动) | `ext/pdo_pgsql/src/pdo_pgsql.php` | 3 |
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **389+** |
+| **合计** | | **470+** |
 
 ---
 
@@ -2360,6 +2362,331 @@ imagedestroy($img);
 ```
 
 > 测试: `test/gd/`（17 个测试文件，762 断言），TCC/GCC 16.1.0/Clang 22.1.7 全部通过
+
+---
+
+## pgsql — PostgreSQL 扩展 ✅ 已完成
+
+> 文件: `ext/pgsql/src/pgsql.php` + `pgsql_constants.php`，按需引入 `#import pgsql`
+>
+> **纯 C 实现 PostgreSQL v3 协议**，不依赖 libpq。复用 ext/stream 的 socket 跨平台抽象。
+> **认证**: trust / MD5 / SCRAM-SHA-256（内置 SHA-256/HMAC/PBKDF2 密码学原语）
+> **协议**: Extended Query（Parse/Bind/Execute）+ Simple Query
+> **不支持**: SSL/TLS、Unix socket（本期）
+> **AOT 类型安全**: 所有参数/返回值用 tphp 具体类型（int/string/array/bool），不使用 `mixed`/`t_var`
+> **指针 ↔ int 桥接**: `PgSql\Connection` 和 `PgSql\Result` 以 `int` 存储指针（不声明 PHP 层类，AOT 模型下 int 即可承载句柄）
+> **错误处理**: 所有错误抛 `Exception`（`tp_throw`），可被 `try-catch` 捕获，不静默返回 false
+> **多态拆分**: PHP 原生 `mixed` 返回按类型拆分（如 `pg_insert_result` 返回 int，`pg_insert_sql` 返回 string）
+> **持久连接池**: `pg_pconnect` 参考 vlang Pool+IdleSlot 模式实现连接复用
+> **Large Object**: `pg_lo_open` 返回 int 句柄，基于 `tphp_class_Resource` 实现资源管理
+> **通知回调**: `pg_set_notice_callback` 基于 `t_callback` 实现 callable 透传
+
+### 类
+
+（无 PHP 层类，`PgSql\Connection` 和 `PgSql\Result` 以 `int` 存储指针）
+
+### 常量（约 60 个）
+
+| 类别 | 常量 | 值 | 说明 |
+|------|------|-----|------|
+| **连接标志** | `PGSQL_CONNECT_FORCE_NEW` | 0x2 | 强制创建新连接 |
+| | `PGSQL_CONNECT_ASYNC` | 0x4 | 异步连接（仅定义） |
+| | `PGSQL_CONNECT_TIMEOUT` | 0x8 | 连接超时（仅定义） |
+| **结果集读取模式** | `PGSQL_ASSOC` | 0x1 | 关联数组 |
+| | `PGSQL_NUM` | 0x2 | 数字索引数组 |
+| | `PGSQL_BOTH` | 0x3 | 关联 + 索引 |
+| **pg_last_oid 返回类型** | `PGSQL_STATUS_LONG` | 0x1 | 返回整数 OID |
+| | `PGSQL_STATUS_STRING` | 0x2 | 返回字符串 OID |
+| **pg_result_status 返回值** | `PGSQL_EMPTY_QUERY` | 0x0 | 空查询 |
+| | `PGSQL_COMMAND_OK` | 0x1 | 命令成功（无结果集） |
+| | `PGSQL_TUPLES_OK` | 0x2 | 查询成功（有结果集） |
+| | `PGRES_COPY_OUT` | 0x3 | COPY TO 开始 |
+| | `PGRES_COPY_IN` | 0x4 | COPY FROM 开始 |
+| | `PGSQL_BAD_RESPONSE` | 0x5 | 无法理解的响应 |
+| | `PGSQL_NONFATAL_ERROR` | 0x6 | 非致命错误 |
+| | `PGSQL_FATAL_ERROR` | 0x7 | 致命错误 |
+| **lo_lseek whence** | `PGSQL_SEEK_SET` | 0x0 | 从文件开头 |
+| | `PGSQL_SEEK_CUR` | 0x1 | 从当前位置 |
+| | `PGSQL_SEEK_END` | 0x2 | 从文件末尾 |
+| **DML 操作标志** | `PGSQL_DML_NO_CONV` | 0x0 | 不进行类型转换 |
+| | `PGSQL_DML_EXEC` | 0x1 | 执行 SQL |
+| | `PGSQL_DML_ASYNC` | 0x2 | 异步执行（仅定义） |
+| | `PGSQL_DML_STRING` | 0x3 | 返回 SQL 字符串（不执行） |
+| | `PGSQL_DML_ESCAPE` | 0x4 | 使用 pg_escape 转义 |
+| **pg_transaction_status 返回值** | `PGSQL_TRANSACTION_IDLE` | 0x0 | 不在事务中 |
+| | `PGSQL_TRANSACTION_ACTIVE` | 0x1 | 正在执行查询 |
+| | `PGSQL_TRANSACTION_INTRANS` | 0x2 | 在事务块中（空闲） |
+| | `PGSQL_TRANSACTION_INERROR` | 0x3 | 在中止的事务块中 |
+| | `PGSQL_TRANSACTION_UNKNOWN` | 0x4 | 未知（连接异常） |
+| **pg_result_error_field fieldcode** | `PGSQL_DIAG_SEVERITY` | 0x0 | 严重程度 |
+| | `PGSQL_DIAG_SQLSTATE` | 0x1 | SQLSTATE 错误码 |
+| | `PGSQL_DIAG_MESSAGE` / `PGSQL_DIAG_MESSAGE_PRIMARY` | 0x2 | 主错误消息 |
+| | `PGSQL_DIAG_DETAIL` / `PGSQL_DIAG_MESSAGE_DETAIL` | 0x3 | 详细信息 |
+| | `PGSQL_DIAG_HINT` / `PGSQL_DIAG_MESSAGE_HINT` | 0x4 | 提示 |
+| | `PGSQL_DIAG_POSITION` / `PGSQL_DIAG_STATEMENT_POSITION` | 0x5 | 错误位置 |
+| | `PGSQL_DIAG_INTERNAL_POSITION` | 0x6 | 内部错误位置 |
+| | `PGSQL_DIAG_INTERNAL_QUERY` | 0x7 | 内部 SQL 文本 |
+| | `PGSQL_DIAG_CONTEXT` | 0x8 | 上下文 |
+| | `PGSQL_DIAG_SOURCE_FILE` | 0x9 | 源文件名 |
+| | `PGSQL_DIAG_SOURCE_LINE` | 0xA | 源行号 |
+| | `PGSQL_DIAG_NON_HIGHLIGHTED` / `PGSQL_DIAG_SCHEMA_NAME` | 0xB | 模式名 |
+| | `PGSQL_DIAG_TABLE_NAME` | 0xC | 表名 |
+| | `PGSQL_DIAG_COLUMN_NAME` | 0xD | 列名 |
+| | `PGSQL_DIAG_DATATYPE_NAME` | 0xE | 数据类型名 |
+| | `PGSQL_DIAG_CONSTRAINT_NAME` | 0xF | 约束名 |
+| | `PGSQL_DIAG_SOURCE_FUNCTION` | 0x12 | 源函数名 |
+| **pg_set_error_verbosity** | `PGSQL_ERRORS_TERSE` | 0x1 | 简洁模式 |
+| | `PGSQL_ERRORS_DEFAULT` | 0x2 | 默认模式 |
+| | `PGSQL_ERRORS_VERBOSE` | 0x3 | 详细模式 |
+| **pg_convert options** | `PGSQL_CONV_IGNORE_DEFAULT` | 0x2 | 忽略默认值 |
+| | `PGSQL_CONV_FORCE_NULL` | 0x4 | 空字符串转 NULL |
+| | `PGSQL_CONV_IGNORE_NOT_NULL` | 0x8 | 忽略 NOT NULL 约束 |
+| **pg_close options** | `PGSQL_CLOSE_FORCE` | 0x1 | 强制关闭（不发送 Terminate） |
+| | `PGSQL_CLOSE_RESET` | 0x2 | 重置连接状态后关闭 |
+
+### 函数（78 个）
+
+#### 连接管理（6 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_connect` | `(string $dsn): int` | 连接 PostgreSQL（返回连接句柄） |
+| `pg_pconnect` | `(string $dsn, int $flags = 0): int` | 持久连接（Pool+IdleSlot 复用模式） |
+| `pg_close` | `(int $conn, int $close_flags = 0): bool` | 关闭连接（`PGSQL_CLOSE_FORCE` 强制关闭持久连接） |
+| `pg_connection_status` | `(int $conn): int` | 连接状态 |
+| `pg_connection_reset` | `(int $conn): bool` | 重置连接 |
+| `pg_ping` | `(int $conn): bool` | Ping 服务器 |
+
+#### 查询（5 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_query` | `(int $conn, string $sql): int` | 执行 SQL（Simple Query 协议） |
+| `pg_query_params` | `(int $conn, string $sql, array $params): int` | 参数化查询（Extended Query，$N 占位符） |
+| `pg_prepare` | `(int $conn, string $stmt_name, string $sql): int` | 预处理语句 |
+| `pg_execute` | `(int $conn, string $stmt_name, array $params): int` | 执行预处理语句 |
+| `pg_free_result` | `(int $result): void` | 释放结果集 |
+
+#### 结果集（25 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_num_rows` | `(int $result): int` | 行数 |
+| `pg_num_fields` | `(int $result): int` | 列数 |
+| `pg_affected_rows` | `(int $result): int` | 受影响行数 |
+| `pg_last_oid` | `(int $result): int` | 最后插入的 OID |
+| `pg_field_name` | `(int $result, int $field_num): string` | 列名 |
+| `pg_field_num` | `(int $result, string $field_name): int` | 列号 |
+| `pg_field_type` | `(int $result, int $field_num): string` | 列类型名 |
+| `pg_field_type_oid` | `(int $result, int $field_num): int` | 列类型 OID |
+| `pg_field_size` | `(int $result, int $field_num): int` | 列大小 |
+| `pg_field_prtlen` | `(int $result, int $row_num, int $field_num): int` | 字段打印长度 |
+| `pg_field_is_null` | `(int $result, int $row_num, int $field_num): bool` | 字段是否 NULL |
+| `pg_field_table` | `(int $result, int $field_num): int` | 字段所属表 OID |
+| `pg_fetch_row` | `(int $result): array` | 取一行（索引数组），取完返回 `[]` |
+| `pg_fetch_assoc` | `(int $result): array` | 取一行（关联数组），取完返回 `[]` |
+| `pg_fetch_array` | `(int $result, int $result_type = 3): array` | 取一行（`PGSQL_ASSOC`/`NUM`/`BOTH`） |
+| `pg_fetch_all` | `(int $result, int $result_type = 3): array` | 取所有行 |
+| `pg_fetch_all_columns` | `(int $result, int $col = 0): array` | 取单列所有值 |
+| `pg_fetch_result_str` | `(int $result, int $row, string $field): string` | 取单值（多态拆分为 string 版本） |
+| `pg_result_status` | `(int $result, int $mode = 1): int` | 结果状态（int 模式） |
+| `pg_result_status_str` | `(int $result): string` | 结果状态（string 模式，多态拆分） |
+| `pg_result_seek` | `(int $result, int $offset): bool` | 移动行指针 |
+| `pg_result_error` | `(int $result): string` | 结果错误消息 |
+| `pg_result_error_field` | `(int $result, int $field_code): string` | 错误字段值（`PGSQL_DIAG_*`） |
+| `pg_last_error` | `(int $conn): string` | 连接最后错误消息 |
+| `pg_last_notice` | `(int $conn): string` | 连接最后通知消息 |
+
+#### 连接信息（10 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_dbname` | `(int $conn): string` | 数据库名 |
+| `pg_host` | `(int $conn): string` | 主机名 |
+| `pg_port` | `(int $conn): int` | 端口 |
+| `pg_options` | `(int $conn): string` | 连接选项 |
+| `pg_tty` | `(int $conn): string` | 终端（兼容性） |
+| `pg_version` | `(int $conn): array` | 版本信息 |
+| `pg_parameter_status` | `(int $conn, string $param_name): string` | 服务器参数状态 |
+| `pg_transaction_status` | `(int $conn): int` | 事务状态 |
+| `pg_client_encoding` | `(int $conn): string` | 客户端编码 |
+| `pg_set_client_encoding` | `(int $conn, string $encoding): int` | 设置客户端编码 |
+
+#### 转义（5 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_escape_string` | `(int $conn, string $data): string` | 转义字符串 |
+| `pg_escape_literal` | `(int $conn, string $data): string` | 转义为字面量（带引号） |
+| `pg_escape_identifier` | `(int $conn, string $data): string` | 转义为标识符（带引号） |
+| `pg_escape_bytea` | `(int $conn, string $data): string` | 转义 bytea 二进制 |
+| `pg_unescape_bytea` | `(string $data): string` | 反转义 bytea（无需连接句柄） |
+
+#### COPY（5 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_copy_to` | `(int $conn, string $table_name, string $separator = "\t", string $null_as = "\\\\N"): array` | COPY TO 导出为数组 |
+| `pg_copy_from` | `(int $conn, string $table_name, array $rows, string $separator = "\t", string $null_as = "\\\\N"): bool` | COPY FROM 从数组导入 |
+| `pg_put_copy_data` | `(int $conn, string $data): bool` | 发送 COPY 数据 |
+| `pg_put_copy_end` | `(int $conn, string $error_msg = ""): bool` | 结束 COPY（可带错误消息） |
+| `pg_end_copy` | `(int $conn): bool` | 同步 COPY 状态 |
+
+#### DML（9 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_meta_data` | `(int $conn, string $table_name): array` | 表元数据 |
+| `pg_convert` | `(int $conn, string $table_name, array $assoc_array, int $flags = 0): array` | 转换关联数组匹配表结构 |
+| `pg_insert_result` | `(int $conn, string $table_name, array $assoc, int $flags = 1): int` | 插入并返回受影响行数（多态拆分） |
+| `pg_insert_sql` | `(int $conn, string $table_name, array $assoc, int $flags = 1): string` | 生成 INSERT SQL（`PGSQL_DML_STRING`） |
+| `pg_update_result` | `(int $conn, string $table_name, array $assoc, array $condition, int $flags = 1): int` | 更新并返回受影响行数 |
+| `pg_update_sql` | `(int $conn, string $table_name, array $assoc, array $condition, int $flags = 1): string` | 生成 UPDATE SQL |
+| `pg_delete_result` | `(int $conn, string $table_name, array $condition, int $flags = 1): int` | 删除并返回受影响行数 |
+| `pg_delete_sql` | `(int $conn, string $table_name, array $condition, int $flags = 1): string` | 生成 DELETE SQL |
+| `pg_select` | `(int $conn, string $table_name, array $assoc, int $conditions = 0, int $flags = 1): array` | 查询匹配行 |
+
+#### Large Object（12 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_lo_create` | `(int $conn): int` | 创建 Large Object，返回 OID |
+| `pg_lo_open` | `(int $conn, int $oid, string $mode): int` | 打开 Large Object（返回 Resource 句柄） |
+| `pg_lo_read` | `(int $conn, int $lob, int $len): string` | 读取 Large Object |
+| `pg_lo_write` | `(int $conn, int $lob, string $data): int` | 写入 Large Object |
+| `pg_lo_seek` | `(int $conn, int $lob, int $offset, int $whence = 0): int` | 移动 Large Object 指针 |
+| `pg_lo_tell` | `(int $conn, int $lob): int` | 当前位置 |
+| `pg_lo_truncate` | `(int $conn, int $lob, int $len): bool` | 截断 Large Object |
+| `pg_lo_close` | `(int $conn, int $lob): void` | 关闭 Large Object |
+| `pg_lo_unlink` | `(int $conn, int $oid): bool` | 删除 Large Object |
+| `pg_lo_import` | `(int $conn, string $filename): int` | 从文件导入 Large Object |
+| `pg_lo_export` | `(int $conn, int $oid, string $filename): bool` | 导出 Large Object 到文件 |
+| `pg_lo_read_all` | `(int $conn, int $lob): string` | 读取全部 Large Object 内容 |
+
+#### 通知回调（1 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pg_set_notice_callback` | `(int $conn, callable $callback): void` | 设置通知回调（`t_callback` 透传） |
+
+### 差异说明
+
+- PHP 原生 `mixed` 返回值按类型拆分（如 `pg_insert` → `pg_insert_result`/`pg_insert_sql`）
+- `pg_fetch_result` 多态返回拆分为 `pg_fetch_result_str`（string 版本）
+- `pg_result_status` 多态返回拆分为 `pg_result_status`（int）/`pg_result_status_str`（string）
+- `pg_lo_open` 返回 `int`（Large Object 句柄以 int 存储，基于 `tphp_class_Resource`）
+- `PgSql\Connection` / `PgSql\Result` 不声明为 PHP 类（AOT 模型下用 int 存储指针）
+- `pg_pconnect` 持久连接池参考 vlang Pool+IdleSlot 模式实现
+- `pg_set_notice_callback` 的 `callable` 参数映射为 `t_callback` 类型直接透传 C 层
+- 所有错误抛 `Exception`（`tp_throw`），不返回 `false`
+
+### 示例
+
+```php
+#import pgsql
+
+// 1. 连接 + 查询
+$conn = pg_connect("host=127.0.0.1 port=5432 dbname=test user=postgres password=secret");
+$result = pg_query($conn, "SELECT id, name FROM users WHERE id = 1");
+$row = pg_fetch_assoc($result);
+echo $row["name"];
+pg_free_result($result);
+
+// 2. 参数化查询（Extended Query）
+$result = pg_query_params($conn, "SELECT * FROM users WHERE age > $1 AND city = $2", [18, "Beijing"]);
+while ($row = pg_fetch_assoc($result)) {
+    echo $row["name"] . "\n";
+}
+
+// 3. 预处理 + 执行
+pg_prepare($conn, "stmt1", "INSERT INTO users (name, age) VALUES ($1, $2)");
+pg_execute($conn, "stmt1", ["Alice", 30]);
+
+// 4. DML（生成 SQL 字符串，不执行）
+$sql = pg_insert_sql($conn, "users", ["name" => "Bob", "age" => 25], PGSQL_DML_STRING);
+echo $sql;  // INSERT INTO users (name, age) VALUES ('Bob', 25)
+
+// 5. Large Object
+$oid = pg_lo_create($conn);
+$lob = pg_lo_open($conn, $oid, "w");
+pg_lo_write($conn, $lob, "binary data");
+pg_lo_close($conn, $lob);
+
+// 6. 错误处理（可 try-catch）
+try {
+    pg_query($conn, "SELECT * FROM nonexistent_table");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+```
+
+---
+
+## pdo_pgsql — PostgreSQL PDO 驱动 ✅ 已完成
+
+> 文件: `ext/pdo_pgsql/src/pdo_pgsql.php`，按需引入 `#import pdo_pgsql`
+>
+> **通过 PDO 接口访问 PostgreSQL**，复用 ext/pgsql 的纯 C 协议实现（不依赖 libpq）。
+> 用户通过 `new PDO("pgsql:host=...;port=...;dbname=...")` 使用，DSN 前缀 `pgsql:` 匹配。
+> **认证**: trust / MD5 / SCRAM-SHA-256（由 ext/pgsql 提供）
+> **参数化查询**: 将 PDO 的 `?` 占位符转换为 PostgreSQL 的 `$N` 占位符
+> **Pdo\Pgsql 类说明**: TinyPHP AOT 模型中跨命名空间继承受限，驱动通过 `pdo_driver_t` 函数指针表
+> 实现，用户直接使用 `new PDO("pgsql:...")` 即可。PostgreSQL 专属功能通过本文件提供的
+> PHP 层包装函数访问，传入 PDO 实例的 `$db` 属性（dbh 句柄）即可调用。
+> **AOT 类型安全**: 所有参数/返回值用 tphp 具体类型（int/string/array），指针以 int 存储，
+> 用 `c_int()`/`php_int()` 转换。
+> **错误处理**: 所有错误抛 `Exception`（`tp_throw`），可被 `try-catch` 捕获。
+
+### 常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `PDO::ATTR_DISABLE_PREPARES` | 0x7D0 | 禁用服务端预处理（始终用 Simple Query 协议） |
+| `PDO::ATTR_RESULT_MEMORY_SIZE` | 0x7D1 | 结果集内存占用上限（字节，0=无限制） |
+
+### 函数（3 个）
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `pdo_pgsql_get_pid` | `(int $dbh): int` | 获取后端进程 PID（无效句柄返回 0） |
+| `pdo_pgsql_get_notify` | `(int $dbh, int $result_type = 1, int $timeout_ms = 0): array` | 获取异步通知（返回 `[pid, channel, message]`，无通知返回 `[]`） |
+| `pdo_pgsql_pgconn` | `(int $dbh): int` | 从 PDO dbh 提取底层 PGconn 句柄（可用于 ext/pgsql 的 `pg_*` 函数） |
+
+### 示例
+
+```php
+#import pdo
+#import pdo_pgsql
+
+// 通过 PDO 接口使用 PostgreSQL
+$db = new PDO("pgsql:host=127.0.0.1;port=5432;dbname=test", "postgres", "secret");
+
+// 预处理 + 位置绑定（? → $N 自动转换）
+$stmt = $db->prepare("SELECT * FROM users WHERE age > ? AND city = ?");
+$stmt->bindValueInt(1, 18);
+$stmt->bindValueStr(2, "Beijing");
+$stmt->execute();
+foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+    echo $row["name"] . "\n";
+}
+
+// PostgreSQL 专属功能
+$pid = pdo_pgsql_get_pid($db->db);       // 后端进程 PID
+$notify = pdo_pgsql_get_notify($db->db);  // 异步通知（LISTEN/NOTIFY）
+$pgconn = pdo_pgsql_pgconn($db->db);      // 提取 PGconn 句柄，可直接调用 pg_* 函数
+
+// 事务
+$db->beginTransaction();
+$db->exec("UPDATE users SET age = 31 WHERE id = 1");
+$db->commit();
+
+// 错误处理（可 try-catch）
+try {
+    $db->exec("SELECT * FROM nonexistent_table");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+```
 
 ---
 

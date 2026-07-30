@@ -201,7 +201,7 @@ use MyApp\Models\User;
 
 ### 🔢 内置函数
 
-已实现 **350+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup)/zlib(gzip 压缩+流式+增量上下文)/zip(归档读写)/stream(socket stream)/curl(HTTP/HTTPS 客户端，690 常量+35 函数) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+已实现 **430+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup)/zlib(gzip 压缩+流式+增量上下文)/zip(归档读写)/stream(socket stream)/curl(HTTP/HTTPS 客户端，690 常量+35 函数)/pgsql(PostgreSQL 纯 C 协议，78 函数+60 常量)/pdo_pgsql(PostgreSQL PDO 驱动) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ## 独有特性
 
@@ -286,7 +286,7 @@ $tid = Thread::id();
 
 ### 扩展系统
 
-对标 PHP extension，`#import` 按需引入。已内置 `pcntl`、`posix`、`stream`、`openssl`、`curl`、`sqlite3`、`pdo`(SQLite+MySQL)、`zlib`、`zip`、`iconv`、`exif`、`fileinfo`、`calendar`、`filter`、`hash`、`gd` 扩展：
+对标 PHP extension，`#import` 按需引入。已内置 `pcntl`、`posix`、`stream`、`openssl`、`curl`、`sqlite3`、`pdo`(SQLite+MySQL+PostgreSQL)、`pgsql`、`pdo_pgsql`、`zlib`、`zip`、`iconv`、`exif`、`fileinfo`、`calendar`、`filter`、`hash`、`gd` 扩展：
 
 ```php
 <?php

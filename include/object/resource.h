@@ -112,41 +112,45 @@ static int   _rsrc_free_top = 0;
 static int   _rsrc_active_count = 0;  // 当前活跃资源数
 
 // ── 插入资源（O(1)，模拟 zend_list_insert）───────────────
+//   返回 1-based 资源 ID（与 PHP 一致，0=无效，首个有效 ID=1）
+//   内部仍用 0-based slot 索引 _rsrc_list，公开 ID = slot + 1
 static inline t_int tphp_rt_resource_insert(tphp_class_Resource* res) {
-    if (unlikely(res == NULL)) return -1;
+    if (unlikely(res == NULL)) return 0;  // 0 = invalid
 
-    t_int id;
+    t_int slot;  // 0-based 内部索引
     if (likely(_rsrc_free_top > 0)) {
-        // 从空闲栈弹出（复用已释放 ID）
-        id = _rsrc_free_stack[--_rsrc_free_top];
+        // 从空闲栈弹出（复用已释放 slot）
+        slot = _rsrc_free_stack[--_rsrc_free_top];
     } else {
-        // 使用新 ID
-        if (unlikely(_rsrc_active_count >= RSRC_LIST_MAX)) return -1;
-        id = _rsrc_active_count++;
+        // 使用新 slot
+        if (unlikely(_rsrc_active_count >= RSRC_LIST_MAX)) return 0;
+        slot = _rsrc_active_count++;
     }
 
-    _rsrc_list[id] = res;
+    _rsrc_list[slot] = res;
+    t_int id = slot + 1;  // 1-based 公开 ID
     res->handle = id;
     return id;
 }
 
 // ── 获取资源（O(1)，模拟 zend_list_fetch）────────────────
 static inline tphp_class_Resource* tphp_rt_resource_fetch(t_int handle) {
-    if (unlikely(handle < 0 || handle >= RSRC_LIST_MAX)) return NULL;
-    return _rsrc_list[handle];
+    if (unlikely(handle < 1 || handle > RSRC_LIST_MAX)) return NULL;
+    return _rsrc_list[handle - 1];
 }
 
 // ── 资源是否有效 ──────────────────────────────────────────
 static inline t_bool tphp_rt_resource_is_valid(t_int handle) {
-    if (unlikely(handle < 0 || handle >= RSRC_LIST_MAX)) return false;
-    return _rsrc_list[handle] != NULL;
+    if (unlikely(handle < 1 || handle > RSRC_LIST_MAX)) return false;
+    return _rsrc_list[handle - 1] != NULL;
 }
 
 // ── 删除资源（O(1)，模拟 zend_list_delete）───────────────
 //   析构底层资源，将槽位压入空闲栈复用
 static inline void tphp_rt_resource_delete(t_int handle) {
-    if (unlikely(handle < 0 || handle >= RSRC_LIST_MAX)) return;
-    tphp_class_Resource *res = _rsrc_list[handle];
+    if (unlikely(handle < 1 || handle > RSRC_LIST_MAX)) return;
+    t_int slot = handle - 1;
+    tphp_class_Resource *res = _rsrc_list[slot];
     if (res == NULL) return;
 
     // 调用类型析构回调（释放底层资源）
@@ -159,12 +163,12 @@ static inline void tphp_rt_resource_delete(t_int handle) {
     }
 
     // 清空槽位，压入空闲栈
-    _rsrc_list[handle] = NULL;
-    res->handle = -1;
+    _rsrc_list[slot] = NULL;
+    res->handle = 0;  // 0 = invalid
 
     // 防止空闲栈溢出
     if (likely(_rsrc_free_top < RSRC_LIST_MAX)) {
-        _rsrc_free_stack[_rsrc_free_top++] = handle;
+        _rsrc_free_stack[_rsrc_free_top++] = slot;  // 存储 0-based slot
     }
 }
 
@@ -226,12 +230,15 @@ void tphp_class_Resource___destruct(tphp_class_Resource* self) {
     }
 
     // 从列表移除（防双重释放：先清列表再置 NULL）
-    t_int h = self->handle;
-    self->handle = -1;
-    if (h >= 0 && h < RSRC_LIST_MAX && _rsrc_list[h] == self) {
-        _rsrc_list[h] = NULL;
-        if (_rsrc_free_top < RSRC_LIST_MAX) {
-            _rsrc_free_stack[_rsrc_free_top++] = h;
+    t_int h = self->handle;  // 1-based ID，0=未注册
+    self->handle = 0;
+    if (h >= 1 && h <= RSRC_LIST_MAX) {
+        t_int slot = h - 1;
+        if (_rsrc_list[slot] == self) {
+            _rsrc_list[slot] = NULL;
+            if (_rsrc_free_top < RSRC_LIST_MAX) {
+                _rsrc_free_stack[_rsrc_free_top++] = slot;  // 存储 0-based slot
+            }
         }
     }
 }

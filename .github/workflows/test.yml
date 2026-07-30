@@ -5,7 +5,7 @@ on:
 
 jobs:
   # ============================================================
-  # Windows x86_64 — TCC / GCC / Clang + MySQL (Chocolatey)
+  # Windows x86_64 — TCC / GCC / Clang + MySQL + PostgreSQL (Chocolatey)
   #   GitHub Actions Windows runner 不支持 services, 改用 choco 安装
   # ============================================================
   windows-x86_64:
@@ -62,6 +62,37 @@ jobs:
           # 验证密码登录
           & "$mariaBin\mysql.exe" -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
 
+      - name: Install PostgreSQL
+        shell: pwsh
+        run: |
+          # 使用 Chocolatey 安装 PostgreSQL 17（与 pgsql 扩展测试配套）
+          choco install postgresql17 -y --no-progress --params "/Password:postgres"
+          $pgBin = "C:\Program Files\PostgreSQL\17\bin"
+          $env:PATH += ";$pgBin"
+          $env:PGPASSWORD = "postgres"
+          # 确保服务已启动（choco 安装后通常已启动，此处兜底）
+          $svc = Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($svc -and $svc.Status -ne 'Running') { Start-Service $svc.Name }
+          # 等待就绪
+          for ($i = 1; $i -le 30; $i++) {
+            try {
+              & "$pgBin\psql.exe" -h 127.0.0.1 -U postgres -c "SELECT 1" -tA 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "PostgreSQL is ready"
+                break
+              }
+            } catch {}
+            Write-Host "Waiting for PostgreSQL... ($i/30)"
+            Start-Sleep -Seconds 2
+          }
+          if ($LASTEXITCODE -ne 0) { throw "PostgreSQL did not become ready" }
+          # 创建测试数据库（若已存在则忽略）
+          & "$pgBin\psql.exe" -h 127.0.0.1 -U postgres -c "CREATE DATABASE tinyphp_test;" 2>$null
+          & "$pgBin\psql.exe" -h 127.0.0.1 -U postgres -c "SELECT version();"
+          # 持久化环境变量供后续 Test 步骤使用
+          Add-Content -Path $env:GITHUB_ENV -Value "PATH=$env:PATH"
+          Add-Content -Path $env:GITHUB_ENV -Value "PGPASSWORD=postgres"
+
       - name: Add TCC
         shell: pwsh
         run: |
@@ -85,7 +116,7 @@ jobs:
           exit $proc.ExitCode
 
   # ============================================================
-  # Linux x86_64 — TCC / GCC / Clang + MySQL 8 (services container)
+  # Linux x86_64 — TCC / GCC / Clang + MySQL 8 + PostgreSQL 16 (services container)
   # ============================================================
   linux-x86_64:
     runs-on: ubuntu-latest
@@ -107,13 +138,25 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tinyphp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev default-mysql-client
+          sudo apt install -y gcc make libc6-dev default-mysql-client postgresql-client
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
       - name: Add TCC
@@ -143,6 +186,18 @@ jobs:
           # 修改 root@% 认证插件为 mysql_native_password（纯 C 客户端不支持 caching_sha2_password）
           mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
 
+      - name: Verify PostgreSQL
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h 127.0.0.1 -p 5432 2>/dev/null; then
+              echo "PostgreSQL is ready"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d tinyphp_test -c "SELECT version();"
+
       - name: Test
         run: |
           ccFlag=""
@@ -150,7 +205,7 @@ jobs:
           ./php .github/scripts/run_tests.php $ccFlag
 
   # ============================================================
-  # Linux aarch64 — TCC / GCC / Clang + MySQL 8 (services container)
+  # Linux aarch64 — TCC / GCC / Clang + MySQL 8 + PostgreSQL 16 (services container)
   # ============================================================
   linux-aarch64:
     runs-on: ubuntu-24.04-arm
@@ -172,13 +227,25 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tinyphp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev default-mysql-client
+          sudo apt install -y gcc make libc6-dev default-mysql-client postgresql-client
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
       - name: Add TCC
@@ -208,6 +275,18 @@ jobs:
           # 修改 root@% 认证插件为 mysql_native_password（纯 C 客户端不支持 caching_sha2_password）
           mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
 
+      - name: Verify PostgreSQL
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h 127.0.0.1 -p 5432 2>/dev/null; then
+              echo "PostgreSQL is ready"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d tinyphp_test -c "SELECT version();"
+
       - name: Test
         run: |
           ccFlag=""
@@ -215,7 +294,7 @@ jobs:
           ./php .github/scripts/run_tests.php $ccFlag
 
   # ============================================================
-  # macOS aarch64 — TCC / GCC / Clang + MySQL (Homebrew)
+  # macOS aarch64 — TCC / GCC / Clang + MySQL + PostgreSQL (Homebrew)
   # ============================================================
   macos-aarch64:
     runs-on: macos-latest
@@ -249,6 +328,32 @@ jobs:
           # 改为 mysql_native_password + 密码, 使纯 C 客户端可通过 TCP 连接
           sudo mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('root'); FLUSH PRIVILEGES;"
           mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SELECT VERSION();"
+
+      - name: Install PostgreSQL
+        run: |
+          brew install postgresql
+          PGDATA="$(brew --prefix)/var/postgresql"
+          # 初始化数据目录（首次安装时）
+          if [ ! -d "$PGDATA" ]; then
+            initdb -D "$PGDATA" -U runner --auth-host=scram-sha-256 --auth-local=trust
+          fi
+          # 启动
+          postgres -D "$PGDATA" -p 5432 &
+          # 等待就绪
+          for i in {1..30}; do
+            if pg_isready -h 127.0.0.1 -p 5432 2>/dev/null; then
+              echo "PostgreSQL is ready"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          # 通过 local trust 连接创建 postgres 用户并设置密码（测试用 postgres 用户连接）
+          psql -d postgres -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='postgres') THEN CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'postgres'; ELSE ALTER ROLE postgres WITH PASSWORD 'postgres'; END IF; END \$\$;"
+          # 创建测试数据库
+          psql -d postgres -c "CREATE DATABASE tinyphp_test;" 2>/dev/null || true
+          # 验证 TCP 密码连接（scram-sha-256 认证）
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d tinyphp_test -c "SELECT version();"
 
       - name: Add TCC
         run: |
