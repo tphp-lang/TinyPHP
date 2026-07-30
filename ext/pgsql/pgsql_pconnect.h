@@ -16,11 +16,11 @@
 //
 // 依赖：
 //   - pgsql.h（结构体 + 常量 + 前向声明）
-//   - pgsql_protocol.h（tphp_fn_pg_connect / _pg_send_message / _pg_free_conn）
+//   - pgsql_protocol.h（_pg_connect / _pg_send_message / _pg_free_conn）
 //   - include/types.h（t_int / t_string / t_bool）
 //
 // 注意：
-//   tphp_fn_pg_pconnect / tphp_fn_pg_close（在 pgsql_protocol.h 中）
+//   _pg_pconnect / _pg_close（在 pgsql_protocol.h 中）
 //   委托调用本文件的 _pg_pconnect_real / _pg_close_real
 // ============================================================
 
@@ -59,7 +59,7 @@ static uint64_t _pg_dsn_hash(const char *dsn) {
 // 9.6.2 _pg_pconnect_real — 持久连接实现
 //   1. 计算 DSN 哈希
 //   2. 查池（in_use=0 且 dsn_hash 匹配），命中则复用
-//   3. 未命中：调 tphp_fn_pg_connect 建立新连接，加入池
+//   3. 未命中：调 _pg_connect 建立新连接，加入池
 //   flags: PGSQL_CONNECT_FORCE_NEW=2 强制新建连接
 // ============================================================
 static t_int _pg_pconnect_real(t_string dsn, t_int flags) {
@@ -86,7 +86,7 @@ static t_int _pg_pconnect_real(t_string dsn, t_int flags) {
     }
 
     // 未命中 — 建立新连接
-    t_int conn_handle = tphp_fn_pg_connect(dsn);
+    t_int conn_handle = _pg_connect(dsn);
     if (conn_handle == 0) return 0;  // pg_connect 已 tp_throw
 
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);

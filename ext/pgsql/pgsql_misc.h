@@ -59,7 +59,7 @@ static inline int _pg_hex_val(char c) {
 // 7.1 连接信息
 // ============================================================
 
-t_string tphp_fn_pg_dbname(t_int conn_handle) {
+t_string _pg_dbname(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_dbname: invalid connection handle");
@@ -69,7 +69,7 @@ t_string tphp_fn_pg_dbname(t_int conn_handle) {
     return (t_string){0};
 }
 
-t_string tphp_fn_pg_host(t_int conn_handle) {
+t_string _pg_host(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_host: invalid connection handle");
@@ -79,7 +79,7 @@ t_string tphp_fn_pg_host(t_int conn_handle) {
     return (t_string){0};
 }
 
-t_int tphp_fn_pg_port(t_int conn_handle) {
+t_int _pg_port(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_port: invalid connection handle");
@@ -88,7 +88,7 @@ t_int tphp_fn_pg_port(t_int conn_handle) {
     return (t_int)conn->port;
 }
 
-t_string tphp_fn_pg_options(t_int conn_handle) {
+t_string _pg_options(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_options: invalid connection handle");
@@ -98,7 +98,7 @@ t_string tphp_fn_pg_options(t_int conn_handle) {
     return (t_string){0};
 }
 
-t_string tphp_fn_pg_tty(t_int conn_handle) {
+t_string _pg_tty(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_tty: invalid connection handle");
@@ -109,7 +109,7 @@ t_string tphp_fn_pg_tty(t_int conn_handle) {
 }
 
 // pg_version — 返回 [client, server, protocol] 关联数组
-t_array* tphp_fn_pg_version(t_int conn_handle) {
+t_array* _pg_version(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_version: invalid connection handle");
@@ -137,7 +137,7 @@ t_array* tphp_fn_pg_version(t_int conn_handle) {
 
 // pg_parameter_status — 返回已知的服务器参数值
 //   仅返回连接启动时缓存的参数（server_version / client_encoding / standard_conforming_strings）
-t_string tphp_fn_pg_parameter_status(t_int conn_handle, t_string param_name) {
+t_string _pg_parameter_status(t_int conn_handle, t_string param_name) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_parameter_status: invalid connection handle");
@@ -165,7 +165,7 @@ t_string tphp_fn_pg_parameter_status(t_int conn_handle, t_string param_name) {
 
 // pg_transaction_status — 返回当前事务状态
 //   返回 PGSQL_TRANSACTION_* 常量（0=IDLE, 1=ACTIVE, 2=INTRANS, 3=INERROR, 4=UNKNOWN）
-t_int tphp_fn_pg_transaction_status(t_int conn_handle) {
+t_int _pg_transaction_status(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_transaction_status: invalid connection handle");
@@ -182,7 +182,7 @@ t_int tphp_fn_pg_transaction_status(t_int conn_handle) {
 }
 
 // pg_client_encoding — 返回客户端编码
-t_string tphp_fn_pg_client_encoding(t_int conn_handle) {
+t_string _pg_client_encoding(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_client_encoding: invalid connection handle");
@@ -196,7 +196,7 @@ t_string tphp_fn_pg_client_encoding(t_int conn_handle) {
 // pg_set_client_encoding — 设置客户端编码
 //   发送 "SET CLIENT_ENCODING TO '<encoding>'" 查询
 //   成功返回 0，失败返回 -1
-t_int tphp_fn_pg_set_client_encoding(t_int conn_handle, t_string encoding) {
+t_int _pg_set_client_encoding(t_int conn_handle, t_string encoding) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_set_client_encoding: invalid connection handle");
@@ -244,7 +244,7 @@ t_int tphp_fn_pg_set_client_encoding(t_int conn_handle, t_string encoding) {
 // pg_escape_string — 字符串转义（用于 SQL 字面量）
 //   standard_conforming_strings=on:  单引号→''，反斜杠原样
 //   standard_conforming_strings=off: 单引号→\'，反斜杠→双反斜杠
-t_string tphp_fn_pg_escape_string(t_int conn_handle, t_string data) {
+t_string _pg_escape_string(t_int conn_handle, t_string data) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     // conn 可为 NULL（PHP 允许无连接转义，默认 std=on）
     int std_conf = (conn != NULL) ? conn->std_conforming_strings : 1;
@@ -285,7 +285,7 @@ t_string tphp_fn_pg_escape_string(t_int conn_handle, t_string data) {
 // pg_escape_literal — 字面量转义（返回带引号的字面量）
 //   ' → ''，包裹在单引号中（'it''s'）
 //   始终使用标准 SQL 转义（不受 standard_conforming_strings 影响）
-t_string tphp_fn_pg_escape_literal(t_int conn_handle, t_string data) {
+t_string _pg_escape_literal(t_int conn_handle, t_string data) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     (void)conn;  // 不依赖连接设置
     const char *src = STR_PTR(data);
@@ -320,7 +320,7 @@ t_string tphp_fn_pg_escape_literal(t_int conn_handle, t_string data) {
 
 // pg_escape_identifier — 标识符转义（返回带双引号的标识符）
 //   " → ""，包裹在双引号中（"my column"）
-t_string tphp_fn_pg_escape_identifier(t_int conn_handle, t_string data) {
+t_string _pg_escape_identifier(t_int conn_handle, t_string data) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     (void)conn;
     const char *src = STR_PTR(data);
@@ -354,7 +354,7 @@ t_string tphp_fn_pg_escape_identifier(t_int conn_handle, t_string data) {
 }
 
 // pg_escape_bytea — bytea hex 转义："\x" + hex(data)
-t_string tphp_fn_pg_escape_bytea(t_int conn_handle, t_string data) {
+t_string _pg_escape_bytea(t_int conn_handle, t_string data) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     (void)conn;
     const char *src = STR_PTR(data);
@@ -387,7 +387,7 @@ t_string tphp_fn_pg_escape_bytea(t_int conn_handle, t_string data) {
 
 // pg_unescape_bytea — bytea 反转义
 //   支持 hex 格式（"\x..."）和 escape 格式（"\xxx" 八进制 / "\\" / "\'" 等）
-t_string tphp_fn_pg_unescape_bytea(t_string data) {
+t_string _pg_unescape_bytea(t_string data) {
     const char *src = STR_PTR(data);
     int len = data.length;
     if (src == NULL || len <= 0) return (t_string){0};

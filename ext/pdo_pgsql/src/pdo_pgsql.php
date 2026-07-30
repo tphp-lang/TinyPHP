@@ -100,7 +100,7 @@
 //   返回: PostgreSQL 后端进程 PID（>0），无效句柄返回 0
 function pdo_pgsql_get_pid(int $dbh): int
 {
-    return php_int(tphp_fn_pdo_pgsql_get_pid(c_int($dbh)));
+    return php_int(_pgpdo_get_pid(c_int($dbh)));
 }
 
 // ── pdo_pgsql_get_notify: 获取异步通知 ──
@@ -111,7 +111,7 @@ function pdo_pgsql_get_pid(int $dbh): int
 //   注意: 当前实现返回空数组（LISTEN/NOTIFY 支持需要协议层修改）
 function pdo_pgsql_get_notify(int $dbh, int $result_type = 1, int $timeout_ms = 0): array
 {
-    $arr = tphp_fn_pdo_pgsql_get_notify(c_int($dbh), c_int($result_type), c_int($timeout_ms));
+    $arr = _pgpdo_get_notify(c_int($dbh), c_int($result_type), c_int($timeout_ms));
     if ($arr == 0) {
         return [];
     }
@@ -124,5 +124,5 @@ function pdo_pgsql_get_notify(int $dbh, int $result_type = 1, int $timeout_ms = 
 //   用途: 允许在 PDO 连接上直接调用 ext/pgsql 的低层函数
 function pdo_pgsql_pgconn(int $dbh): int
 {
-    return php_int(tphp_fn_pdo_pgsql_pgconn(c_int($dbh)));
+    return php_int(_pgpdo_pgconn(c_int($dbh)));
 }

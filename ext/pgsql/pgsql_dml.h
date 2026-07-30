@@ -26,7 +26,7 @@
 //   - pgsql_protocol.h（消息收发 + 错误处理）
 //   - pgsql_query.h（_pg_exec_query / _pg_result_free / _pg_result_new）
 //   - pgsql_result.h（_pg_mk_str / _pg_mk_str_n / _pg_oid_to_type_name）
-//   - pgsql_misc.h（tphp_fn_pg_escape_* 等）
+//   - pgsql_misc.h（_pg_escape_* 等）
 //   - pgsql_copy.h（_pg_quote_literal / _pg_quote_ident）
 //
 //   必须 在 pgsql_query.h 之后被 #include（依赖 _pg_exec_query）
@@ -193,7 +193,7 @@ static char* _pg_var_to_sql(PGconn *conn, t_var val, int flags) {
 //     default_value: 默认值字符串（无默认值时为空字符串）
 // ============================================================
 
-t_array* tphp_fn_pg_meta_data(t_int conn_handle, t_string table_name) {
+t_array* _pg_meta_data(t_int conn_handle, t_string table_name) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_meta_data: invalid connection handle");
@@ -326,7 +326,7 @@ t_array* tphp_fn_pg_meta_data(t_int conn_handle, t_string table_name) {
 //   返回 t_array*，key=字段名，value=SQL 字面量字符串
 // ============================================================
 
-t_array* tphp_fn_pg_convert(t_int conn_handle, t_string table_name, t_array *assoc_array, t_int flags) {
+t_array* _pg_convert(t_int conn_handle, t_string table_name, t_array *assoc_array, t_int flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_convert: invalid connection handle");
@@ -338,7 +338,7 @@ t_array* tphp_fn_pg_convert(t_int conn_handle, t_string table_name, t_array *ass
     }
 
     // 获取元数据
-    t_array *meta = tphp_fn_pg_meta_data(conn_handle, table_name);
+    t_array *meta = _pg_meta_data(conn_handle, table_name);
     if (meta == NULL) {
         return NULL;  // tp_throw 已在 pg_meta_data 中调用
     }
@@ -701,7 +701,7 @@ static char* _pg_build_select(PGconn *conn, const char *table, t_array *assoc, i
 // ============================================================
 
 // pg_insert_result — 执行 INSERT，返回 PGresult 句柄
-t_int tphp_fn_pg_insert_result(t_int conn_handle, t_string table_name, t_array *assoc, t_int flags) {
+t_int _pg_insert_result(t_int conn_handle, t_string table_name, t_array *assoc, t_int flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_insert: invalid connection handle");
@@ -740,7 +740,7 @@ t_int tphp_fn_pg_insert_result(t_int conn_handle, t_string table_name, t_array *
 }
 
 // pg_insert_sql — 返回 INSERT SQL 字符串（不执行）
-t_string tphp_fn_pg_insert_sql(t_int conn_handle, t_string table_name, t_array *assoc, t_int flags) {
+t_string _pg_insert_sql(t_int conn_handle, t_string table_name, t_array *assoc, t_int flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_insert: invalid connection handle");
@@ -771,7 +771,7 @@ t_string tphp_fn_pg_insert_sql(t_int conn_handle, t_string table_name, t_array *
 // ============================================================
 
 // pg_update_result — 执行 UPDATE，返回 PGresult 句柄
-t_int tphp_fn_pg_update_result(t_int conn_handle, t_string table_name, t_array *assoc, t_array *condition, t_int flags) {
+t_int _pg_update_result(t_int conn_handle, t_string table_name, t_array *assoc, t_array *condition, t_int flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_update: invalid connection handle");
@@ -810,7 +810,7 @@ t_int tphp_fn_pg_update_result(t_int conn_handle, t_string table_name, t_array *
 }
 
 // pg_update_sql — 返回 UPDATE SQL 字符串（不执行）
-t_string tphp_fn_pg_update_sql(t_int conn_handle, t_string table_name, t_array *assoc, t_array *condition, t_int flags) {
+t_string _pg_update_sql(t_int conn_handle, t_string table_name, t_array *assoc, t_array *condition, t_int flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_update: invalid connection handle");
@@ -841,7 +841,7 @@ t_string tphp_fn_pg_update_sql(t_int conn_handle, t_string table_name, t_array *
 // ============================================================
 
 // pg_delete_result — 执行 DELETE，返回 PGresult 句柄
-t_int tphp_fn_pg_delete_result(t_int conn_handle, t_string table_name, t_array *condition, t_int flags) {
+t_int _pg_delete_result(t_int conn_handle, t_string table_name, t_array *condition, t_int flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_delete: invalid connection handle");
@@ -876,7 +876,7 @@ t_int tphp_fn_pg_delete_result(t_int conn_handle, t_string table_name, t_array *
 }
 
 // pg_delete_sql — 返回 DELETE SQL 字符串（不执行）
-t_string tphp_fn_pg_delete_sql(t_int conn_handle, t_string table_name, t_array *condition, t_int flags) {
+t_string _pg_delete_sql(t_int conn_handle, t_string table_name, t_array *condition, t_int flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_delete: invalid connection handle");
@@ -904,7 +904,7 @@ t_string tphp_fn_pg_delete_sql(t_int conn_handle, t_string table_name, t_array *
 //   flags: PGSQL_DML_EXEC（执行）/ PGSQL_DML_ESCAPE（转义）
 // ============================================================
 
-t_array* tphp_fn_pg_select(t_int conn_handle, t_string table_name, t_array *assoc, t_int conditions, t_int flags) {
+t_array* _pg_select(t_int conn_handle, t_string table_name, t_array *assoc, t_int conditions, t_int flags) {
     (void)conditions;  // 当前实现固定使用 AND 连接条件
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {

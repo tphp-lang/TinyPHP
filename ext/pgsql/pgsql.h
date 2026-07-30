@@ -276,41 +276,41 @@ static void _pg_set_error(PGconn *conn, const char *msg);
 static int _pg_consume_startup_messages(PGconn *conn);
 
 // ============================================================
-// PHP 层暴露的 C 包装函数前向声明（tphp_fn_pg_* 命名）
+// PHP 层暴露的 C 包装函数前向声明（_pg_* 命名）
 // 实现在 pgsql_protocol.h，PHP 层声明在 src/pgsql.php（后续 Task 10）
 // ============================================================
 
 // 连接管理
-t_int  tphp_fn_pg_connect(t_string dsn);
-t_int  tphp_fn_pg_pconnect(t_string dsn, t_int flags);
-t_bool tphp_fn_pg_close(t_int conn_handle, t_int close_flags);
-t_int  tphp_fn_pg_connection_status(t_int conn_handle);
-t_bool tphp_fn_pg_ping(t_int conn_handle);
-t_bool tphp_fn_pg_connection_reset(t_int conn_handle);
+t_int  _pg_connect(t_string dsn);
+t_int  _pg_pconnect(t_string dsn, t_int flags);
+t_bool _pg_close(t_int conn_handle, t_int close_flags);
+t_int  _pg_connection_status(t_int conn_handle);
+t_bool _pg_ping(t_int conn_handle);
+t_bool _pg_connection_reset(t_int conn_handle);
 
 // Large Object（实现在 pgsql_lo.h，Task 9.5）
-t_int    tphp_fn_pg_lo_create(t_int conn_handle);
-t_int    tphp_fn_pg_lo_open(t_int conn_handle, t_int oid, t_string mode);
-t_string tphp_fn_pg_lo_read(t_int conn_handle, t_int lob_handle, t_int len);
-t_int    tphp_fn_pg_lo_write(t_int conn_handle, t_int lob_handle, t_string data);
-t_int    tphp_fn_pg_lo_seek(t_int conn_handle, t_int lob_handle, t_int offset, t_int whence);
-t_int    tphp_fn_pg_lo_tell(t_int conn_handle, t_int lob_handle);
-t_bool   tphp_fn_pg_lo_truncate(t_int conn_handle, t_int lob_handle, t_int len);
-void     tphp_fn_pg_lo_close(t_int conn_handle, t_int lob_handle);
-t_bool   tphp_fn_pg_lo_unlink(t_int conn_handle, t_int oid);
-t_int    tphp_fn_pg_lo_import(t_int conn_handle, t_string filename);
-t_bool   tphp_fn_pg_lo_export(t_int conn_handle, t_int oid, t_string filename);
-t_string tphp_fn_pg_lo_read_all(t_int conn_handle, t_int lob_handle);
+t_int    _pg_lo_create(t_int conn_handle);
+t_int    _pg_lo_open(t_int conn_handle, t_int oid, t_string mode);
+t_string _pg_lo_read(t_int conn_handle, t_int lob_handle, t_int len);
+t_int    _pg_lo_write(t_int conn_handle, t_int lob_handle, t_string data);
+t_int    _pg_lo_seek(t_int conn_handle, t_int lob_handle, t_int offset, t_int whence);
+t_int    _pg_lo_tell(t_int conn_handle, t_int lob_handle);
+t_bool   _pg_lo_truncate(t_int conn_handle, t_int lob_handle, t_int len);
+void     _pg_lo_close(t_int conn_handle, t_int lob_handle);
+t_bool   _pg_lo_unlink(t_int conn_handle, t_int oid);
+t_int    _pg_lo_import(t_int conn_handle, t_string filename);
+t_bool   _pg_lo_export(t_int conn_handle, t_int oid, t_string filename);
+t_string _pg_lo_read_all(t_int conn_handle, t_int lob_handle);
 
 // 通知回调
-void tphp_fn_pg_set_notice_callback(t_int conn_handle, t_callback callback);
+void _pg_set_notice_callback(t_int conn_handle, t_callback callback);
 
 // 查询与预处理（实现在 pgsql_query.h）
-t_int  tphp_fn_pg_query(t_int conn_handle, t_string sql);
-t_int  tphp_fn_pg_query_params(t_int conn_handle, t_string sql, t_array *params);
-t_int  tphp_fn_pg_prepare(t_int conn_handle, t_string stmt_name, t_string sql);
-t_int  tphp_fn_pg_execute(t_int conn_handle, t_string stmt_name, t_array *params);
-void   tphp_fn_pg_free_result(t_int result_handle);
+t_int  _pg_query(t_int conn_handle, t_string sql);
+t_int  _pg_query_params(t_int conn_handle, t_string sql, t_array *params);
+t_int  _pg_prepare(t_int conn_handle, t_string stmt_name, t_string sql);
+t_int  _pg_execute(t_int conn_handle, t_string stmt_name, t_array *params);
+void   _pg_free_result(t_int result_handle);
 
 // 指针 ↔ t_int 转换辅助宏
 #define _PG_CONN_FROM_INT(v)    ((PGconn*)(intptr_t)(v))

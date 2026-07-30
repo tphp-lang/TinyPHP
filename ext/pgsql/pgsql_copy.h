@@ -374,7 +374,7 @@ static int _pg_recv_copy_done(PGconn *conn) {
 //   接收 CopyOutResponse('H') + CopyData('d')* + CopyDone('c') + CommandComplete('C') + ReadyForQuery('Z')
 //   每个 CopyData 可能含多行（按 \n 分割）
 //   返回 t_array*（每元素一行字符串），错误 tp_throw 并返回 NULL
-t_array* tphp_fn_pg_copy_to(t_int conn_handle, t_string table_name, t_string separator, t_string null_as) {
+t_array* _pg_copy_to(t_int conn_handle, t_string table_name, t_string separator, t_string null_as) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_copy_to: invalid connection handle");
@@ -454,7 +454,7 @@ t_array* tphp_fn_pg_copy_to(t_int conn_handle, t_string table_name, t_string sep
 //   发送 CopyDone('c')
 //   接收 CommandComplete('C') + ReadyForQuery('Z')
 //   返回 true 成功，false 失败
-t_bool tphp_fn_pg_copy_from(t_int conn_handle, t_string table_name, t_array *rows, t_string separator, t_string null_as) {
+t_bool _pg_copy_from(t_int conn_handle, t_string table_name, t_array *rows, t_string separator, t_string null_as) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_copy_from: invalid connection handle");
@@ -629,7 +629,7 @@ t_bool tphp_fn_pg_copy_from(t_int conn_handle, t_string table_name, t_array *row
 //   假设当前连接已处于 COPY IN 状态（由 pg_query("COPY ... FROM STDIN") 发起）
 //   data: 要发送的数据（通常为一行文本，以 '\n' 结尾）
 //   返回 true 成功，false 失败
-t_bool tphp_fn_pg_put_copy_data(t_int conn_handle, t_string data) {
+t_bool _pg_put_copy_data(t_int conn_handle, t_string data) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL || conn->sock < 0) {
         tp_throw("pg_put_copy_data: invalid connection handle");
@@ -653,7 +653,7 @@ t_bool tphp_fn_pg_put_copy_data(t_int conn_handle, t_string data) {
 //   error_msg 为空时发 CopyDone('c')，非空发 CopyFail('f') + error_msg
 //   发送后同步等待 CommandComplete/ErrorResponse + ReadyForQuery，使连接回到就绪状态
 //   返回 true 成功，false 失败
-t_bool tphp_fn_pg_put_copy_end(t_int conn_handle, t_string error_msg) {
+t_bool _pg_put_copy_end(t_int conn_handle, t_string error_msg) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL || conn->sock < 0) {
         tp_throw("pg_put_copy_end: invalid connection handle");
@@ -687,7 +687,7 @@ t_bool tphp_fn_pg_put_copy_end(t_int conn_handle, t_string error_msg) {
 //   pg_put_copy_end 已内置同步（_pg_recv_copy_done），pg_copy_to/pg_copy_from 也各自完成同步，
 //   因此本函数在无进行中 COPY 时直接返回 true（兼容 PHP 调用约定）
 //   返回 true 成功，false 失败
-t_bool tphp_fn_pg_end_copy(t_int conn_handle) {
+t_bool _pg_end_copy(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL || conn->sock < 0) {
         tp_throw("pg_end_copy: invalid connection handle");

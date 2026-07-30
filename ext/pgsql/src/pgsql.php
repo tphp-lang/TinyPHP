@@ -56,12 +56,12 @@
 
 // 引入 pgsql_lo.h（Task 9.5：Large Object 协议 — lo_create/lo_open/lo_read/lo_write/lo_seek/lo_tell/lo_truncate/lo_close/lo_unlink/lo_import/lo_export/lo_read_all）
 //   依赖 pgsql_query.h 的 _pg_exec_query / _pg_result_free，pgsql_result.h 的 _pg_mk_str/_pg_mk_str_n，
-//   pgsql_misc.h 的 tphp_fn_pg_unescape_bytea，pgsql_copy.h 的 _pg_quote_literal，include/object/resource.h 的资源 API
+//   pgsql_misc.h 的 _pg_unescape_bytea，pgsql_copy.h 的 _pg_quote_literal，include/object/resource.h 的资源 API
 #include __EXT__ . "pgsql/pgsql_lo.h"
 
 // 引入 pgsql_pconnect.h（Task 9.6：持久连接池 — pg_pconnect/pg_close 实现）
-//   依赖 pgsql_protocol.h 的 tphp_fn_pg_connect / _pg_send_message / _pg_free_conn
-//   tphp_fn_pg_pconnect / tphp_fn_pg_close 委托调用 _pg_pconnect_real / _pg_close_real
+//   依赖 pgsql_protocol.h 的 _pg_connect / _pg_send_message / _pg_free_conn
+//   _pg_pconnect / _pg_close 委托调用 _pg_pconnect_real / _pg_close_real
 #include __EXT__ . "pgsql/pgsql_pconnect.h"
 
 // 引入 pgsql_notice.h（Task 9.7：通知回调 — pg_set_notice_callback / _pg_invoke_notice_cb）
@@ -89,128 +89,128 @@
 
 function pg_connect(string $dsn): int
 {
-    return tphp_fn_pg_connect($dsn);
+    return _pg_connect($dsn);
 }
 
 function pg_pconnect(string $dsn, int $flags = 0): int
 {
-    return tphp_fn_pg_pconnect($dsn, $flags);
+    return _pg_pconnect($dsn, $flags);
 }
 
 // close_flags 传递给 C 层 _pg_close_real（PGSQL_CLOSE_FORCE=1 强制关闭持久连接）
 function pg_close(int $conn, int $close_flags = 0): bool
 {
-    return tphp_fn_pg_close($conn, $close_flags);
+    return _pg_close($conn, $close_flags);
 }
 
 function pg_connection_status(int $conn): int
 {
-    return tphp_fn_pg_connection_status($conn);
+    return _pg_connection_status($conn);
 }
 
 function pg_connection_reset(int $conn): bool
 {
-    return tphp_fn_pg_connection_reset($conn);
+    return _pg_connection_reset($conn);
 }
 
 function pg_ping(int $conn): bool
 {
-    return tphp_fn_pg_ping($conn);
+    return _pg_ping($conn);
 }
 
 // ── 查询 ──────────────────────────────────────────────────
 
 function pg_query(int $conn, string $sql): int
 {
-    return tphp_fn_pg_query($conn, $sql);
+    return _pg_query($conn, $sql);
 }
 
 function pg_query_params(int $conn, string $sql, array $params): int
 {
-    return tphp_fn_pg_query_params($conn, $sql, $params);
+    return _pg_query_params($conn, $sql, $params);
 }
 
 function pg_prepare(int $conn, string $stmt_name, string $sql): int
 {
-    return tphp_fn_pg_prepare($conn, $stmt_name, $sql);
+    return _pg_prepare($conn, $stmt_name, $sql);
 }
 
 function pg_execute(int $conn, string $stmt_name, array $params): int
 {
-    return tphp_fn_pg_execute($conn, $stmt_name, $params);
+    return _pg_execute($conn, $stmt_name, $params);
 }
 
 function pg_free_result(int $result): void
 {
-    tphp_fn_pg_free_result($result);
+    _pg_free_result($result);
 }
 
 // ── 结果集 ────────────────────────────────────────────────
 
 function pg_num_rows(int $result): int
 {
-    return tphp_fn_pg_num_rows($result);
+    return _pg_num_rows($result);
 }
 
 function pg_num_fields(int $result): int
 {
-    return tphp_fn_pg_num_fields($result);
+    return _pg_num_fields($result);
 }
 
 function pg_affected_rows(int $result): int
 {
-    return tphp_fn_pg_affected_rows($result);
+    return _pg_affected_rows($result);
 }
 
 function pg_last_oid(int $result): int
 {
-    return tphp_fn_pg_last_oid($result);
+    return _pg_last_oid($result);
 }
 
 function pg_field_name(int $result, int $field_num): string
 {
-    return tphp_fn_pg_field_name($result, $field_num);
+    return _pg_field_name($result, $field_num);
 }
 
 function pg_field_num(int $result, string $field_name): int
 {
-    return tphp_fn_pg_field_num($result, $field_name);
+    return _pg_field_num($result, $field_name);
 }
 
 function pg_field_type(int $result, int $field_num): string
 {
-    return tphp_fn_pg_field_type($result, $field_num);
+    return _pg_field_type($result, $field_num);
 }
 
 function pg_field_type_oid(int $result, int $field_num): int
 {
-    return tphp_fn_pg_field_type_oid($result, $field_num);
+    return _pg_field_type_oid($result, $field_num);
 }
 
 function pg_field_size(int $result, int $field_num): int
 {
-    return tphp_fn_pg_field_size($result, $field_num);
+    return _pg_field_size($result, $field_num);
 }
 
 function pg_field_prtlen(int $result, int $row_num, int $field_num): int
 {
-    return tphp_fn_pg_field_prtlen($result, $row_num, $field_num);
+    return _pg_field_prtlen($result, $row_num, $field_num);
 }
 
 function pg_field_is_null(int $result, int $row_num, int $field_num): bool
 {
-    return tphp_fn_pg_field_is_null($result, $row_num, $field_num);
+    return _pg_field_is_null($result, $row_num, $field_num);
 }
 
 function pg_field_table(int $result, int $field_num): int
 {
-    return tphp_fn_pg_field_table($result, $field_num);
+    return _pg_field_table($result, $field_num);
 }
 
 // 返回 array 的函数：C 层返回 t_array*，NULL 时返回空数组
 function pg_fetch_row(int $result): array
 {
-    $arr = tphp_fn_pg_fetch_row($result);
+    $arr = _pg_fetch_row($result);
     if ($arr == 0) {
         return [];
     }
@@ -219,7 +219,7 @@ function pg_fetch_row(int $result): array
 
 function pg_fetch_assoc(int $result): array
 {
-    $arr = tphp_fn_pg_fetch_assoc($result);
+    $arr = _pg_fetch_assoc($result);
     if ($arr == 0) {
         return [];
     }
@@ -228,7 +228,7 @@ function pg_fetch_assoc(int $result): array
 
 function pg_fetch_array(int $result, int $result_type = 3): array
 {
-    $arr = tphp_fn_pg_fetch_array($result, $result_type);
+    $arr = _pg_fetch_array($result, $result_type);
     if ($arr == 0) {
         return [];
     }
@@ -237,7 +237,7 @@ function pg_fetch_array(int $result, int $result_type = 3): array
 
 function pg_fetch_all(int $result, int $result_type = 3): array
 {
-    $arr = tphp_fn_pg_fetch_all($result, $result_type);
+    $arr = _pg_fetch_all($result, $result_type);
     if ($arr == 0) {
         return [];
     }
@@ -246,84 +246,84 @@ function pg_fetch_all(int $result, int $result_type = 3): array
 
 function pg_fetch_all_columns(int $result, int $col = 0): array
 {
-    $arr = tphp_fn_pg_fetch_all_columns($result, $col);
+    $arr = _pg_fetch_all_columns($result, $col);
     if ($arr == 0) {
         return [];
     }
     return $arr;
 }
 
-// pg_fetch_result_str 对应 C 层 tphp_fn_pg_fetch_result（多态返回按类型拆分）
+// pg_fetch_result_str 对应 C 层 _pg_fetch_result（多态返回按类型拆分）
 function pg_fetch_result_str(int $result, int $row, string $field): string
 {
-    return tphp_fn_pg_fetch_result($result, $row, $field);
+    return _pg_fetch_result($result, $row, $field);
 }
 
 function pg_result_status(int $result, int $mode = 1): int
 {
-    return tphp_fn_pg_result_status($result, $mode);
+    return _pg_result_status($result, $mode);
 }
 
 function pg_result_status_str(int $result): string
 {
-    return tphp_fn_pg_result_status_str($result);
+    return _pg_result_status_str($result);
 }
 
 function pg_result_seek(int $result, int $offset): bool
 {
-    return tphp_fn_pg_result_seek($result, $offset);
+    return _pg_result_seek($result, $offset);
 }
 
 function pg_result_error(int $result): string
 {
-    return tphp_fn_pg_result_error($result);
+    return _pg_result_error($result);
 }
 
 function pg_result_error_field(int $result, int $field_code): string
 {
-    return tphp_fn_pg_result_error_field($result, $field_code);
+    return _pg_result_error_field($result, $field_code);
 }
 
 function pg_last_error(int $conn): string
 {
-    return tphp_fn_pg_last_error($conn);
+    return _pg_last_error($conn);
 }
 
 function pg_last_notice(int $conn): string
 {
-    return tphp_fn_pg_last_notice($conn);
+    return _pg_last_notice($conn);
 }
 
 // ── 连接信息 ──────────────────────────────────────────────
 
 function pg_dbname(int $conn): string
 {
-    return tphp_fn_pg_dbname($conn);
+    return _pg_dbname($conn);
 }
 
 function pg_host(int $conn): string
 {
-    return tphp_fn_pg_host($conn);
+    return _pg_host($conn);
 }
 
 function pg_port(int $conn): int
 {
-    return tphp_fn_pg_port($conn);
+    return _pg_port($conn);
 }
 
 function pg_options(int $conn): string
 {
-    return tphp_fn_pg_options($conn);
+    return _pg_options($conn);
 }
 
 function pg_tty(int $conn): string
 {
-    return tphp_fn_pg_tty($conn);
+    return _pg_tty($conn);
 }
 
 function pg_version(int $conn): array
 {
-    $arr = tphp_fn_pg_version($conn);
+    $arr = _pg_version($conn);
     if ($arr == 0) {
         return [];
     }
@@ -332,57 +332,57 @@ function pg_version(int $conn): array
 
 function pg_parameter_status(int $conn, string $param_name): string
 {
-    return tphp_fn_pg_parameter_status($conn, $param_name);
+    return _pg_parameter_status($conn, $param_name);
 }
 
 function pg_transaction_status(int $conn): int
 {
-    return tphp_fn_pg_transaction_status($conn);
+    return _pg_transaction_status($conn);
 }
 
 function pg_client_encoding(int $conn): string
 {
-    return tphp_fn_pg_client_encoding($conn);
+    return _pg_client_encoding($conn);
 }
 
 function pg_set_client_encoding(int $conn, string $encoding): int
 {
-    return tphp_fn_pg_set_client_encoding($conn, $encoding);
+    return _pg_set_client_encoding($conn, $encoding);
 }
 
 // ── 转义 ──────────────────────────────────────────────────
 
 function pg_escape_string(int $conn, string $data): string
 {
-    return tphp_fn_pg_escape_string($conn, $data);
+    return _pg_escape_string($conn, $data);
 }
 
 function pg_escape_literal(int $conn, string $data): string
 {
-    return tphp_fn_pg_escape_literal($conn, $data);
+    return _pg_escape_literal($conn, $data);
 }
 
 function pg_escape_identifier(int $conn, string $data): string
 {
-    return tphp_fn_pg_escape_identifier($conn, $data);
+    return _pg_escape_identifier($conn, $data);
 }
 
 function pg_escape_bytea(int $conn, string $data): string
 {
-    return tphp_fn_pg_escape_bytea($conn, $data);
+    return _pg_escape_bytea($conn, $data);
 }
 
-// pg_unescape_bytea 不需要连接句柄（C 层 tphp_fn_pg_unescape_bytea 仅接受 t_string data）
+// pg_unescape_bytea 不需要连接句柄（C 层 _pg_unescape_bytea 仅接受 t_string data）
 function pg_unescape_bytea(string $data): string
 {
-    return tphp_fn_pg_unescape_bytea($data);
+    return _pg_unescape_bytea($data);
 }
 
 // ── COPY ──────────────────────────────────────────────────
 
 function pg_copy_to(int $conn, string $table_name, string $separator = "\t", string $null_as = "\\\\N"): array
 {
-    $arr = tphp_fn_pg_copy_to($conn, $table_name, $separator, $null_as);
+    $arr = _pg_copy_to($conn, $table_name, $separator, $null_as);
     if ($arr == 0) {
         return [];
     }
@@ -391,22 +391,22 @@ function pg_copy_to(int $conn, string $table_name, string $separator = "\t", str
 
 function pg_copy_from(int $conn, string $table_name, array $rows, string $separator = "\t", string $null_as = "\\\\N"): bool
 {
-    return tphp_fn_pg_copy_from($conn, $table_name, $rows, $separator, $null_as);
+    return _pg_copy_from($conn, $table_name, $rows, $separator, $null_as);
 }
 
 function pg_put_copy_data(int $conn, string $data): bool
 {
-    return tphp_fn_pg_put_copy_data($conn, $data);
+    return _pg_put_copy_data($conn, $data);
 }
 
 function pg_put_copy_end(int $conn, string $error_msg = ""): bool
 {
-    return tphp_fn_pg_put_copy_end($conn, $error_msg);
+    return _pg_put_copy_end($conn, $error_msg);
 }
 
 function pg_end_copy(int $conn): bool
 {
-    return tphp_fn_pg_end_copy($conn);
+    return _pg_end_copy($conn);
 }
 
 // ── DML ───────────────────────────────────────────────────
@@ -414,7 +414,7 @@ function pg_end_copy(int $conn): bool
 
 function pg_meta_data(int $conn, string $table_name): array
 {
-    $arr = tphp_fn_pg_meta_data($conn, $table_name);
+    $arr = _pg_meta_data($conn, $table_name);
     if ($arr == 0) {
         return [];
     }
@@ -423,7 +423,7 @@ function pg_meta_data(int $conn, string $table_name): array
 
 function pg_convert(int $conn, string $table_name, array $assoc_array, int $flags = 0): array
 {
-    $arr = tphp_fn_pg_convert($conn, $table_name, $assoc_array, $flags);
+    $arr = _pg_convert($conn, $table_name, $assoc_array, $flags);
     if ($arr == 0) {
         return [];
     }
@@ -432,37 +432,37 @@ function pg_convert(int $conn, string $table_name, array $assoc_array, int $flag
 
 function pg_insert_result(int $conn, string $table_name, array $assoc, int $flags = 1): int
 {
-    return tphp_fn_pg_insert_result($conn, $table_name, $assoc, $flags);
+    return _pg_insert_result($conn, $table_name, $assoc, $flags);
 }
 
 function pg_insert_sql(int $conn, string $table_name, array $assoc, int $flags = 1): string
 {
-    return tphp_fn_pg_insert_sql($conn, $table_name, $assoc, $flags);
+    return _pg_insert_sql($conn, $table_name, $assoc, $flags);
 }
 
 function pg_update_result(int $conn, string $table_name, array $assoc, array $condition, int $flags = 1): int
 {
-    return tphp_fn_pg_update_result($conn, $table_name, $assoc, $condition, $flags);
+    return _pg_update_result($conn, $table_name, $assoc, $condition, $flags);
 }
 
 function pg_update_sql(int $conn, string $table_name, array $assoc, array $condition, int $flags = 1): string
 {
-    return tphp_fn_pg_update_sql($conn, $table_name, $assoc, $condition, $flags);
+    return _pg_update_sql($conn, $table_name, $assoc, $condition, $flags);
 }
 
 function pg_delete_result(int $conn, string $table_name, array $condition, int $flags = 1): int
 {
-    return tphp_fn_pg_delete_result($conn, $table_name, $condition, $flags);
+    return _pg_delete_result($conn, $table_name, $condition, $flags);
 }
 
 function pg_delete_sql(int $conn, string $table_name, array $condition, int $flags = 1): string
 {
-    return tphp_fn_pg_delete_sql($conn, $table_name, $condition, $flags);
+    return _pg_delete_sql($conn, $table_name, $condition, $flags);
 }
 
 function pg_select(int $conn, string $table_name, array $assoc, int $conditions = 0, int $flags = 1): array
 {
-    $arr = tphp_fn_pg_select($conn, $table_name, $assoc, $conditions, $flags);
+    $arr = _pg_select($conn, $table_name, $assoc, $conditions, $flags);
     if ($arr == 0) {
         return [];
     }
@@ -474,62 +474,62 @@ function pg_select(int $conn, string $table_name, array $assoc, int $conditions 
 
 function pg_lo_create(int $conn): int
 {
-    return tphp_fn_pg_lo_create($conn);
+    return _pg_lo_create($conn);
 }
 
 function pg_lo_open(int $conn, int $oid, string $mode): int
 {
-    return tphp_fn_pg_lo_open($conn, $oid, $mode);
+    return _pg_lo_open($conn, $oid, $mode);
 }
 
 function pg_lo_read(int $conn, int $lob, int $len): string
 {
-    return tphp_fn_pg_lo_read($conn, $lob, $len);
+    return _pg_lo_read($conn, $lob, $len);
 }
 
 function pg_lo_write(int $conn, int $lob, string $data): int
 {
-    return tphp_fn_pg_lo_write($conn, $lob, $data);
+    return _pg_lo_write($conn, $lob, $data);
 }
 
 function pg_lo_seek(int $conn, int $lob, int $offset, int $whence = 0): int
 {
-    return tphp_fn_pg_lo_seek($conn, $lob, $offset, $whence);
+    return _pg_lo_seek($conn, $lob, $offset, $whence);
 }
 
 function pg_lo_tell(int $conn, int $lob): int
 {
-    return tphp_fn_pg_lo_tell($conn, $lob);
+    return _pg_lo_tell($conn, $lob);
 }
 
 function pg_lo_truncate(int $conn, int $lob, int $len): bool
 {
-    return tphp_fn_pg_lo_truncate($conn, $lob, $len);
+    return _pg_lo_truncate($conn, $lob, $len);
 }
 
 function pg_lo_close(int $conn, int $lob): void
 {
-    tphp_fn_pg_lo_close($conn, $lob);
+    _pg_lo_close($conn, $lob);
 }
 
 function pg_lo_unlink(int $conn, int $oid): bool
 {
-    return tphp_fn_pg_lo_unlink($conn, $oid);
+    return _pg_lo_unlink($conn, $oid);
 }
 
 function pg_lo_import(int $conn, string $filename): int
 {
-    return tphp_fn_pg_lo_import($conn, $filename);
+    return _pg_lo_import($conn, $filename);
 }
 
 function pg_lo_export(int $conn, int $oid, string $filename): bool
 {
-    return tphp_fn_pg_lo_export($conn, $oid, $filename);
+    return _pg_lo_export($conn, $oid, $filename);
 }
 
 function pg_lo_read_all(int $conn, int $lob): string
 {
-    return tphp_fn_pg_lo_read_all($conn, $lob);
+    return _pg_lo_read_all($conn, $lob);
 }
 
 // ── 通知回调 ──────────────────────────────────────────────
@@ -537,5 +537,5 @@ function pg_lo_read_all(int $conn, int $lob): string
 
 function pg_set_notice_callback(int $conn, callable $callback): void
 {
-    tphp_fn_pg_set_notice_callback($conn, $callback);
+    _pg_set_notice_callback($conn, $callback);
 }

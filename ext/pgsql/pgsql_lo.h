@@ -30,7 +30,7 @@
 //   - pgsql_protocol.h（_pg_exec_query / _pg_result_free / _pg_set_error）
 //   - pgsql_query.h（_pg_exec_query / _pg_result_free）
 //   - pgsql_result.h（_pg_mk_str / _pg_mk_str_n）
-//   - pgsql_misc.h（tphp_fn_pg_unescape_bytea / tphp_fn_pg_escape_bytea）
+//   - pgsql_misc.h（_pg_unescape_bytea / _pg_escape_bytea）
 //   - pgsql_copy.h（_pg_quote_literal）
 //   - include/object/resource.h（tphp_rt_resource_insert / delete / fetch / register_resource_type）
 // ============================================================
@@ -122,7 +122,7 @@ static void _pg_lo_dtor(void *ptr) {
 // 9.5.1 pg_lo_create — 创建大对象，返回 OID
 //   执行 SELECT lo_create(0)，从结果集第一行第一列解析 OID
 // ============================================================
-t_int tphp_fn_pg_lo_create(t_int conn_handle) {
+t_int _pg_lo_create(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_create: invalid connection handle");
@@ -148,7 +148,7 @@ t_int tphp_fn_pg_lo_create(t_int conn_handle) {
 //   mode: "r"=INV_READ, "w"=INV_WRITE, "rw"=INV_READ|INV_WRITE
 //   返回 Resource handle（t_int），ptr 存 pg_lo_handle*
 // ============================================================
-t_int tphp_fn_pg_lo_open(t_int conn_handle, t_int oid, t_string mode) {
+t_int _pg_lo_open(t_int conn_handle, t_int oid, t_string mode) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_open: invalid connection handle");
@@ -242,7 +242,7 @@ static pg_lo_handle* _pg_lo_fetch(t_int lob_handle) {
 //   执行 SELECT loread($fd, $len)，返回字符串
 //   结果为 bytea hex 格式（"\x..."），需解码
 // ============================================================
-t_string tphp_fn_pg_lo_read(t_int conn_handle, t_int lob_handle, t_int len) {
+t_string _pg_lo_read(t_int conn_handle, t_int lob_handle, t_int len) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_read: invalid connection handle");
@@ -271,7 +271,7 @@ t_string tphp_fn_pg_lo_read(t_int conn_handle, t_int lob_handle, t_int len) {
         res->num_fields >= 1 && res->rows != NULL && res->rows[0] != NULL) {
         // loread 返回 bytea，文本模式下为 "\x..." hex 编码
         t_string raw = _pg_mk_str_n(res->rows[0], res->row_lens[0]);
-        result = tphp_fn_pg_unescape_bytea(raw);
+        result = _pg_unescape_bytea(raw);
         // 更新当前位置
         handle->pos += result.length;
     } else {
@@ -287,7 +287,7 @@ t_string tphp_fn_pg_lo_read(t_int conn_handle, t_int lob_handle, t_int len) {
 //   执行 SELECT lowrite($fd, $data)，返回写入字节数
 //   data 为二进制数据，需 bytea hex 转义
 // ============================================================
-t_int tphp_fn_pg_lo_write(t_int conn_handle, t_int lob_handle, t_string data) {
+t_int _pg_lo_write(t_int conn_handle, t_int lob_handle, t_string data) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_write: invalid connection handle");
@@ -357,7 +357,7 @@ t_int tphp_fn_pg_lo_write(t_int conn_handle, t_int lob_handle, t_string data) {
 //   执行 SELECT lo_lseek($fd, $offset, $whence)，返回新位置
 //   whence: PGSQL_SEEK_SET=0, PGSQL_SEEK_CUR=1, PGSQL_SEEK_END=2
 // ============================================================
-t_int tphp_fn_pg_lo_seek(t_int conn_handle, t_int lob_handle, t_int offset, t_int whence) {
+t_int _pg_lo_seek(t_int conn_handle, t_int lob_handle, t_int offset, t_int whence) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_seek: invalid connection handle");
@@ -390,7 +390,7 @@ t_int tphp_fn_pg_lo_seek(t_int conn_handle, t_int lob_handle, t_int offset, t_in
 // 9.5.6 pg_lo_tell — 当前位置
 //   执行 SELECT lo_tell($fd)，返回位置
 // ============================================================
-t_int tphp_fn_pg_lo_tell(t_int conn_handle, t_int lob_handle) {
+t_int _pg_lo_tell(t_int conn_handle, t_int lob_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_tell: invalid connection handle");
@@ -418,7 +418,7 @@ t_int tphp_fn_pg_lo_tell(t_int conn_handle, t_int lob_handle) {
 // 9.5.7 pg_lo_truncate — 截断
 //   执行 SELECT lo_truncate($fd, $len)
 // ============================================================
-t_bool tphp_fn_pg_lo_truncate(t_int conn_handle, t_int lob_handle, t_int len) {
+t_bool _pg_lo_truncate(t_int conn_handle, t_int lob_handle, t_int len) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_truncate: invalid connection handle");
@@ -449,7 +449,7 @@ t_bool tphp_fn_pg_lo_truncate(t_int conn_handle, t_int lob_handle, t_int len) {
 //   执行 SELECT lo_close($fd)
 //   从 Resource 列表移除（tphp_rt_resource_delete），释放 pg_lo_handle
 // ============================================================
-void tphp_fn_pg_lo_close(t_int conn_handle, t_int lob_handle) {
+void _pg_lo_close(t_int conn_handle, t_int lob_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_close: invalid connection handle");
@@ -483,7 +483,7 @@ void tphp_fn_pg_lo_close(t_int conn_handle, t_int lob_handle) {
 // 9.5.9 pg_lo_unlink — 删除大对象
 //   执行 SELECT lo_unlink($oid)
 // ============================================================
-t_bool tphp_fn_pg_lo_unlink(t_int conn_handle, t_int oid) {
+t_bool _pg_lo_unlink(t_int conn_handle, t_int oid) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_unlink: invalid connection handle");
@@ -508,7 +508,7 @@ t_bool tphp_fn_pg_lo_unlink(t_int conn_handle, t_int oid) {
 //   （不使用 SELECT lo_import() 服务端函数，因为该函数操作服务端文件系统）
 //   返回 OID（成功），0（失败）
 // ============================================================
-t_int tphp_fn_pg_lo_import(t_int conn_handle, t_string filename) {
+t_int _pg_lo_import(t_int conn_handle, t_string filename) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_import: invalid connection handle");
@@ -614,7 +614,7 @@ t_int tphp_fn_pg_lo_import(t_int conn_handle, t_string filename) {
 //   （不使用 SELECT lo_export() 服务端函数，因为该函数操作服务端文件系统）
 //   返回 true 成功，false 失败
 // ============================================================
-t_bool tphp_fn_pg_lo_export(t_int conn_handle, t_int oid, t_string filename) {
+t_bool _pg_lo_export(t_int conn_handle, t_int oid, t_string filename) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_export: invalid connection handle");
@@ -658,7 +658,7 @@ t_bool tphp_fn_pg_lo_export(t_int conn_handle, t_int oid, t_string filename) {
         if (res->status == PGRES_TUPLES_OK && res->num_rows >= 1 &&
             res->num_fields >= 1 && res->rows != NULL && res->rows[0] != NULL) {
             t_string raw = _pg_mk_str_n(res->rows[0], res->row_lens[0]);
-            t_string data = tphp_fn_pg_unescape_bytea(raw);
+            t_string data = _pg_unescape_bytea(raw);
             if (data.length > 0 && STR_PTR(data) != NULL) {
                 fwrite(STR_PTR(data), 1, (size_t)data.length, fp);
             }
@@ -684,7 +684,7 @@ t_bool tphp_fn_pg_lo_export(t_int conn_handle, t_int oid, t_string filename) {
 // 9.5.12 pg_lo_read_all — 一次性读取全部
 //   循环 pg_lo_read 直到 EOF（返回空字符串）
 // ============================================================
-t_string tphp_fn_pg_lo_read_all(t_int conn_handle, t_int lob_handle) {
+t_string _pg_lo_read_all(t_int conn_handle, t_int lob_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_lo_read_all: invalid connection handle");
@@ -730,7 +730,7 @@ t_string tphp_fn_pg_lo_read_all(t_int conn_handle, t_int lob_handle) {
 
         // bytea hex 解码
         t_string raw = _pg_mk_str_n(res->rows[0], res->row_lens[0]);
-        t_string chunk = tphp_fn_pg_unescape_bytea(raw);
+        t_string chunk = _pg_unescape_bytea(raw);
         _pg_result_free(res);
 
         int chunk_len = chunk.length;

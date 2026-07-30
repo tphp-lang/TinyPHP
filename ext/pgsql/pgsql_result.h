@@ -180,7 +180,7 @@ static t_array* _pg_build_row(PGresult *res, int row, int result_type) {
 // 6.1 行/列数
 // ============================================================
 
-t_int tphp_fn_pg_num_rows(t_int res_handle) {
+t_int _pg_num_rows(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_num_rows: invalid result handle");
@@ -189,7 +189,7 @@ t_int tphp_fn_pg_num_rows(t_int res_handle) {
     return (t_int)res->num_rows;
 }
 
-t_int tphp_fn_pg_num_fields(t_int res_handle) {
+t_int _pg_num_fields(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_num_fields: invalid result handle");
@@ -198,7 +198,7 @@ t_int tphp_fn_pg_num_fields(t_int res_handle) {
     return (t_int)res->num_fields;
 }
 
-t_int tphp_fn_pg_affected_rows(t_int res_handle) {
+t_int _pg_affected_rows(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_affected_rows: invalid result handle");
@@ -207,7 +207,7 @@ t_int tphp_fn_pg_affected_rows(t_int res_handle) {
     return (t_int)res->affected;
 }
 
-t_int tphp_fn_pg_last_oid(t_int res_handle) {
+t_int _pg_last_oid(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_last_oid: invalid result handle");
@@ -220,7 +220,7 @@ t_int tphp_fn_pg_last_oid(t_int res_handle) {
 // 6.2 字段信息
 // ============================================================
 
-t_string tphp_fn_pg_field_name(t_int res_handle, t_int field_num) {
+t_string _pg_field_name(t_int res_handle, t_int field_num) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_name: invalid result handle");
@@ -234,7 +234,7 @@ t_string tphp_fn_pg_field_name(t_int res_handle, t_int field_num) {
     return _pg_mk_str(res->fields[fn].name);
 }
 
-t_int tphp_fn_pg_field_num(t_int res_handle, t_string field_name) {
+t_int _pg_field_num(t_int res_handle, t_string field_name) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_num: invalid result handle");
@@ -250,7 +250,7 @@ t_int tphp_fn_pg_field_num(t_int res_handle, t_string field_name) {
     return (t_int)idx;
 }
 
-t_string tphp_fn_pg_field_type(t_int res_handle, t_int field_num) {
+t_string _pg_field_type(t_int res_handle, t_int field_num) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_type: invalid result handle");
@@ -264,7 +264,7 @@ t_string tphp_fn_pg_field_type(t_int res_handle, t_int field_num) {
     return _pg_mk_str(_pg_oid_to_type_name(res->fields[fn].type_oid));
 }
 
-t_int tphp_fn_pg_field_type_oid(t_int res_handle, t_int field_num) {
+t_int _pg_field_type_oid(t_int res_handle, t_int field_num) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_type_oid: invalid result handle");
@@ -278,7 +278,7 @@ t_int tphp_fn_pg_field_type_oid(t_int res_handle, t_int field_num) {
     return (t_int)res->fields[fn].type_oid;
 }
 
-t_int tphp_fn_pg_field_size(t_int res_handle, t_int field_num) {
+t_int _pg_field_size(t_int res_handle, t_int field_num) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_size: invalid result handle");
@@ -292,7 +292,7 @@ t_int tphp_fn_pg_field_size(t_int res_handle, t_int field_num) {
     return (t_int)res->fields[fn].type_size;
 }
 
-t_int tphp_fn_pg_field_prtlen(t_int res_handle, t_int row_num, t_int field_num) {
+t_int _pg_field_prtlen(t_int res_handle, t_int row_num, t_int field_num) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_prtlen: invalid result handle");
@@ -314,7 +314,7 @@ t_int tphp_fn_pg_field_prtlen(t_int res_handle, t_int row_num, t_int field_num) 
     return (len < 0) ? 0 : (t_int)len;
 }
 
-t_bool tphp_fn_pg_field_is_null(t_int res_handle, t_int row_num, t_int field_num) {
+t_bool _pg_field_is_null(t_int res_handle, t_int row_num, t_int field_num) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_is_null: invalid result handle");
@@ -334,7 +334,7 @@ t_bool tphp_fn_pg_field_is_null(t_int res_handle, t_int row_num, t_int field_num
     return (res->row_lens[base + fn] < 0) ? true : false;
 }
 
-t_int tphp_fn_pg_field_table(t_int res_handle, t_int field_num) {
+t_int _pg_field_table(t_int res_handle, t_int field_num) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_field_table: invalid result handle");
@@ -353,7 +353,7 @@ t_int tphp_fn_pg_field_table(t_int res_handle, t_int field_num) {
 // ============================================================
 
 // pg_fetch_row — 取下一行为数字索引数组（PGSQL_NUM），无更多行返回 NULL
-t_array* tphp_fn_pg_fetch_row(t_int res_handle) {
+t_array* _pg_fetch_row(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_fetch_row: invalid result handle");
@@ -366,7 +366,7 @@ t_array* tphp_fn_pg_fetch_row(t_int res_handle) {
 }
 
 // pg_fetch_assoc — 取下一行为关联数组（PGSQL_ASSOC），无更多行返回 NULL
-t_array* tphp_fn_pg_fetch_assoc(t_int res_handle) {
+t_array* _pg_fetch_assoc(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_fetch_assoc: invalid result handle");
@@ -379,7 +379,7 @@ t_array* tphp_fn_pg_fetch_assoc(t_int res_handle) {
 }
 
 // pg_fetch_array — 取下一行，result_type 决定键类型（默认 PGSQL_BOTH=3）
-t_array* tphp_fn_pg_fetch_array(t_int res_handle, t_int result_type) {
+t_array* _pg_fetch_array(t_int res_handle, t_int result_type) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_fetch_array: invalid result handle");
@@ -395,7 +395,7 @@ t_array* tphp_fn_pg_fetch_array(t_int res_handle, t_int result_type) {
 }
 
 // pg_fetch_all — 取所有剩余行，无行返回 NULL
-t_array* tphp_fn_pg_fetch_all(t_int res_handle, t_int result_type) {
+t_array* _pg_fetch_all(t_int res_handle, t_int result_type) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_fetch_all: invalid result handle");
@@ -425,7 +425,7 @@ t_array* tphp_fn_pg_fetch_all(t_int res_handle, t_int result_type) {
 }
 
 // pg_fetch_all_columns — 取指定列的所有值，无行返回 NULL
-t_array* tphp_fn_pg_fetch_all_columns(t_int res_handle, t_int col) {
+t_array* _pg_fetch_all_columns(t_int res_handle, t_int col) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_fetch_all_columns: invalid result handle");
@@ -461,7 +461,7 @@ t_array* tphp_fn_pg_fetch_all_columns(t_int res_handle, t_int col) {
 
 // pg_fetch_result — 按行号+字段名取单个值
 //   field 可为字段名或数字字符串（如 "0"）
-t_string tphp_fn_pg_fetch_result(t_int res_handle, t_int row, t_string field) {
+t_string _pg_fetch_result(t_int res_handle, t_int row, t_string field) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_fetch_result: invalid result handle");
@@ -508,7 +508,7 @@ t_string tphp_fn_pg_fetch_result(t_int res_handle, t_int row, t_string field) {
 // pg_result_status — 返回状态码（ExecStatusType）
 //   mode: PGSQL_STATUS_LONG=1 / PGSQL_STATUS_STRING=2
 //   注意：mode=STRING 时应使用 pg_result_status_str 获取字符串
-t_int tphp_fn_pg_result_status(t_int res_handle, t_int mode) {
+t_int _pg_result_status(t_int res_handle, t_int mode) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_result_status: invalid result handle");
@@ -519,7 +519,7 @@ t_int tphp_fn_pg_result_status(t_int res_handle, t_int mode) {
 }
 
 // pg_result_status_str — 返回状态字符串（命令 tag 或错误消息）
-t_string tphp_fn_pg_result_status_str(t_int res_handle) {
+t_string _pg_result_status_str(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_result_status_str: invalid result handle");
@@ -541,7 +541,7 @@ t_string tphp_fn_pg_result_status_str(t_int res_handle) {
 }
 
 // pg_result_seek — 移动 cur_row 指针
-t_bool tphp_fn_pg_result_seek(t_int res_handle, t_int offset) {
+t_bool _pg_result_seek(t_int res_handle, t_int offset) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_result_seek: invalid result handle");
@@ -556,7 +556,7 @@ t_bool tphp_fn_pg_result_seek(t_int res_handle, t_int offset) {
 }
 
 // pg_result_error — 返回结果集的错误消息
-t_string tphp_fn_pg_result_error(t_int res_handle) {
+t_string _pg_result_error(t_int res_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_result_error: invalid result handle");
@@ -567,7 +567,7 @@ t_string tphp_fn_pg_result_error(t_int res_handle) {
 }
 
 // pg_result_error_field — 按 PGSQL_DIAG_* 字段码取错误字段值
-t_string tphp_fn_pg_result_error_field(t_int res_handle, t_int field_code) {
+t_string _pg_result_error_field(t_int res_handle, t_int field_code) {
     PGresult *res = _PG_RESULT_FROM_INT(res_handle);
     if (res == NULL) {
         tp_throw("pg_result_error_field: invalid result handle");
@@ -602,7 +602,7 @@ t_string tphp_fn_pg_result_error_field(t_int res_handle, t_int field_code) {
 // 6.5 错误/通知
 // ============================================================
 
-t_string tphp_fn_pg_last_error(t_int conn_handle) {
+t_string _pg_last_error(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_last_error: invalid connection handle");
@@ -612,7 +612,7 @@ t_string tphp_fn_pg_last_error(t_int conn_handle) {
     return (t_string){0};
 }
 
-t_string tphp_fn_pg_last_notice(t_int conn_handle) {
+t_string _pg_last_notice(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_last_notice: invalid connection handle");
@@ -627,7 +627,7 @@ t_string tphp_fn_pg_last_notice(t_int conn_handle) {
 // ============================================================
 
 // pg_free_result — 释放 PGresult
-void tphp_fn_pg_free_result(t_int result_handle) {
+void _pg_free_result(t_int result_handle) {
     PGresult *res = _PG_RESULT_FROM_INT(result_handle);
     if (res == NULL) return;
     _pg_result_free(res);

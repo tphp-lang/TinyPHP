@@ -1169,7 +1169,7 @@ static int _pg_connect_socket(PGconn *conn) {
 // pg_connect — 建立到 PostgreSQL 服务器的新连接
 //   dsn: 连接字符串（key=value 或 URL 格式）
 //   成功返回 PGconn 指针（t_int），失败 tp_throw 并返回 0
-t_int tphp_fn_pg_connect(t_string dsn) {
+t_int _pg_connect(t_string dsn) {
     const char *dsn_str = STR_PTR(dsn);
     if (dsn_str == NULL || dsn.length == 0) {
         tp_throw("pg_connect: empty connection string");
@@ -1229,7 +1229,7 @@ t_int tphp_fn_pg_connect(t_string dsn) {
 // pg_pconnect — 建立持久连接
 //   委托给 _pg_pconnect_real（实现在 pgsql_pconnect.h，Task 9.6）
 //   实现完整的持久连接池复用逻辑
-t_int tphp_fn_pg_pconnect(t_string dsn, t_int flags) {
+t_int _pg_pconnect(t_string dsn, t_int flags) {
     return _pg_pconnect_real(dsn, flags);
 }
 
@@ -1238,7 +1238,7 @@ t_int tphp_fn_pg_pconnect(t_string dsn, t_int flags) {
 //   持久连接默认归还连接池，非持久连接直接关闭
 //   close_flags: PGSQL_CLOSE_FORCE=1 强制关闭（传递给 _pg_close_real）
 //   返回 true 表示关闭流程已完成（与 PHP 层 bool 返回值对齐）
-t_bool tphp_fn_pg_close(t_int conn_handle, t_int close_flags) {
+t_bool _pg_close(t_int conn_handle, t_int close_flags) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) return false;
     _pg_close_real(conn, close_flags);
@@ -1246,7 +1246,7 @@ t_bool tphp_fn_pg_close(t_int conn_handle, t_int close_flags) {
 }
 
 // pg_connection_status — 返回连接状态
-t_int tphp_fn_pg_connection_status(t_int conn_handle) {
+t_int _pg_connection_status(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) return CONN_BAD;
     return conn->status;
@@ -1254,7 +1254,7 @@ t_int tphp_fn_pg_connection_status(t_int conn_handle) {
 
 // pg_ping — ping 服务器
 //   发送空查询，检查 ReadyForQuery 响应
-t_bool tphp_fn_pg_ping(t_int conn_handle) {
+t_bool _pg_ping(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL || conn->sock < 0) return false;
 
@@ -1296,7 +1296,7 @@ t_bool tphp_fn_pg_ping(t_int conn_handle) {
 
 // pg_connection_reset — 重置连接
 //   关闭当前 socket，重新建立连接
-t_bool tphp_fn_pg_connection_reset(t_int conn_handle) {
+t_bool _pg_connection_reset(t_int conn_handle) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) return false;
 

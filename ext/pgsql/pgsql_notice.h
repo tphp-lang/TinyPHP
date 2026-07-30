@@ -6,7 +6,7 @@
 // 在 NoticeResponse 消息处理中调用 _pg_invoke_notice_cb。
 //
 // 实现函数：
-//   9.7.1  tphp_fn_pg_set_notice_callback — 注册通知回调
+//   9.7.1  _pg_set_notice_callback — 注册通知回调
 //   9.7.2  _pg_invoke_notice_cb           — 内部调用（NoticeResponse 处理中）
 //
 // 回调签名约定：
@@ -32,11 +32,11 @@
 #include <stdio.h>
 
 // ============================================================
-// 9.7.1 tphp_fn_pg_set_notice_callback — 注册通知回调
+// 9.7.1 _pg_set_notice_callback — 注册通知回调
 //   将 t_callback 保存到 conn->notice_cb
 //   回调签名：void (*)(t_string* msg, void* env)
 // ============================================================
-void tphp_fn_pg_set_notice_callback(t_int conn_handle, t_callback callback) {
+void _pg_set_notice_callback(t_int conn_handle, t_callback callback) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_set_notice_callback: invalid connection handle");

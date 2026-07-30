@@ -21,7 +21,7 @@
 //   7. pgsql/pgsql_misc.h    — 转义函数（_pg_quote_literal 等）
 //   8. pgsql/pgsql_copy.h    — COPY 协议函数
 //   9. pgsql/pgsql_lo.h      — Large Object 函数
-//  10. pgsql/pgsql_pconnect.h — _pg_close_real（tphp_fn_pg_close 依赖）
+//  10. pgsql/pgsql_pconnect.h — _pg_close_real（_pg_close 依赖）
 //  11. pgsql/pgsql_notice.h   — 通知回调
 //  12. pdo/pdo_driver.h      — pdo_driver_t 接口定义 + pdo_register_driver
 //  13. pdo_pgsql/pdo_pgsql.h — 本文件，驱动实现
@@ -868,7 +868,7 @@ static const pdo_driver_t pdo_pgsql_driver = {
 
 // ── 注册 PgSQL 驱动 ──
 //   constructor + static 在部分 TCC 版本下会被死代码消除，
-//   因此同时提供 constructor 和显式注册函数（PHP 层调用 tphp_fn_pdo_pgsql_init）
+//   因此同时提供 constructor 和显式注册函数（PHP 层调用 _pgpdo_init）
 __attribute__((constructor))
 static void _pdo_pgsql_register(void) {
     pdo_register_driver(&pdo_pgsql_driver);
@@ -876,7 +876,7 @@ static void _pdo_pgsql_register(void) {
 
 // 显式注册（供 CodeGenerator 在 main() 入口自动调用，确保跨编译器一致）
 //   返回 1 表示注册成功（或已注册），0 表示失败
-static inline int tphp_fn_pdo_pgsql_init(void) {
+static inline int _pgpdo_init(void) {
     pdo_register_driver(&pdo_pgsql_driver);
     return 1;
 }
@@ -890,7 +890,7 @@ static inline int tphp_fn_pdo_pgsql_init(void) {
 // ── pdo_pgsql_pgconn: 从 PDO dbh 提取 PGconn 指针（int 形式）──
 //   PHP 层调用 pg_* 系列函数需要 PGconn 句柄，本函数完成转换
 //   返回 PGconn 指针的 int 表示（0 表示无效）
-static inline t_int tphp_fn_pdo_pgsql_pgconn(t_int dbh_int) {
+static inline t_int _pgpdo_pgconn(t_int dbh_int) {
     if (dbh_int == 0) return 0;
     pgpdo_db_t* db = (pgpdo_db_t*)(intptr_t)dbh_int;
     if (db == NULL || db->conn == NULL) return 0;
@@ -899,7 +899,7 @@ static inline t_int tphp_fn_pdo_pgsql_pgconn(t_int dbh_int) {
 
 // ── pdo_pgsql_get_pid: 获取后端 PID ──
 //   直接读取 PGconn->backend_pid（由 BackendKeyData 消息填充）
-static inline t_int tphp_fn_pdo_pgsql_get_pid(t_int dbh_int) {
+static inline t_int _pgpdo_get_pid(t_int dbh_int) {
     if (dbh_int == 0) return 0;
     pgpdo_db_t* db = (pgpdo_db_t*)(intptr_t)dbh_int;
     if (db == NULL || db->conn == NULL) return 0;
@@ -911,7 +911,7 @@ static inline t_int tphp_fn_pdo_pgsql_get_pid(t_int dbh_int) {
 //   注意：当前 ext/pgsql 的 _pg_receive_query_results 未缓存 NotificationResponse('A') 消息
 //   因此本实现返回空数组。完整 LISTEN/NOTIFY 支持需要修改协议接收循环
 //   后续可扩展：在 pgpdo_db_t 中添加 notify 缓存，hook 到消息接收循环
-static inline t_array* tphp_fn_pdo_pgsql_get_notify(t_int dbh_int, t_int result_type, t_int ms_timeout) {
+static inline t_array* _pgpdo_get_notify(t_int dbh_int, t_int result_type, t_int ms_timeout) {
     (void)dbh_int; (void)result_type; (void)ms_timeout;
     // 当前实现：返回空数组（LISTEN/NOTIFY 支持需要协议层修改，超出本任务范围）
     t_array* arr = tphp_fn_arr_create(0);

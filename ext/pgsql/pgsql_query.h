@@ -11,7 +11,7 @@
 //   4.6 _pg_handle_ready_for_query  — 处理 ReadyForQuery ('Z')
 //   4.7 _pg_result_new / free / append_row — PGresult 生命周期
 //   4.8 _pg_exec_query              — 主查询循环
-//   4.9 tphp_fn_pg_query            — PHP 层包装
+//   4.9 _pg_query            — PHP 层包装
 //
 // Task 5: 扩展查询协议（Extended Query Protocol）
 //   5.1 _pg_send_parse              — Parse 消息 ('P')
@@ -20,7 +20,7 @@
 //   5.4 _pg_send_execute            — Execute 消息 ('E')
 //   5.5 _pg_send_sync / _pg_send_flush — Sync ('S') / Flush ('H')
 //   5.7 _pg_exec_query_params       — 参数化查询执行
-//   5.8 tphp_fn_pg_query_params / pg_prepare / pg_execute — PHP 层包装
+//   5.8 _pg_query_params / pg_prepare / pg_execute — PHP 层包装
 //   5.9 _pg_array_to_params         — t_array* → const char** 转换
 //
 // 依赖：pgsql.h（结构体 + 常量）+ pgsql_protocol.h（消息收发 + 错误解析）
@@ -912,7 +912,7 @@ static void _pg_param_array_free(_pg_param_array *pa) {
 
 // pg_query — 执行简单查询
 //   返回 PGresult 指针（t_int）；错误 tp_throw 并返回 0
-t_int tphp_fn_pg_query(t_int conn_handle, t_string sql) {
+t_int _pg_query(t_int conn_handle, t_string sql) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_query: invalid connection handle");
@@ -941,7 +941,7 @@ t_int tphp_fn_pg_query(t_int conn_handle, t_string sql) {
 
 // pg_query_params — 执行参数化查询
 //   params: t_array*，元素可为 int/string/bool/float/null
-t_int tphp_fn_pg_query_params(t_int conn_handle, t_string sql, t_array *params) {
+t_int _pg_query_params(t_int conn_handle, t_string sql, t_array *params) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_query_params: invalid connection handle");
@@ -980,7 +980,7 @@ t_int tphp_fn_pg_query_params(t_int conn_handle, t_string sql, t_array *params) 
 // pg_prepare — 预处理语句
 //   只发送 Parse + Sync，接收 ParseComplete + ReadyForQuery
 //   返回 PGresult*（status=PGRES_COMMAND_OK）
-t_int tphp_fn_pg_prepare(t_int conn_handle, t_string stmt_name, t_string sql) {
+t_int _pg_prepare(t_int conn_handle, t_string stmt_name, t_string sql) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_prepare: invalid connection handle");
@@ -1030,7 +1030,7 @@ t_int tphp_fn_pg_prepare(t_int conn_handle, t_string stmt_name, t_string sql) {
 
 // pg_execute — 执行预处理语句
 //   发送 Bind + Execute + Sync，接收结果
-t_int tphp_fn_pg_execute(t_int conn_handle, t_string stmt_name, t_array *params) {
+t_int _pg_execute(t_int conn_handle, t_string stmt_name, t_array *params) {
     PGconn *conn = _PG_CONN_FROM_INT(conn_handle);
     if (conn == NULL) {
         tp_throw("pg_execute: invalid connection handle");
