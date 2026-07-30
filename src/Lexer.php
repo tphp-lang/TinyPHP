@@ -549,6 +549,15 @@ class Lexer
 
             // 插值：$var 或 {$var} 或 {$var->prop}
             if ($ch === '$') {
+                // PHP 变量名必须以字母或下划线开头
+                // $ 后跟数字（如 PostgreSQL 参数占位符 $1, $2）不是变量插值，作为字面量 $ 处理
+                $afterDollar = $this->peek(1);
+                if ($afterDollar !== '{' && !ctype_alpha($afterDollar) && $afterDollar !== '_') {
+                    $buf .= '$';
+                    $this->advance(); // skip $ (as literal)
+                    continue;
+                }
+
                 $this->advance(); // skip $
 
                 $inBrace = false;

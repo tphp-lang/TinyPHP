@@ -132,6 +132,8 @@ class CodeGenerator implements ASTVisitor
         'bool' => 't_bool', 'void' => 'void', 'never' => 'void', 'array' => 't_array*',
         'mixed' => 't_var', 'null' => 'void*',
         'Generator' => 'tphp_class_Generator*',
+        'Channel' => 'tphp_class_Channel*',
+        'Future'  => 'tphp_class_Future*',
     ];
 
     /** 内置函数返回类型注册表（替代 inferCallReturnType 中的 140+ if-else） */
@@ -147,6 +149,7 @@ class CodeGenerator implements ASTVisitor
         'array_key_first' => 't_int', 'array_key_last' => 't_int', 'strtotime' => 't_int', 'mktime' => 't_int',
         'substr_count' => 't_int', 'crc32' => 't_int', 'preg_last_error' => 't_int',
         'iconv_strlen' => 't_int', 'iconv_strpos' => 't_int',
+        'chan_select' => 't_int',
         'zip_num_files' => 't_int',
         // ── zlib gz/增量 API int 返回 ──
         'gzwrite' => 't_int', 'gzputs' => 't_int', 'gzseek' => 't_int',
@@ -321,8 +324,123 @@ class CodeGenerator implements ASTVisitor
         'pcntl_get_last_error' => 't_int',
         'pcntl_strerror' => 't_string',
         'pcntl_exec' => 'void',
+        // ── pgsql (内置 ext, PostgreSQL 协议) ──
+        //   pgsql 函数在 ext/pgsql/src/pgsql.php 中以 PHP 包装函数声明，
+        //   注册返回类型用于编译期类型推导（查表优先于 SymbolTable）
+        //   指针/句柄以 t_int 流转，const char* 通过 php_str() 转为 t_string
+        'pg_connect' => 't_int', 'pg_pconnect' => 't_int',
+        'pg_connection_status' => 't_int', 'pg_connection_reset' => 't_bool',
+        'pg_ping' => 't_bool',
+        'pg_query' => 't_int', 'pg_query_params' => 't_int',
+        'pg_prepare' => 't_int', 'pg_execute' => 't_int',
+        'pg_close' => 't_bool', 'pg_free_result' => 'void',
+        'pg_num_rows' => 't_int', 'pg_num_fields' => 't_int',
+        'pg_affected_rows' => 't_int', 'pg_last_oid' => 't_int',
+        'pg_field_num' => 't_int', 'pg_field_type_oid' => 't_int',
+        'pg_field_size' => 't_int', 'pg_field_prtlen' => 't_int',
+        'pg_field_table' => 't_int', 'pg_field_is_null' => 't_bool',
+        'pg_field_name' => 't_string', 'pg_field_type' => 't_string',
+        'pg_fetch_result_str' => 't_string',
+        'pg_result_status' => 't_int', 'pg_result_status_str' => 't_string',
+        'pg_result_seek' => 't_bool',
+        'pg_result_error' => 't_string', 'pg_result_error_field' => 't_string',
+        'pg_last_error' => 't_string', 'pg_last_notice' => 't_string',
+        'pg_dbname' => 't_string', 'pg_host' => 't_string', 'pg_tty' => 't_string',
+        'pg_options' => 't_string', 'pg_parameter_status' => 't_string',
+        'pg_client_encoding' => 't_string',
+        'pg_port' => 't_int', 'pg_transaction_status' => 't_int',
+        'pg_set_client_encoding' => 't_int',
+        'pg_version' => 't_array*', 'pg_fetch_row' => 't_array*',
+        'pg_fetch_assoc' => 't_array*', 'pg_fetch_array' => 't_array*',
+        'pg_fetch_all' => 't_array*', 'pg_fetch_all_columns' => 't_array*',
+        'pg_copy_to' => 't_array*',
+        'pg_meta_data' => 't_array*', 'pg_convert' => 't_array*',
+        'pg_select' => 't_array*',
+        'pg_escape_string' => 't_string', 'pg_escape_literal' => 't_string',
+        'pg_escape_identifier' => 't_string', 'pg_escape_bytea' => 't_string',
+        'pg_unescape_bytea' => 't_string',
+        'pg_copy_from' => 't_bool', 'pg_put_copy_data' => 't_bool',
+        'pg_put_copy_end' => 't_bool', 'pg_end_copy' => 't_bool',
+        'pg_insert_result' => 't_int', 'pg_update_result' => 't_int',
+        'pg_delete_result' => 't_int',
+        'pg_insert_sql' => 't_string', 'pg_update_sql' => 't_string',
+        'pg_delete_sql' => 't_string',
+        'pg_lo_create' => 't_int', 'pg_lo_open' => 't_int',
+        'pg_lo_write' => 't_int', 'pg_lo_seek' => 't_int',
+        'pg_lo_tell' => 't_int', 'pg_lo_import' => 't_int',
+        'pg_lo_read' => 't_string', 'pg_lo_read_all' => 't_string',
+        'pg_lo_truncate' => 't_bool', 'pg_lo_unlink' => 't_bool',
+        'pg_lo_export' => 't_bool', 'pg_lo_close' => 'void',
+        'pg_set_notice_callback' => 'void',
+        // ── pdo_pgsql (内置 ext, PostgreSQL PDO 驱动) ──
+        //   PHP 层包装函数（pdo_pgsql_get_pid / get_notify / pgconn）
+        'pdo_pgsql_get_pid' => 't_int', 'pdo_pgsql_pgconn' => 't_int',
+        'pdo_pgsql_get_notify' => 't_array*',
+        // ── pgsql C 包装函数（_pg_*，由 ext/pgsql/src/pgsql.php 的 PHP 包装函数体内调用）──
+        //   注册返回类型用于编译期类型推导（PHP 包装函数体内调用 _pg_* 时查表）
+        //   指针/句柄以 t_int 流转，t_array* 为堆分配数组（PHP 层判断 NULL 返回空数组）
+        '_pg_connect' => 't_int', '_pg_pconnect' => 't_int',
+        '_pg_close' => 't_bool',
+        '_pg_connection_status' => 't_int', '_pg_connection_reset' => 't_bool',
+        '_pg_ping' => 't_bool',
+        '_pg_query' => 't_int', '_pg_query_params' => 't_int',
+        '_pg_prepare' => 't_int', '_pg_execute' => 't_int',
+        '_pg_free_result' => 'void',
+        '_pg_num_rows' => 't_int', '_pg_num_fields' => 't_int',
+        '_pg_affected_rows' => 't_int', '_pg_last_oid' => 't_int',
+        '_pg_field_name' => 't_string', '_pg_field_num' => 't_int',
+        '_pg_field_type' => 't_string', '_pg_field_type_oid' => 't_int',
+        '_pg_field_size' => 't_int', '_pg_field_prtlen' => 't_int',
+        '_pg_field_is_null' => 't_bool', '_pg_field_table' => 't_int',
+        '_pg_fetch_row' => 't_array*', '_pg_fetch_assoc' => 't_array*',
+        '_pg_fetch_array' => 't_array*', '_pg_fetch_all' => 't_array*',
+        '_pg_fetch_all_columns' => 't_array*',
+        '_pg_fetch_result' => 't_string',
+        '_pg_result_status' => 't_int', '_pg_result_status_str' => 't_string',
+        '_pg_result_seek' => 't_bool',
+        '_pg_result_error' => 't_string', '_pg_result_error_field' => 't_string',
+        '_pg_last_error' => 't_string', '_pg_last_notice' => 't_string',
+        '_pg_dbname' => 't_string', '_pg_host' => 't_string',
+        '_pg_port' => 't_int', '_pg_options' => 't_string',
+        '_pg_tty' => 't_string', '_pg_version' => 't_array*',
+        '_pg_parameter_status' => 't_string',
+        '_pg_transaction_status' => 't_int',
+        '_pg_client_encoding' => 't_string',
+        '_pg_set_client_encoding' => 't_int',
+        '_pg_escape_string' => 't_string', '_pg_escape_literal' => 't_string',
+        '_pg_escape_identifier' => 't_string', '_pg_escape_bytea' => 't_string',
+        '_pg_unescape_bytea' => 't_string',
+        '_pg_copy_to' => 't_array*', '_pg_copy_from' => 't_bool',
+        '_pg_put_copy_data' => 't_bool', '_pg_put_copy_end' => 't_bool',
+        '_pg_end_copy' => 't_bool',
+        '_pg_meta_data' => 't_array*', '_pg_convert' => 't_array*',
+        '_pg_insert_result' => 't_int', '_pg_insert_sql' => 't_string',
+        '_pg_update_result' => 't_int', '_pg_update_sql' => 't_string',
+        '_pg_delete_result' => 't_int', '_pg_delete_sql' => 't_string',
+        '_pg_select' => 't_array*',
+        '_pg_lo_create' => 't_int', '_pg_lo_open' => 't_int',
+        '_pg_lo_read' => 't_string', '_pg_lo_write' => 't_int',
+        '_pg_lo_seek' => 't_int', '_pg_lo_tell' => 't_int',
+        '_pg_lo_truncate' => 't_bool', '_pg_lo_close' => 'void',
+        '_pg_lo_unlink' => 't_bool', '_pg_lo_import' => 't_int',
+        '_pg_lo_export' => 't_bool', '_pg_lo_read_all' => 't_string',
+        '_pg_set_notice_callback' => 'void',
+        // ── pdo_pgsql C 包装函数（_pgpdo_*，由 ext/pdo_pgsql/src/pdo_pgsql.php 的 PHP 包装函数体内调用）──
+        '_pgpdo_get_pid' => 't_int', '_pgpdo_pgconn' => 't_int',
+        '_pgpdo_get_notify' => 't_array*',
         'phpc_new_arr_int' => 't_array*', 'phpc_new_arr_dbl' => 't_array*',
         'phpc_new_arr_str' => 't_array*', 'phpc_new_arr' => 't_array*',
+        // ── 跨线程数组标记 API（thread-array-support spec Task 10）──
+        //   用户/CodeGenerator 可显式调用，将数组升级为跨线程安全形态（is_shared=1）。
+        //   返回值为 same pointer（便于链式调用），返回值通常忽略。
+        //   每种特化数组有对应的 make_shared 函数（entry 布局不同，不能通用）。
+        'tphp_fn_arr_make_shared' => 't_array*',
+        'tphp_fn_arr_var_make_shared' => 't_arr_var*',
+        'tphp_fn_arr_int_make_shared' => 't_arr_int*',
+        'tphp_fn_arr_str_make_shared' => 't_arr_str*',
+        'tphp_fn_arr_float_make_shared' => 't_arr_float*',
+        'tphp_fn_arr_bool_make_shared' => 't_arr_bool*',
+        'tphp_fn_arr_ptr_make_shared' => 't_arr_ptr*',
         // ── t_var ──
         'array_pop' => 't_var', 'array_shift' => 't_var', 'array_sum' => 't_var', 'array_product' => 't_var',
         'max' => 't_var', 'min' => 't_var', 'json_decode' => 't_var', 'array_rand' => 't_var',
@@ -402,6 +520,30 @@ class CodeGenerator implements ASTVisitor
         'zip_stat' => 't_var',
         //   zip_read() 返回 array<array<mixed>>（外层是 t_var 持有 VAR_ARRAY，内层同 zip_stat）
         'zip_read' => 't_var',
+        // ── pgsql 函数返回数组的元素类型 ──
+        //   pg_fetch_row/assoc/array() 返回 array<string>（单行列值，C 层以 VAR_STRING 存储）
+        'pg_fetch_row'    => 't_string',
+        'pg_fetch_assoc'  => 't_string',
+        'pg_fetch_array'  => 't_string',
+        'pg_fetch_all_columns' => 't_string',
+        //   pg_fetch_all() 返回 array<array<string>>（外层是行数组，内层是列值字符串）
+        'pg_fetch_all'    => 't_array*',
+        'pg_fetch_all[]'  => 't_string',
+        //   pg_version() 返回 array<string>（client/protocol/server 版本字符串）
+        'pg_version'      => 't_string',
+        //   pg_copy_to() 返回 array<string>（每行一个字符串）
+        'pg_copy_to'      => 't_string',
+        //   pg_meta_data() 返回 array<array<mixed>>（外层是字段数组，内层是字段属性）
+        'pg_meta_data'    => 't_array*',
+        'pg_meta_data[]'  => 't_var',
+        //   pg_convert() 返回 array<mixed>（转换后的字段值，int/string 混合）
+        'pg_convert'      => 't_var',
+        //   pg_select() 返回 array<array<mixed>>（外层是行数组，内层是字段值）
+        'pg_select'       => 't_array*',
+        'pg_select[]'     => 't_var',
+        // ── pdo_pgsql 函数返回数组的元素类型 ──
+        //   pdo_pgsql_get_notify() 返回 array<int|string>（pid/channel/message，混合类型）
+        'pdo_pgsql_get_notify' => 't_var',
     ];
 
     /**
@@ -426,6 +568,8 @@ class CodeGenerator implements ASTVisitor
         'filter_id'          => ['cName' => 'tphp_fn_filter_id'],
         'iconv'              => ['cName' => 'tphp_fn_iconv'],
         'iconv_set_encoding' => ['cName' => 'tphp_fn_iconv_set_encoding'],
+        // ── chan_select（多通道多路复用）──
+        'chan_select'        => ['cName' => 'tphp_fn_chan_select', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '((t_int)-1)']],
         // ── fileinfo (内置) ──
         'mime_content_type'  => ['cName' => 'tphp_fn_mime_content_type', 'modes' => ['direct']],
         'finfo_close'        => ['cName' => 'tphp_fn_finfo_close', 'modes' => ['direct']],
@@ -958,6 +1102,55 @@ class CodeGenerator implements ASTVisitor
             }
         }
 
+        // 检测是否使用了 pgsql 函数（自动引入 ext/pgsql 头文件链）
+        //   用户通过 #import pgsql 引入 PHP 包装函数；本检测覆盖以下场景：
+        //   1. 用户使用 raw C 调用（_pg_*）但未 #import pgsql
+        //   2. 用户 #import pgsql 后 .h 链已由 .php 中的 #include 引入（本检测跳过，避免重复）
+        $pgsqlFns = ['pg_connect(', 'pg_pconnect(', 'pg_close(', 'pg_connection_status(',
+                     'pg_connection_reset(', 'pg_ping(',
+                     'pg_query(', 'pg_query_params(', 'pg_prepare(', 'pg_execute(',
+                     'pg_free_result(',
+                     'pg_num_rows(', 'pg_num_fields(', 'pg_affected_rows(', 'pg_last_oid(',
+                     'pg_field_name(', 'pg_field_num(', 'pg_field_type(', 'pg_field_type_oid(',
+                     'pg_field_size(', 'pg_field_prtlen(', 'pg_field_is_null(', 'pg_field_table(',
+                     'pg_fetch_row(', 'pg_fetch_assoc(', 'pg_fetch_array(', 'pg_fetch_all(',
+                     'pg_fetch_all_columns(', 'pg_fetch_result_str(',
+                     'pg_result_status(', 'pg_result_status_str(', 'pg_result_seek(',
+                     'pg_result_error(', 'pg_result_error_field(',
+                     'pg_last_error(', 'pg_last_notice(',
+                     'pg_dbname(', 'pg_host(', 'pg_port(', 'pg_options(', 'pg_tty(',
+                     'pg_version(', 'pg_parameter_status(', 'pg_transaction_status(',
+                     'pg_client_encoding(', 'pg_set_client_encoding(',
+                     'pg_escape_string(', 'pg_escape_literal(', 'pg_escape_identifier(',
+                     'pg_escape_bytea(', 'pg_unescape_bytea(',
+                     'pg_copy_to(', 'pg_copy_from(', 'pg_put_copy_data(', 'pg_put_copy_end(',
+                     'pg_end_copy(',
+                     'pg_meta_data(', 'pg_convert(', 'pg_insert_result(', 'pg_insert_sql(',
+                     'pg_update_result(', 'pg_update_sql(', 'pg_delete_result(', 'pg_delete_sql(',
+                     'pg_select(',
+                     'pg_lo_create(', 'pg_lo_open(', 'pg_lo_read(', 'pg_lo_write(',
+                     'pg_lo_seek(', 'pg_lo_tell(', 'pg_lo_truncate(', 'pg_lo_close(',
+                     'pg_lo_unlink(', 'pg_lo_import(', 'pg_lo_export(', 'pg_lo_read_all(',
+                     'pg_set_notice_callback('];
+        $needPgsql = false;
+        if ($src !== false) {
+            foreach ($pgsqlFns as $fn) {
+                if (str_contains($src, $fn)) { $needPgsql = true; break; }
+            }
+        }
+
+        // 检测是否使用了 PDO pgsql DSN（自动链接 pdo_pgsql 驱动）
+        //   用户通过 new PDO("pgsql:host=...") 使用，无需显式 #import pdo_pgsql
+        //   DSN 前缀 "pgsql:" 和 "postgresql:" 都匹配（pdo_find_driver 按 drv->name 查找）
+        $needPdoPgsql = false;
+        if ($src !== false) {
+            if (str_contains($src, '"pgsql:') || str_contains($src, "'pgsql:")
+                || str_contains($src, '"postgresql:') || str_contains($src, "'postgresql:")) {
+                $needPdoPgsql = true;
+                $needPgsql = true;  // pdo_pgsql 依赖 ext/pgsql 协议实现
+            }
+        }
+
         // stream/openssl: 不再自动检测，由 #import 显式引入（.php 中 #include 头文件）
         //   - #import stream  → ext/stream/src/stream.php 中 #include __EXT__ . "stream/src/stream.h"
         //   - #import openssl → ext/openssl/src/openssl.php 中 #include __EXT__ . "openssl/src/openssl.h"
@@ -997,7 +1190,19 @@ class CodeGenerator implements ASTVisitor
                 $this->pdoDriverInits[] = 'tphp_fn_pdo_sqlite_init';
             } elseif (str_contains($f, 'pdo_mysql/pdo_mysql.h')) {
                 $this->pdoDriverInits[] = 'tphp_fn_pdo_mysql_init';
+            } elseif (str_contains($f, 'pdo_pgsql/pdo_pgsql.h')) {
+                $this->pdoDriverInits[] = '_pgpdo_init';
             }
+        }
+        // 检查 pgsql/pdo_pgsql 是否已通过 #import 引入（避免重复 #include）
+        //   #import pgsql     → ext/pgsql/src/pgsql.php 中 #include pgsql.h 链
+        //   #import pdo_pgsql → ext/pdo_pgsql/src/pdo_pgsql.php 中 #include pdo_pgsql.h
+        $hasPgsqlInc = false;
+        $hasPdoPgsqlInc = false;
+        foreach ($userIncAfter as $inc) {
+            $f = str_replace('\\', '/', is_array($inc) ? ($inc['file'] ?? '') : $inc);
+            if (str_contains($f, 'pgsql/pgsql.h')) $hasPgsqlInc = true;
+            if (str_contains($f, 'pdo_pgsql/pdo_pgsql.h')) $hasPdoPgsqlInc = true;
         }
         foreach ($userIncBefore as $inc) {
             if (is_array($inc)) {
@@ -1036,6 +1241,39 @@ class CodeGenerator implements ASTVisitor
                 $this->sectionLine(self::SEC_INCLUDES, '#include ' . $delim . $inc['file'] . $end);
             } else {
                 $this->sectionLine(self::SEC_INCLUDES, '#include "' . $inc . '"');
+            }
+        }
+        // ── pgsql 自动 #include（检测到 pg_* 函数调用但未 #import pgsql 时）──
+        //   按依赖顺序包含头文件链（与 ext/pgsql/src/pgsql.php 中的顺序一致）：
+        //     stream.h → pgsql.h → pg_crypto.h → pgsql_protocol.h → pgsql_query.h
+        //     → pgsql_result.h → pgsql_misc.h → pgsql_copy.h → pgsql_dml.h
+        //     → pgsql_lo.h → pgsql_pconnect.h → pgsql_notice.h
+        //   放在 $userIncAfter 之后：确保用户 #import 的 openssl.h（若已引入）
+        //   先于 stream.h include（openssl.h 定义 TPHP_STREAM_TLS_IMPLEMENTED 覆盖 stream.h stub）
+        //   头文件有 #pragma once，重复 #include 安全（用户已 #import pgsql 时本块跳过）
+        if ($needPgsql && !$hasPgsqlInc) {
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/stream/src/stream.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pg_crypto.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_protocol.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_query.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_result.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_misc.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_copy.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_dml.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_lo.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_pconnect.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pgsql/pgsql_notice.h"');
+        }
+        // ── pdo_pgsql 自动 #include（检测到 "pgsql:"/"postgresql:" DSN 但未 #import pdo_pgsql 时）──
+        //   依赖 pgsql.h 链（上方已引入）+ pdo_driver.h + pdo_pgsql.h
+        //   同时注册驱动 init 函数（类似 #import pdo_pgsql 的效果）
+        if ($needPdoPgsql && !$hasPdoPgsqlInc) {
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pdo/pdo_driver.h"');
+            $this->sectionLine(self::SEC_INCLUDES, '#include "ext/pdo_pgsql/pdo_pgsql.h"');
+            // 注册 PDO pgsql 驱动 init（在 main() 入口自动调用 _pgpdo_init）
+            if (!in_array('_pgpdo_init', $this->pdoDriverInits, true)) {
+                $this->pdoDriverInits[] = '_pgpdo_init';
             }
         }
         if ($needExtra) {
@@ -1213,8 +1451,13 @@ class CodeGenerator implements ASTVisitor
                 $isVariadic,
             ));
             $params = array_map(fn($p) => $this->visitParam($p), $fn->params);
-            $this->sectionLine(self::SEC_FUNCFWDS,
-                'static ' . $ret . ' ' . $fnCName . '(' . implode(', ', $params) . ');');
+            // 跳过已在 C 头文件中定义的函数的前置声明（避免 static storage 重定义警告）
+            //   场景：ext/pgsql 的 PHP 包装函数（pg_connect 等）的 C 名（_pg_connect）
+            //   与 C 头文件中定义的 C 函数同名，C 函数已在 #include 的头文件中声明/定义
+            if (!isset(self::$builtinRetTypes[$fnCName])) {
+                $this->sectionLine(self::SEC_FUNCFWDS,
+                    'static ' . $ret . ' ' . $fnCName . '(' . implode(', ', $params) . ');');
+            }
             // 为有默认值的函数生成重载函数前置声明
             if ($defaultCount > 0) {
                 for ($cutIdx = $totalParams - $defaultCount; $cutIdx < $totalParams; $cutIdx++) {
@@ -1499,6 +1742,45 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Parallel')->methods['for']  = new MethodInfo('void', ['t_int', 't_callback', 't_int'], true, 'public', 1, 3);
         // map(array $data, callable $fn, int $threads = 0): array — 3 params, 1 default
         $this->symbols->getClass('tphp_class_Parallel')->methods['map']  = new MethodInfo('t_array*', ['t_array*', 't_callback', 't_int'], true, 'public', 1, 3);
+
+        // 内置 Channel 类（CSP 风格有界通道）
+        $this->symbols->addClass('tphp_class_Channel');
+        $this->symbols->addClassName('Channel', 'tphp_class_Channel');
+        // __construct(int $capacity = 64): void — 1 param, 1 default
+        $this->symbols->getClass('tphp_class_Channel')->methods['__construct'] = new MethodInfo('void', ['t_int'], false, 'public', 1, 1);
+        $this->symbols->getClass('tphp_class_Channel')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Channel')->methods['push']       = new MethodInfo('void', ['t_var']);
+        $this->symbols->getClass('tphp_class_Channel')->methods['pop']        = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Channel')->methods['tryPush']    = new MethodInfo('t_bool', ['t_var']);
+        $this->symbols->getClass('tphp_class_Channel')->methods['tryPop']     = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Channel')->methods['close']      = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Channel')->methods['isClosed']   = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Channel')->methods['length']     = new MethodInfo('t_int');
+        $this->symbols->getClass('tphp_class_Channel')->methods['capacity']   = new MethodInfo('t_int');
+
+        // 内置 Future 类（一次性异步结果）
+        $this->symbols->addClass('tphp_class_Future');
+        $this->symbols->addClassName('Future', 'tphp_class_Future');
+        // static create(): Future
+        $this->symbols->getClass('tphp_class_Future')->methods['create']    = new MethodInfo('tphp_class_Future*', [], true);
+        $this->symbols->getClass('tphp_class_Future')->methods['__destruct'] = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Future')->methods['resolve']   = new MethodInfo('void', ['t_var']);
+        $this->symbols->getClass('tphp_class_Future')->methods['reject']    = new MethodInfo('void', ['t_var']);
+        $this->symbols->getClass('tphp_class_Future')->methods['await']     = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Future')->methods['isReady']   = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Future')->methods['isRejected'] = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Future')->methods['then']      = new MethodInfo('tphp_class_Future*', ['t_callback']);
+        $this->symbols->getClass('tphp_class_Future')->methods['catch']     = new MethodInfo('tphp_class_Future*', ['t_callback']);
+        // static all(array $futures): Future
+        $this->symbols->getClass('tphp_class_Future')->methods['all']       = new MethodInfo('tphp_class_Future*', ['t_array*'], true);
+        // static race(array $futures): Future
+        $this->symbols->getClass('tphp_class_Future')->methods['race']      = new MethodInfo('tphp_class_Future*', ['t_array*'], true);
+
+        // 内置 ChannelClosedException / FutureRejectedException 类
+        $this->symbols->addClass('tphp_class_ChannelClosedException');
+        $this->symbols->addClassName('ChannelClosedException', 'tphp_class_ChannelClosedException');
+        $this->symbols->addClass('tphp_class_FutureRejected');
+        $this->symbols->addClassName('FutureRejectedException', 'tphp_class_FutureRejected');
 
         // 内置 AnnotationEntry 类（注解系统）
         $this->symbols->addClass('tphp_class_AnnotationEntry');
@@ -2327,6 +2609,15 @@ class CodeGenerator implements ASTVisitor
         // 生成重载函数（如果有默认值参数）
         if ($hasDefaults) {
             $parts[] = $this->generateFunctionOverloads($node, $ret);
+        }
+
+        // 跳过已在 C 头文件中定义的函数的实现生成（避免 redefinition 错误）
+        //   场景：ext/pgsql 的 PHP 包装函数（pg_connect 等）与 C 头文件中的 C 函数同名，
+        //   C 函数已在 #include 的头文件中定义，PHP 包装函数的实体会导致 redefinition。
+        //   重载函数（fnName_1 等）不与 C 函数同名，仍需生成。
+        //   返回类型已通过 $builtinRetTypes 注册，调用方直接链接到 C 函数。
+        if (isset(self::$builtinRetTypes[$this->currentFuncCName])) {
+            return implode("\n\n", $parts);
         }
 
         // 生成主函数（完整参数版本）
@@ -3870,6 +4161,14 @@ class CodeGenerator implements ASTVisitor
                 $t = $this->varTypes[$vn];
                 if ($this->isByRefType($t)) return substr($t, 0, -1);
                 return $t;
+            }
+            // 常量引用（name 不以 $ 开头）→ 查 SymbolTable 常量类型，优先于 TypeChecker inferredType。
+            //   TypeChecker.checkVariable 对未声明标识符默认设 mixed（t_var），但常量已在 visitConst
+            //   注册到 SymbolTable，应查 getConstType 获取真实类型，避免 int 常量被误判为 t_var
+            //   后生成 VAR_AS_INT(TPHP_CONST_XXX)（对整数常量取 .type 字段，TCC 报 lvalue expected）
+            if (!str_starts_with($expr->name, '$')) {
+                $ct = $this->symbols->getConstType($expr->name);
+                if ($ct !== null) return $ct;
             }
         }
 
@@ -5756,6 +6055,7 @@ class CodeGenerator implements ASTVisitor
         $capDecls  = [];
         $capAssigns = []; // heap allocation assignments: _env_N->var = var;
         $hasObjCapture = false;  // 是否捕获了对象类型（需要 retain/release）
+        $arrCapFields = [];      // Task 9: 数组类型捕获字段 [varName, cType]，需要 make_shared
         foreach ($effectiveUseVars as [$vn, $_]) {
             $ct = $this->varTypes[$vn] ?? 't_int';
             // null 类型 → void*，t_var 保持原样，对象类型加 *
@@ -5766,6 +6066,13 @@ class CodeGenerator implements ASTVisitor
                 if (!str_ends_with($ct, '*')) $ct .= '*';
                 $isObj = true;
                 $hasObjCapture = true;
+            }
+            // Task 9: 检测数组类型捕获（t_array* 或任意 t_arr_* 特化类型）
+            //   方案 C（保守策略）：对所有闭包中的数组捕获字段调用 make_shared，
+            //   确保 Thread/Parallel 场景下跨线程安全。make_shared 是幂等的，
+            //   对单线程数组无副作用（仅多一次遍历）。
+            if ($ct === 't_array*' || (str_starts_with($ct, 't_arr_') && str_ends_with($ct, '*'))) {
+                $arrCapFields[] = [$vn, $ct];
             }
             $capFields[]  = "    {$ct} {$vn};";
             $capInits[]   = "    .{$vn} = {$vn}";
@@ -5909,11 +6216,35 @@ class CodeGenerator implements ASTVisitor
         // 生成 GNU 复合表达式
         $fwdParams = implode(', ', array_map(fn($p) => $this->visitParam($p), $node->params));
         $fwdParams = ($fwdParams ? $fwdParams . ', ' : '') . "void* _env";
+        // Task 9: 构建数组捕获字段的 make_shared 调用（方案 C 保守策略）
+        //   对 env 中每个数组字段调用对应的 make_shared 函数，
+        //   确保闭包传递给 Thread/Parallel 时数组为跨线程安全形态。
+        //   t_array*/t_arr_var* → tphp_fn_arr_make_shared / tphp_fn_arr_var_make_shared
+        //   t_arr_int*/t_arr_str* 等特化类型 → tphp_fn_arr_{int,str,...}_make_shared
+        //   注意：不能用 (t_array*)cast 调用通用 make_shared，因为特化数组的 entry 布局不同，
+        //   通用 make_shared 会以 sizeof(t_arr_entry) 步长遍历，导致内存越界。
+        $arrMakeSharedLines = '';
+        if (!empty($arrCapFields)) {
+            $calls = [];
+            foreach ($arrCapFields as [$avn, $act]) {
+                if ($act === 't_array*') {
+                    $fn = 'tphp_fn_arr_make_shared';
+                } elseif ($act === 't_arr_var*') {
+                    $fn = 'tphp_fn_arr_var_make_shared';
+                } else {
+                    // t_arr_int* → tphp_fn_arr_int_make_shared, etc.
+                    $fn = 'tphp_fn_arr_' . str_replace(['t_arr_', '*'], '', $act) . '_make_shared';
+                }
+                $calls[] = "        {$fn}(_env_{$id}->{$avn});";
+            }
+            $arrMakeSharedLines = implode("\n", $calls) . "\n";
+        }
         $envDecl = $hasCapture
             ? "    {$capName}* _env_{$id} = ({$capName}*)calloc(1, sizeof({$capName}));\n"
               . "    if (_env_{$id} != NULL) {\n"
               . ($hasObjCapture ? "        _env_{$id}->dtor = _env_dtor_{$id};\n" : "")
               . implode("\n", $capAssigns) . "\n"
+              . $arrMakeSharedLines
               . "    }\n"
               . "    tphp_rt_register((void*)_env_{$id}, " . ($hasObjCapture ? '5' : '3') . ");\n"
               . "    (t_callback){ .func = (void*){$name}, .env = _env_{$id} };"
@@ -6371,6 +6702,12 @@ class CodeGenerator implements ASTVisitor
                     return $isEq
                         ? "({$other}.func == NULL)"
                         : "({$other}.func != NULL)";
+                }
+                // t_var（mixed）：检查 .type == TYPE_NULL（如 Channel::pop() 关闭后返回 null）
+                if ($otype === 't_var') {
+                    return $isEq
+                        ? "({$other}.type == TYPE_NULL)"
+                        : "({$other}.type != TYPE_NULL)";
                 }
                 return $isEq ? "({$other} == null)" : "({$other} != null)";
             }
@@ -8260,6 +8597,13 @@ class CodeGenerator implements ASTVisitor
             $fnPos = strrpos($n, '\\');
             if ($fnPos !== false) {
                 $fnName = 'tphp_na_' . str_replace('\\', '_', substr($n, 0, $fnPos)) . '_tphp_fn_' . substr($n, $fnPos + 1);
+            } elseif (isset(self::$builtinRetTypes[$n]) && (str_starts_with($n, 'tphp_fn_') || str_starts_with($n, '_'))) {
+                // 已注册的 C 函数（名称以 tphp_fn_ 或 _ 开头并在 $builtinRetTypes 中登记）：
+                //   直接使用原名，避免 tphp_fn_tphp_fn_xxx 或 tphp_fn__pg_xxx 双前缀
+                //   tphp_fn_ 前缀：stream/openssl 等扩展的 C API（tphp_fn_stream_init 等）
+                //   _ 前缀：pgsql/pdo_pgsql 等扩展的内部 C 实现函数（_pg_connect/_pgpdo_init 等），
+                //   不占用 tphp_fn_ 命名空间，避免与 PHP 层函数生成的 tphp_fn_<name> 冲突
+                $fnName = $n;
             } else {
                 $fnName = 'tphp_fn_' . $n;
             }

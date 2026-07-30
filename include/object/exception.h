@@ -55,3 +55,54 @@ static inline t_string tphp_class_Exception_getMessage(tphp_class_Exception* sel
     if (self == NULL) return (t_string){NULL, 0, false};
     return self->message;
 }
+
+// ============================================================
+// ChannelClosedException — 对关闭的 Channel 执行 push 时抛出
+//   继承 Exception（parent 指向 _class_tphp_class_Exception）
+//   结构与 Exception 完全一致（仅 message），catch (Exception) 可捕获
+// ============================================================
+typedef tphp_class_Exception tphp_class_ChannelClosedException;
+
+static void* _vtable_tphp_class_ChannelClosedException[1] = { NULL };
+static const t_class _class_tphp_class_ChannelClosedException = {
+    .name          = "ChannelClosedException",
+    .parent        = &_class_tphp_class_Exception,
+    .instance_size = sizeof(tphp_class_ChannelClosedException),
+    .exception_offset = 0,
+    .dtor          = (void*)tphp_class_Exception___destruct,
+    .vtable        = _vtable_tphp_class_ChannelClosedException,
+    .vtable_len    = 0,
+};
+
+static inline tphp_class_ChannelClosedException* new_tphp_class_ChannelClosedException(t_string msg) {
+    tphp_class_ChannelClosedException* self = (tphp_class_ChannelClosedException*)tp_obj_alloc(&_class_tphp_class_ChannelClosedException);
+    if (self == NULL) return NULL;
+    self->message = tphp_rt_str_dup(msg);
+    tphp_rt_register((void*)self, 0);
+    return self;
+}
+
+// ============================================================
+// FutureRejectedException — Future 被 reject 后 await 时抛出
+//   继承 Exception，结构一致
+// ============================================================
+typedef tphp_class_Exception tphp_class_FutureRejected;
+
+static void* _vtable_tphp_class_FutureRejected[1] = { NULL };
+static const t_class _class_tphp_class_FutureRejected = {
+    .name          = "FutureRejectedException",
+    .parent        = &_class_tphp_class_Exception,
+    .instance_size = sizeof(tphp_class_FutureRejected),
+    .exception_offset = 0,
+    .dtor          = (void*)tphp_class_Exception___destruct,
+    .vtable        = _vtable_tphp_class_FutureRejected,
+    .vtable_len    = 0,
+};
+
+static inline tphp_class_FutureRejected* new_tphp_class_FutureRejected(t_string msg) {
+    tphp_class_FutureRejected* self = (tphp_class_FutureRejected*)tp_obj_alloc(&_class_tphp_class_FutureRejected);
+    if (self == NULL) return NULL;
+    self->message = tphp_rt_str_dup(msg);
+    tphp_rt_register((void*)self, 0);
+    return self;
+}

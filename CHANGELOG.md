@@ -8,6 +8,26 @@
 
 ### 新增
 
+- **异步与协程通信库**（`include/object/channel.h`）：参考 vlang 设计的 CSP 风格异步通信原语，采用 tphp OOP 思想。1 个全局函数 + 2 个类 + 2 个异常类型。
+  - **Channel 类**：CSP 风格有界通道，环形缓冲区实现（push/pop 零 malloc），阻塞前自旋 750 次以减少 syscall。9 个方法：`__construct/push/pop/tryPush/tryPop/close/isClosed/length/capacity`
+  - **Future 类**：一次性异步结果传递机制，支持 await/then/catch 链式调用和 all/race 组合器。10 个方法：`create`（静态）/`resolve/reject/await/isReady/isRejected/then/catch` + 静态 `all/race`
+  - **chan_select 函数**：多通道多路复用，支持超时机制（`chan_select(array $channels, int $timeout_ms = -1): int`）。返回就绪通道索引，全关闭返回 -2，超时返回 -1
+  - **异常类型**：`ChannelClosedException`（push 到已关闭通道时抛出）、`FutureRejectedException`（await 被 reject 的 Future 时抛出）
+  - **内存安全契约**：t_var 值在 push 时 `_arr_val_retain`，pop 时不额外 retain；close 时遍历释放剩余元素；dtor 保证即使忘记 close 也释放所有资源；Future resolve/reject 时 retain，await 返回时不额外 retain
+  - **性能优化策略**：push/pop/await 阻塞前自旋 750 次以减少 syscall；Channel 使用固定容量环形缓冲区实现零 malloc；isReady/isClosed/length 采用无锁原子读；chan_select spin 间隔用 thrd_yield 避免空转
+  - 测试：`test/thread/test_channel.php`（11 节，基本收发/跨线程/有界容量/tryPush/tryPop/close 唤醒/剩余元素/异常）+ `test/thread/test_future.php`（8 节，resolve+await/reject+异常/跨线程/then/catch/all/all-reject/race）+ `test/thread/test_chan_select.php`（4 节，就绪通道/超时/全关闭/跨线程 push）
+  - 同步修复编译器 bug：CodeGenerator 中 `$t_var === null` 误生成 `t_var == null`（结构体与指针比较），修正为 `t_var.type == TYPE_NULL`；Parser 中 `catch` 关键字不允许作为方法名（影响 `Future::catch()`），添加 `CATCH_KW` 到合法方法名 token 列表
+
+- **ext/pgsql**（`ext/pgsql/`）：PostgreSQL 扩展（纯 C 协议实现，支持 trust/md5/SCRAM-SHA-256 认证）
+  - 78 个 pg_* 函数（连接/查询/预处理/结果集/COPY/DML/Large Object/持久连接/通知回调）
+  - 约 60 个常量
+  - 参考 vlang Pool+IdleSlot 模式实现 pg_pconnect 持久连接池
+  - 基于 tphp_class_Resource 实现 pg_lo_open 返回 Resource
+  - 基于 t_callback 实现 pg_set_notice_callback
+- **ext/pdo_pgsql**（`ext/pdo_pgsql/`）：PostgreSQL PDO 驱动
+  - 复用 ext/pgsql 协议实现
+  - pdo_pgsql_get_pid/get_notify/pgconn 函数
+
 - **GD 扩展**（`ext/gd/`）：纯 phpc 实现图像处理，**不依赖 libgd / libpng / libjpeg / libfreetype**。~90 个函数 + 89 个常量 + 2 个类（GdImage / GdFont），~6000 行 phpc。
   - **支持格式**：PNG（zlib 压缩）/ GIF（LZW 编解码）/ BMP（含 RLE8/4 压缩）/ GD / GD2（RAW 模式）/ WBMP / XBM / TGA（type 2/10，24/32bpp，RLE）共 8 种完整编解码
   - **不支持格式**：JPEG / WebP / AVIF / XPM / FreeType 字体渲染（调用时抛 `RuntimeException` 明确报错，不静默返回 false）
@@ -47,6 +67,7 @@
 
 ### 修复
 
+- **CodeGenerator**：修复 `tphp_fn_` 前缀函数在通用回退路径被重复添加前缀的 bug
 - **对象唯一 ID 机制**（`object.h` / `tls.h` / `core.h`）：`t_object` 新增独立 `id` 字段（uint32_t），由线程本地全局计数器 `_tphp_obj_id_counter` 递增生成，替代原来用 `refcount & 0xFFFF` 作为对象 ID 的做法。`var_dump` 输出 `object(Class)#<id>` 时改用 `obj->id`，符合标准 PHP 每个对象实例拥有唯一 ID 的行为。原方案在数组 retain 引入后 refcount 不再恒为 1，导致 `var_dump` 输出的 ID 不稳定。
 - **数组元素引用计数系统性修复**（`array.h`）：`tphp_fn_arr_push` / `tphp_fn_arr_set_int` / `tphp_fn_arr_set_str` 在存储数组/对象类型值时调用 `_arr_val_retain` 增加引用计数，覆盖已有键时先 `_arr_val_release` 旧值再 retain 新值。修复 `PDOStatement::fetchAll` 中 `result[] = row` 后 `row` 被重赋值 free 导致 `result` 残留悬垂指针的 use-after-free（表现为 `fetchall_count=3` 但 `fetchall_0=` 空）。
 - **数组重赋值自赋值 guard 双重释放**（`CodeGenerator.php`）：当数组变量同时作为函数参数且为赋值目标时（如 `$result = exif_parse_ifd(..., $result, ...)`），函数内部可能 `realloc` 了 `$var` 指向的内存，旧指针已失效，此时不能再 `tphp_fn_arr_free` 旧指针。新增 `exprIsCallWithVarArg` 检测赋值表达式是否为函数调用且参数列表包含被赋值变量，命中时跳过旧指针释放，避免双重释放导致的堆损坏（`STATUS_HEAP_CORRUPTION` / `Segmentation fault`）。

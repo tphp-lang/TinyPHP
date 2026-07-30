@@ -190,7 +190,71 @@ php tphp.php thread_demo.php --debug
 
 ---
 
-## 4. 开发流程
+## 4. 异步与协程通信
+
+TinyPHP 内置 `Channel`/`Future` 两个 OOP 异步原语 + `chan_select` 多路复用函数（参考 vlang CSP 模型）。基于 tinycthread 的 mutex + condvar 实现，push/pop/await 阻塞前自旋 750 次减少 syscall，Channel 使用环形缓冲区零 malloc。
+
+```php
+<?php
+#debug basic=42
+#debug cross=hello
+#debug then=20
+#debug ready_idx=1
+
+class Main {
+    public function main(): void {
+        // Channel 基本收发
+        $ch = new Channel(8);
+        $ch->push(42);
+        echo "basic=" . $ch->pop() . "\n";   // 42
+
+        // Channel 跨线程通信
+        $ch2 = new Channel(4);
+        $producer = new Thread(function() use ($ch2): int {
+            $ch2->push("hello");
+            return 0;
+        });
+        $producer->start();
+        echo "cross=" . $ch2->pop() . "\n";  // hello
+        $producer->join();
+
+        // Future 链式回调
+        $f = Future::create();
+        $f->resolve(10);
+        $doubled = $f->then(fn(mixed $x): mixed => $x * 2);
+        echo "then=" . $doubled->await() . "\n";  // 20
+
+        // chan_select 多路复用
+        $ch1 = new Channel(4);
+        $ch2s = new Channel(4);
+        $ch2s->push("ready");
+        $idx = chan_select([$ch1, $ch2s], 100);  // 1
+        echo "ready_idx=" . $idx . "\n";
+    }
+}
+```
+
+```bash
+php tphp.php async_demo.php --debug
+# [YES] basic=42
+# [YES] cross=hello
+# [YES] then=20
+# [YES] ready_idx=1
+```
+
+| 类 / 函数 | 常用方法 |
+|---|---|
+| `Channel` | `push($v)` / `pop()` / `tryPush($v)` / `tryPop()` / `close()` / `isClosed()` / `length()` / `capacity()` |
+| `Future` | 静态 `create()` / `resolve($v)` / `reject($err)` / `await()` / `isReady()` / `then($cb)` / `catch($cb)` + 静态 `all($futures)` / `race($futures)` |
+| `chan_select` | `chan_select(array $channels, int $timeout_ms = -1): int`（就绪索引 / `-1` 超时 / `-2` 全关闭） |
+
+**异常**：`push` 到已关闭通道抛 `ChannelClosedException`；`await` 被 reject 的 Future 抛 `FutureRejectedException`。两者都继承 `Exception`，可被 `try-catch` 捕获。
+
+> 内存安全：即使忘记 `close()`，Channel dtor 也会释放剩余元素；Future dtor 释放 result/error。详见 [FUNCTIONS.md](FUNCTIONS.md) 异步与协程通信章节。
+
+---
+
+## 5. 开发流程
 
 ```text
 改代码 → 跑相关测试 → 全量 CI → PR
@@ -209,7 +273,7 @@ php tphp.php thread_demo.php --debug
 
 ---
 
-## 5. 代码约定
+## 6. 代码约定
 
 | 文件 | 职责 |
 |---|---|
@@ -225,7 +289,7 @@ php tphp.php thread_demo.php --debug
 
 ---
 
-## 6. 常见问题
+## 7. 常见问题
 
 **Q: 编译报 `macro used with too many args`？**
 

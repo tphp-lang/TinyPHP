@@ -311,7 +311,7 @@ static inline int tss_set(tss_t key, void *val);
 /* 检测是否可以用真实 SpinLock（CAS） */
 #if defined(_WIN32)
   #define _TPHP_SPINLOCK_REAL 1      /* Windows: InterlockedCompareExchange */
-#elif defined(__GNUC__) || defined(__clang__)
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
   #define _TPHP_SPINLOCK_REAL 1      /* GCC/Clang: __atomic_* builtins */
 #elif defined(__TINYC__) && (defined(__x86_64__) || defined(__i386__))
   #define _TPHP_SPINLOCK_REAL 1      /* TCC x86: inline asm */
@@ -799,7 +799,7 @@ static inline int _tphp_cas32(volatile int *ptr, int expected, int desired) {
 #if defined(_WIN32)
   /* Windows: InterlockedCompareExchange 返回旧值，等于 expected 表示成功 */
   return InterlockedCompareExchange((volatile LONG *)ptr, (LONG)desired, (LONG)expected) == (LONG)expected;
-#elif defined(__GNUC__) || defined(__clang__)
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
   /* GCC/Clang: __atomic 原生内建，无需 libatomic（32 位类型 x86_64/aarch64 原生支持） */
   return __atomic_compare_exchange_n(ptr, &expected, desired, 0,
                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
@@ -816,10 +816,27 @@ static inline int _tphp_cas32(volatile int *ptr, int expected, int desired) {
       : "memory", "cc"
   );
   return (int)result;
+#elif defined(_TTHREAD_POSIX_)
+  /* TCC aarch64 等无 CAS 平台: 用全局 mutex 模拟 CAS。
+   * is_shared 数组的 retain/free 直接调用此函数（非 spinlock 路径），
+   * 不能返回 0 — 否则 CAS 循环会无限 spin。
+   * PTHREAD_MUTEX_INITIALIZER 编译期初始化，无 init race。
+   * static 在 static inline 中: 每个 TU 独立副本，TinyPHP 单 TU 安全；
+   * 多 TU 场景（如独立测试）不使用 is_shared 数组，各自独立 mutex 无问题。 */
+  static pthread_mutex_t _tphp_cas_mtx = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&_tphp_cas_mtx);
+  int actual = *ptr;
+  if (actual == expected) {
+    *ptr = desired;
+    pthread_mutex_unlock(&_tphp_cas_mtx);
+    return 1;
+  }
+  pthread_mutex_unlock(&_tphp_cas_mtx);
+  return 0;
 #else
-  /* TCC aarch64 等无 CAS 平台: 返回 0 (不会到达此路径 — _TPHP_SPINLOCK_REAL=0 时
-   * spin lock/unlock 走 mtx 降级，不调用本函数)。仅满足 static inline 编译。 */
-  (void)ptr; (void)expected; (void)desired;
+  /* 理论路径（无 CAS + 非 POSIX），实际不触发: 退化为非原子 */
+  int actual = *ptr;
+  if (actual == expected) { *ptr = desired; return 1; }
   return 0;
 #endif
 }
@@ -827,7 +844,7 @@ static inline int _tphp_cas32(volatile int *ptr, int expected, int desired) {
 static inline void _tphp_atomic_store_release(volatile int *ptr, int val) {
 #if defined(_WIN32)
   InterlockedExchange((volatile LONG *)ptr, (LONG)val);
-#elif defined(__GNUC__) || defined(__clang__)
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
   __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
 #elif defined(__TINYC__) && (defined(__x86_64__) || defined(__i386__))
   /* x86_64: store + compiler barrier = release 语义（x86 强内存序） */
@@ -841,7 +858,7 @@ static inline void _tphp_atomic_store_release(volatile int *ptr, int val) {
 static inline int _tphp_atomic_load_acquire(volatile int *ptr) {
 #if defined(_WIN32)
   return InterlockedCompareExchange((volatile LONG *)ptr, 0, 0);
-#elif defined(__GNUC__) || defined(__clang__)
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
   return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
 #elif defined(__TINYC__) && (defined(__x86_64__) || defined(__i386__))
   int v = *ptr;

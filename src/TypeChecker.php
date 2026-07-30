@@ -268,6 +268,58 @@ class TypeChecker implements ASTVisitor
         'filter_list' => 'array', 'deg2rad' => 'float', 'rad2deg' => 'float',
         'log10' => 'float', 'fmod' => 'float', 'asin' => 'float', 'acos' => 'float',
         'atan' => 'float', 'php_str' => 'string', 'php_str_clone' => 'string',
+        // ── pgsql C 包装函数（_pg_*，与 CodeGenerator::$builtinRetTypes 保持同步）──
+        //   ext/pgsql/src/pgsql.php 的 PHP 包装函数体内调用 _pg_*，
+        //   注册返回类型避免被推导为 mixed（t_var），导致 return 类型不匹配
+        '_pg_connect' => 't_int', '_pg_pconnect' => 't_int',
+        '_pg_close' => 't_bool',
+        '_pg_connection_status' => 't_int', '_pg_connection_reset' => 't_bool',
+        '_pg_ping' => 't_bool',
+        '_pg_query' => 't_int', '_pg_query_params' => 't_int',
+        '_pg_prepare' => 't_int', '_pg_execute' => 't_int',
+        '_pg_free_result' => 'void',
+        '_pg_num_rows' => 't_int', '_pg_num_fields' => 't_int',
+        '_pg_affected_rows' => 't_int', '_pg_last_oid' => 't_int',
+        '_pg_field_name' => 't_string', '_pg_field_num' => 't_int',
+        '_pg_field_type' => 't_string', '_pg_field_type_oid' => 't_int',
+        '_pg_field_size' => 't_int', '_pg_field_prtlen' => 't_int',
+        '_pg_field_is_null' => 't_bool', '_pg_field_table' => 't_int',
+        '_pg_fetch_row' => 't_array*', '_pg_fetch_assoc' => 't_array*',
+        '_pg_fetch_array' => 't_array*', '_pg_fetch_all' => 't_array*',
+        '_pg_fetch_all_columns' => 't_array*',
+        '_pg_fetch_result' => 't_string',
+        '_pg_result_status' => 't_int', '_pg_result_status_str' => 't_string',
+        '_pg_result_seek' => 't_bool',
+        '_pg_result_error' => 't_string', '_pg_result_error_field' => 't_string',
+        '_pg_last_error' => 't_string', '_pg_last_notice' => 't_string',
+        '_pg_dbname' => 't_string', '_pg_host' => 't_string',
+        '_pg_port' => 't_int', '_pg_options' => 't_string',
+        '_pg_tty' => 't_string', '_pg_version' => 't_array*',
+        '_pg_parameter_status' => 't_string',
+        '_pg_transaction_status' => 't_int',
+        '_pg_client_encoding' => 't_string',
+        '_pg_set_client_encoding' => 't_int',
+        '_pg_escape_string' => 't_string', '_pg_escape_literal' => 't_string',
+        '_pg_escape_identifier' => 't_string', '_pg_escape_bytea' => 't_string',
+        '_pg_unescape_bytea' => 't_string',
+        '_pg_copy_to' => 't_array*', '_pg_copy_from' => 't_bool',
+        '_pg_put_copy_data' => 't_bool', '_pg_put_copy_end' => 't_bool',
+        '_pg_end_copy' => 't_bool',
+        '_pg_meta_data' => 't_array*', '_pg_convert' => 't_array*',
+        '_pg_insert_result' => 't_int', '_pg_insert_sql' => 't_string',
+        '_pg_update_result' => 't_int', '_pg_update_sql' => 't_string',
+        '_pg_delete_result' => 't_int', '_pg_delete_sql' => 't_string',
+        '_pg_select' => 't_array*',
+        '_pg_lo_create' => 't_int', '_pg_lo_open' => 't_int',
+        '_pg_lo_read' => 't_string', '_pg_lo_write' => 't_int',
+        '_pg_lo_seek' => 't_int', '_pg_lo_tell' => 't_int',
+        '_pg_lo_truncate' => 't_bool', '_pg_lo_close' => 'void',
+        '_pg_lo_unlink' => 't_bool', '_pg_lo_import' => 't_int',
+        '_pg_lo_export' => 't_bool', '_pg_lo_read_all' => 't_string',
+        '_pg_set_notice_callback' => 'void',
+        // ── pdo_pgsql C 包装函数（_pgpdo_*）──
+        '_pgpdo_get_pid' => 't_int', '_pgpdo_pgconn' => 't_int',
+        '_pgpdo_get_notify' => 't_array*',
     ];
 
     public function __construct(SymbolTable $symbols)
@@ -953,7 +1005,20 @@ class TypeChecker implements ASTVisitor
     /** 注册全局常量 */
     private function registerConst(ConstNode $const): void
     {
-        $ctype = $this->phpTypeToCType($const->type);
+        // 全局/命名空间常量类型声明可选（与 CodeGenerator::visitConstStmt 一致）：
+        //   有声明用声明，无则从字面量值推导
+        if ($const->type !== null) {
+            $ctype = $this->phpTypeToCType($const->type);
+        } else {
+            $ctype = match ($const->value::class) {
+                IntLiteralExpr::class    => 't_int',
+                FloatLiteralExpr::class  => 't_float',
+                StringLiteralExpr::class => 't_string',
+                BoolLiteralExpr::class   => 't_bool',
+                MagicConstExpr::class    => 't_string',
+                default                  => 't_int',
+            };
+        }
         $this->symbols->addConst($const->name, $ctype, $const->visibility ?? 'public');
     }
 

@@ -13,6 +13,18 @@
 //     每个线程有独立的 str_pool/arr_pool/obj_pool。
 //     线程间只能传递值类型（int/float/bool）或堆分配数据。
 //     闭包 env 由创建线程的 GC 追踪，子线程通过 cb->env 访问。
+//
+//   策略 B（跨线程数组，is_shared=1）：
+//     通过 tphp_fn_arr_make_shared(arr) 将数组升级为跨线程安全形态：
+//     - 引用计数改为 CAS 原子操作（并发 retain/free 安全）
+//     - 字符串键/值堆化（不指向 thread-local str_pool）
+//     - 释放时直接 free（不入 thread-local arr_freelist）
+//   契约：
+//     - 只读共享：无需锁，但所有线程完成访问前数组必须存活（refcount 保证）
+//     - 写共享：用户必须用 Mutex 保护 push/set/shift 等结构性修改；
+//       refcount 原子性仅保证"数组不被并发释放"，不保证内部一致性
+//   CodeGenerator 自动检测：闭包作为 Thread/Parallel 参数且捕获数组时，
+//   自动在 env 填充后调用 tphp_fn_arr_make_shared
 // ============================================================
 
 #include "object/object.h"
