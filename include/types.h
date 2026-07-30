@@ -41,6 +41,7 @@
  * （Windows: TlsAlloc, macOS: pthread_key_create）。
  * GCC/Clang 保持原生 _Thread_local。 */
 #if defined(__TINYC__) && defined(__APPLE__)
+  #undef _Thread_local
   #define _Thread_local
 #endif
 

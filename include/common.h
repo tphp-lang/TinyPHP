@@ -26,6 +26,9 @@ static inline void tphp_rt_free_all(void);
 /* 线程库 — 在 runtime.h 之后引入，使 thread wrapper 能调用 tphp_thread_cleanup()。
  * 所有平台均启用 cleanup：TCC+Windows 和 TCC+macOS 通过 tls.h 真正隔离，
  * GCC/Clang 通过原生 _Thread_local 真正隔离。 */
+#ifdef TPHP_THREAD_CLEANUP
+  #undef TPHP_THREAD_CLEANUP
+#endif
 #define TPHP_THREAD_CLEANUP() tphp_thread_cleanup()
 #include "compat/tinycthread.h"
 #include "object/thread.h"      // Thread/Mutex/CondVar/WaitGroup COS 类
