@@ -13,6 +13,7 @@ jobs:
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-win-x86_64.zip
+      PG_URL: https://get.enterprisedb.com/postgresql/postgresql-17.2-3-windows-x64-binaries.zip
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
@@ -65,32 +66,37 @@ jobs:
       - name: Install PostgreSQL
         shell: pwsh
         run: |
-          # 使用 Chocolatey 安装 PostgreSQL 17（与 pgsql 扩展测试配套）
-          choco install postgresql17 -y --no-progress --params "/Password:postgres"
-          $pgBin = "C:\Program Files\PostgreSQL\17\bin"
-          $env:PATH += ";$pgBin"
-          $env:PGPASSWORD = "postgres"
-          # 确保服务已启动（choco 安装后通常已启动，此处兜底）
-          $svc = Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($svc -and $svc.Status -ne 'Running') { Start-Service $svc.Name }
+          # choco 的 postgresql 包现在要求社区仓库凭据，CI 无头环境无法交互输入
+          # 改用 EnterpriseDB 官方 binaries ZIP 包手动安装（类似 MariaDB ZIP 方案）
+          Invoke-WebRequest -Uri $env:PG_URL -OutFile pg.zip
+          Expand-Archive -Path pg.zip -DestinationPath .
+          # 解压后为 pgsql/bin/{initdb,postgres,psql,pg_ctl}.exe
+          $pgBin = "$pwd\pgsql\bin"
+          $dataDir = "$pwd\pgdata"
+          # 写密码文件（initdb --pwfile 读取第一行作为超级用户密码）
+          "postgres" | Out-File -FilePath "$pwd\pgpw.txt" -NoNewline -Encoding ascii
+          # 初始化数据目录：scram-sha-256 主机认证 + trust 本地认证
+          & "$pgBin\initdb.exe" -D "$dataDir" -U postgres --pwfile="$pwd\pgpw.txt" --auth-host=scram-sha-256 --auth-local=trust
+          if ($LASTEXITCODE -ne 0) { throw "initdb failed" }
+          # 后台启动 postgres（pg_ctl start 会等待启动完成）
+          & "$pgBin\pg_ctl.exe" -D "$dataDir" -l "$pwd\pg.log" -o "-p 5432" start
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "--- pg.log ---"; Get-Content "$pwd\pg.log" -ErrorAction SilentlyContinue
+            throw "pg_ctl start failed"
+          }
           # 等待就绪
+          $env:PGPASSWORD = "postgres"
           for ($i = 1; $i -le 30; $i++) {
-            try {
-              & "$pgBin\psql.exe" -h 127.0.0.1 -U postgres -c "SELECT 1" -tA 2>$null
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "PostgreSQL is ready"
-                break
-              }
-            } catch {}
+            & "$pgBin\psql.exe" -h 127.0.0.1 -p 5432 -U postgres -c "SELECT 1" -tA 2>$null
+            if ($LASTEXITCODE -eq 0) { Write-Host "PostgreSQL is ready"; break }
             Write-Host "Waiting for PostgreSQL... ($i/30)"
             Start-Sleep -Seconds 2
           }
           if ($LASTEXITCODE -ne 0) { throw "PostgreSQL did not become ready" }
-          # 创建测试数据库（若已存在则忽略）
+          # 创建测试数据库（若已存在则忽略错误）
           & "$pgBin\psql.exe" -h 127.0.0.1 -U postgres -c "CREATE DATABASE tinyphp_test;" 2>$null
           & "$pgBin\psql.exe" -h 127.0.0.1 -U postgres -c "SELECT version();"
           # 持久化环境变量供后续 Test 步骤使用
-          Add-Content -Path $env:GITHUB_ENV -Value "PATH=$env:PATH"
           Add-Content -Path $env:GITHUB_ENV -Value "PGPASSWORD=postgres"
 
       - name: Add TCC
