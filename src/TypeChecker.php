@@ -1005,7 +1005,20 @@ class TypeChecker implements ASTVisitor
     /** 注册全局常量 */
     private function registerConst(ConstNode $const): void
     {
-        $ctype = $this->phpTypeToCType($const->type);
+        // 全局/命名空间常量类型声明可选（与 CodeGenerator::visitConstStmt 一致）：
+        //   有声明用声明，无则从字面量值推导
+        if ($const->type !== null) {
+            $ctype = $this->phpTypeToCType($const->type);
+        } else {
+            $ctype = match ($const->value::class) {
+                IntLiteralExpr::class    => 't_int',
+                FloatLiteralExpr::class  => 't_float',
+                StringLiteralExpr::class => 't_string',
+                BoolLiteralExpr::class   => 't_bool',
+                MagicConstExpr::class    => 't_string',
+                default                  => 't_int',
+            };
+        }
         $this->symbols->addConst($const->name, $ctype, $const->visibility ?? 'public');
     }
 

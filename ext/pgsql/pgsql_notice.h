@@ -50,6 +50,12 @@ void tphp_fn_pg_set_notice_callback(t_int conn_handle, t_callback callback) {
 //   在 NoticeResponse 处理中调用
 //   如果 conn->notice_cb.func != NULL，构造 t_string 消息，调用回调
 //   msg/len: 通知消息文本（从 NoticeResponse 'M' 字段提取）
+//
+// 闭包调用约定（与 CodeGenerator::visitClosure 一致）：
+//   function(string $msg) use ($notices): void
+//   => void _closure_N(t_string msg, void* _env)
+//   业务参数在前（t_string 按值传递），env 在末尾。
+//   参考 include/object/thread.h 的 _tphp_thread_entry（零参特化）。
 // ============================================================
 static void _pg_invoke_notice_cb(PGconn *conn, const char *msg, int len) {
     if (conn == NULL || conn->notice_cb.func == NULL) return;
@@ -58,9 +64,9 @@ static void _pg_invoke_notice_cb(PGconn *conn, const char *msg, int len) {
     // 构造 t_string 消息（栈分配 t_string 结构，数据走 str_pool 或 SSO）
     t_string msg_str = _pg_mk_str_n(msg, len);
 
-    // 调用回调：void (*)(void* msg_str, void* env)
-    //   msg_str 指针传递 t_string 的栈地址
+    // 调用回调：void (*)(t_string msg, void* env)
+    //   msg 按值传递 t_string 结构体（与闭包签名一致）
     //   env 传递闭包捕获环境
-    ((void (*)(void*, void*))conn->notice_cb.func)((void*)&msg_str,
-                                                      conn->notice_cb.env);
+    ((void (*)(t_string, void*))conn->notice_cb.func)(msg_str,
+                                                        conn->notice_cb.env);
 }
