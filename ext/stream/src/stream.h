@@ -43,6 +43,7 @@
   #define STREAM_ERRNO         WSAGetLastError()
   #define STREAM_EWOULDBLOCK   WSAEWOULDBLOCK
   #define STREAM_EINPROGRESS   WSAEINPROGRESS
+  #define STREAM_EINTR         WSAEINTR
   // Windows 用 SD_RECEIVE/SD_SEND/SD_BOTH，统一映射到 POSIX 名称
   #ifndef SHUT_RD
     #define SHUT_RD     SD_RECEIVE
@@ -75,6 +76,7 @@
   #define STREAM_ERRNO         errno
   #define STREAM_EWOULDBLOCK   EWOULDBLOCK
   #define STREAM_EINPROGRESS   EINPROGRESS
+  #define STREAM_EINTR         EINTR
 #endif
 
 // ── 常量（CodeGenerator 需要 TPHP_CONST_ 前缀） ────────────
@@ -558,6 +560,8 @@ static inline t_int tphp_fn_stream_socket_server(t_string address, t_int flags, 
 // ── stream_socket_accept ────────────────────────────────────
 //   返回客户端 fd
 //   timeout_ms: -1 表示使用默认（阻塞）
+//   非阻塞 'no connection' 情况（select timeout, EAGAIN/EWOULDBLOCK）返回 -1，
+//   真错误（fd 无效等）抛 Exception。
 static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_ms) {
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
@@ -571,8 +575,15 @@ static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_
         tv.tv_sec = (long)(timeout_ms / 1000);
         tv.tv_usec = (long)((timeout_ms % 1000) * 1000);
         int sr = select((int)server_fd + 1, &rfds, NULL, NULL, &tv);
-        if (sr <= 0) {
-            _stream_throw("stream_socket_accept: timeout or error");
+        if (sr == 0) {
+            // select timeout — 非阻塞模式下无待处理连接，返回 -1（不抛异常）
+            return -1;
+        }
+        if (sr < 0) {
+            int err = STREAM_ERRNO;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "stream_socket_accept: select() failed (errno=%d)", err);
+            _stream_throw(buf);
             return -1;
         }
     }
@@ -580,6 +591,10 @@ static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_
     int fd = (int)accept((int)server_fd, (struct sockaddr*)&addr, &addr_len);
     if (fd < 0) {
         int err = STREAM_ERRNO;
+        // EAGAIN/EWOULDBLOCK: 非阻塞模式下无待处理连接，返回 -1（不抛异常）
+        if (err == STREAM_EWOULDBLOCK || err == STREAM_EINTR) {
+            return -1;
+        }
         char buf[128];
         snprintf(buf, sizeof(buf), "stream_socket_accept: accept() failed (errno=%d)", err);
         _stream_throw(buf);
@@ -673,7 +688,8 @@ static inline t_int tphp_fn_stream_socket_client(t_string address, t_int timeout
 
 // ── stream_socket_recvfrom ──────────────────────────────────
 //   flags: STREAM_OOB=1, STREAM_PEEK=2
-//   返回收到的数据
+//   返回收到的数据；EAGAIN/EWOULDBLOCK/EINTR 返回空字符串（非阻塞友好），
+//   真错误抛 Exception。
 static inline t_string tphp_fn_stream_socket_recvfrom(t_int fd, t_int length, t_int flags) {
     char* buf = (char*)malloc((size_t)length + 1);
     if (buf == NULL) {
@@ -688,6 +704,10 @@ static inline t_string tphp_fn_stream_socket_recvfrom(t_int fd, t_int length, t_
     if (n < 0) {
         free(buf);
         int err = STREAM_ERRNO;
+        // EAGAIN/EWOULDBLOCK/EINTR: 非阻塞模式下无数据可读，返回空字符串（不抛异常）
+        if (err == STREAM_EWOULDBLOCK || err == STREAM_EINTR) {
+            return (t_string){0};
+        }
         char buf2[128];
         snprintf(buf2, sizeof(buf2), "stream_socket_recvfrom: recvfrom() failed (errno=%d)", err);
         _stream_throw(buf2);
@@ -737,6 +757,10 @@ static inline t_int tphp_fn_stream_socket_sendto(t_int fd, t_string data, t_int 
 
     if (n < 0) {
         int err = STREAM_ERRNO;
+        // EAGAIN/EWOULDBLOCK/EINTR: 非阻塞模式下发送缓冲区满，返回 -1（不抛异常）
+        if (err == STREAM_EWOULDBLOCK || err == STREAM_EINTR) {
+            return -1;
+        }
         char buf[128];
         snprintf(buf, sizeof(buf), "stream_socket_sendto: failed (errno=%d)", err);
         _stream_throw(buf);

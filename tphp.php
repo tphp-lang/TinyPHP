@@ -153,9 +153,25 @@ if ($inPhar) {
 // Compiler selection: -cc for external compiler, otherwise built-in TCC
 if ($cc !== null) {
     $ccExe = $cc;
-    // If it's a bare name (no path separator), rely on system PATH
+    // If it's a bare name (no path separator), resolve via PATH so that
+    // dirname($ccExe) yields the real installation directory.
+    // This is critical for TCC: the -B flag (computed from dirname($ccExe))
+    // must point to TCC's lib/include directory, otherwise tccdefs.h is not
+    // found and compilation fails with "include file 'tccdefs.h' not found".
     if (!str_contains($ccExe, '/') && !str_contains($ccExe, '\\')) {
-        // Don't check file existence, let exec handle it
+        $pathDirs = explode(PATH_SEPARATOR, (string)getenv('PATH'));
+        $exeExts = (PHP_OS_FAMILY === 'Windows') ? ['.exe', '.bat', '.cmd', ''] : [''];
+        foreach ($pathDirs as $dir) {
+            if ($dir === '') continue;
+            foreach ($exeExts as $ext) {
+                $candidate = rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $ccExe . $ext;
+                if (file_exists($candidate)) {
+                    $ccExe = $candidate;
+                    break 2;
+                }
+            }
+        }
+        // If not resolved, leave as bare name — let exec handle the error
     } elseif (!file_exists($ccExe)) {
         die("Error: specified compiler not found: {$ccExe}\n");
     }

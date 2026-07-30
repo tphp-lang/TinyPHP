@@ -7216,6 +7216,27 @@ class CodeGenerator implements ASTVisitor
         // 文件路径（内置）
         'dirname'   => ['t_string', 't_int'],
         'basename'  => ['t_string', 't_string'],
+        // pcntl 扩展（C 函数，参数类型需显式注册以支持 byRef 和 t_var 解包）
+        'pcntl_fork'           => [],
+        'pcntl_wait'           => ['t_int*'],
+        'pcntl_waitpid'        => ['t_int', 't_int*', 't_int'],
+        'pcntl_exec'           => ['t_string'],
+        'pcntl_alarm'          => ['t_int'],
+        'pcntl_get_last_error' => [],
+        'pcntl_strerror'       => ['t_int'],
+        // posix 扩展（C 函数，参数类型需显式注册以支持 t_var 解包）
+        'posix_getpid'         => [],
+        'posix_getppid'        => [],
+        'posix_getuid'         => [],
+        'posix_geteuid'        => [],
+        'posix_getgid'         => [],
+        'posix_getegid'        => [],
+        'posix_isatty'         => ['t_int'],
+        'posix_kill'           => ['t_int', 't_int'],
+        'posix_get_last_error' => [],
+        'posix_getcwd'         => [],
+        'posix_strerror'       => ['t_int'],
+        'posix_ttyname'        => ['t_int'],
     ];
 
     /**
@@ -12479,6 +12500,10 @@ class CodeGenerator implements ASTVisitor
                 $inferred = $node->inferredType !== null ? $this->inferredTypeToCType($node->inferredType) : null;
                 if ($inferred === 't_var') {
                     $et = 't_var';
+                } elseif ($inferred === 'void*') {
+                    // TypeChecker 推导为 object（IDX_OBJECT → void*），使用 object getter
+                    // 避免 defaulted 到 tphp_fn_arr_get_int_int 返回 0（NULL）导致崩溃
+                    $et = 'void*';
                 }
             }
         }
@@ -12499,6 +12524,7 @@ class CodeGenerator implements ASTVisitor
             't_array*'   => "tphp_fn_arr_get_int_arr({$arr}, (t_int)({$idx}))",
             't_callback' => "tphp_fn_arr_get_int_callback({$arr}, (t_int)({$idx}))",
             't_var'      => "(*tphp_fn_arr_get_int({$arr}, (t_int)({$idx})))",  // array<mixed> 整数键 → t_var（key-based 支持稀疏键）
+            'void*'      => "tphp_fn_arr_get_int_object({$arr}, (t_int)({$idx}))",  // TypeChecker 推导为 object 但未知具体类
             default      => (str_contains($et, 'tphp_class_') || str_contains($et, 'tphp_enum_'))
                 ? "((" . $et . ")tphp_fn_arr_get_int_object({$arr}, (t_int)({$idx})))"
                 : "tphp_fn_arr_get_int_int({$arr}, (t_int)({$idx}))",
