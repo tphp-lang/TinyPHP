@@ -337,6 +337,7 @@ N=10K, SQLite `:memory:` 数据库
 | OOP / 异常 / Resource | 14 | ✅ |
 | Generator / yield (minicoro 协程) | 7 | ✅ |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | 15 | ✅ |
+| 异步与协程 (Channel/Future/chan_select) | 20 | ✅ |
 | C 互操作 (PHPC) | 31 | ✅ |
 | ext/pcntl | 7 | ✅ |
 | ext/posix | 14 | ✅ |
@@ -347,7 +348,7 @@ N=10K, SQLite `:memory:` 数据库
 | ext/stream (跨平台 socket/TLS 入口) | 15 | ✅ |
 | ext/openssl (内置 mbedTLS 3.6.6 静态编译) | 21 | ✅ |
 | ext/pdo (SQLite + MySQL 双驱动) | 0 (类 API) | ✅ |
-| **合计** | **389+** | ✅ |
+| **合计** | **409+** | ✅ |
 
 ### include/ 重构
 
@@ -381,11 +382,12 @@ include/os/
 ```text
 include/object/
 ├── object.h     — COS 对象系统 (16B 头 + struct 嵌套继承 + 对象复用池)
-├── exception.h  — 内置 Exception 类
+├── exception.h  — 内置 Exception 类 (含 ChannelClosedException/FutureRejectedException)
 ├── try.h        — setjmp/longjmp 异常 (TP_TRY/TP_CATCH/TP_THROW)
 ├── generator.h  — Generator 类 (基于 minicoro 协程)
 ├── resource.h   — Resource 基类
-└── thread.h     — Thread/Mutex/CondVar/WaitGroup COS 类 (基于 tinycthread)
+├── thread.h     — Thread/Mutex/CondVar/WaitGroup COS 类 (基于 tinycthread)
+└── channel.h    — Channel/Future COS 类 + chan_select (参考 vlang CSP 模型)
 ```
 
 ### include/compat/ 跨平台兼容层

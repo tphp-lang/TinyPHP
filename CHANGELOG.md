@@ -8,6 +8,16 @@
 
 ### 新增
 
+- **异步与协程通信库**（`include/object/channel.h`）：参考 vlang 设计的 CSP 风格异步通信原语，采用 tphp OOP 思想。1 个全局函数 + 2 个类 + 2 个异常类型。
+  - **Channel 类**：CSP 风格有界通道，环形缓冲区实现（push/pop 零 malloc），阻塞前自旋 750 次以减少 syscall。9 个方法：`__construct/push/pop/tryPush/tryPop/close/isClosed/length/capacity`
+  - **Future 类**：一次性异步结果传递机制，支持 await/then/catch 链式调用和 all/race 组合器。10 个方法：`create`（静态）/`resolve/reject/await/isReady/isRejected/then/catch` + 静态 `all/race`
+  - **chan_select 函数**：多通道多路复用，支持超时机制（`chan_select(array $channels, int $timeout_ms = -1): int`）。返回就绪通道索引，全关闭返回 -2，超时返回 -1
+  - **异常类型**：`ChannelClosedException`（push 到已关闭通道时抛出）、`FutureRejectedException`（await 被 reject 的 Future 时抛出）
+  - **内存安全契约**：t_var 值在 push 时 `_arr_val_retain`，pop 时不额外 retain；close 时遍历释放剩余元素；dtor 保证即使忘记 close 也释放所有资源；Future resolve/reject 时 retain，await 返回时不额外 retain
+  - **性能优化策略**：push/pop/await 阻塞前自旋 750 次以减少 syscall；Channel 使用固定容量环形缓冲区实现零 malloc；isReady/isClosed/length 采用无锁原子读；chan_select spin 间隔用 thrd_yield 避免空转
+  - 测试：`test/thread/test_channel.php`（11 节，基本收发/跨线程/有界容量/tryPush/tryPop/close 唤醒/剩余元素/异常）+ `test/thread/test_future.php`（8 节，resolve+await/reject+异常/跨线程/then/catch/all/all-reject/race）+ `test/thread/test_chan_select.php`（4 节，就绪通道/超时/全关闭/跨线程 push）
+  - 同步修复编译器 bug：CodeGenerator 中 `$t_var === null` 误生成 `t_var == null`（结构体与指针比较），修正为 `t_var.type == TYPE_NULL`；Parser 中 `catch` 关键字不允许作为方法名（影响 `Future::catch()`），添加 `CATCH_KW` 到合法方法名 token 列表
+
 - **ext/pgsql**（`ext/pgsql/`）：PostgreSQL 扩展（纯 C 协议实现，支持 trust/md5/SCRAM-SHA-256 认证）
   - 78 个 pg_* 函数（连接/查询/预处理/结果集/COPY/DML/Large Object/持久连接/通知回调）
   - 约 60 个常量

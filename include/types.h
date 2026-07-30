@@ -166,6 +166,7 @@ struct _t_array {
     int capacity;
     int refcount;
     int cursor;             // internal pointer for current/next/prev/end/reset
+    int is_shared;          // 0=thread-local, 1=cross-thread shared (atomic refcount, heap strings)
     void *str_index;        // pointer-free hash index for O(1) string-key lookup (NULL if none)
     void *int_index;        // hash index for O(1) sparse int-key lookup (NULL if none)
     t_arr_entry entries[];  // flexible array member
@@ -228,6 +229,7 @@ typedef struct {
     int    capacity;
     int    refcount;
     int    cursor;
+    int    is_shared;
     void  *str_index;
     void  *int_index;
     t_arr_entry_int entries[];
@@ -238,6 +240,7 @@ typedef struct {
     int    capacity;
     int    refcount;
     int    cursor;
+    int    is_shared;
     void  *str_index;
     void  *int_index;
     t_arr_entry_str entries[];
@@ -248,6 +251,7 @@ typedef struct {
     int    capacity;
     int    refcount;
     int    cursor;
+    int    is_shared;
     void  *str_index;
     void  *int_index;
     t_arr_entry_float entries[];
@@ -258,6 +262,7 @@ typedef struct {
     int    capacity;
     int    refcount;
     int    cursor;
+    int    is_shared;
     void  *str_index;
     void  *int_index;
     t_arr_entry_bool entries[];
@@ -272,6 +277,7 @@ typedef struct {
     int    capacity;
     int    refcount;
     int    cursor;
+    int    is_shared;
     void  *str_index;
     void  *int_index;
     t_arr_entry_ptr entries[];

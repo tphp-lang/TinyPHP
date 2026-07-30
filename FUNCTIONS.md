@@ -38,8 +38,9 @@
 | OOP / 异常 / Resource | `object/` | 14 |
 | Generator / yield | `object/generator.h` + `minicoro.h` | 7 |
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
+| 异步与协程 (Channel/Future/chan_select) | `object/channel.h` | 20 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
-| **合计** | | **470+** |
+| **合计** | | **490+** |
 
 ---
 
@@ -2919,6 +2920,126 @@ $tid = Thread::id();
 | Linux x86_64 | ✅ pthread + `_Thread_local` | ✅ pthread + `_Thread_local` |
 | Linux aarch64 | ✅ pthread + `_Thread_local` | ✅ pthread + `_Thread_local` |
 | macOS aarch64 | ✅ pthread + `_Thread_local` | ✅ pthread + `_Thread_local` |
+
+---
+
+## 异步与协程通信 (Channel / Future / chan_select)
+
+> 文件: `object/channel.h`（参考 vlang 的 CSP 通信模型）
+>
+> 基于 tinycthread 的 mutex + condvar 实现线程/协程间安全通信。
+> 采用**自旋 + 阻塞混合策略**：push/pop/await 阻塞前自旋 750 次以减少 syscall。
+> Channel 使用固定容量环形缓冲区，push/pop 零 malloc。
+
+### Channel 类
+
+> CSP 风格有界通道。容量在 `__construct` 时固定，不可扩展。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `__construct` | `(int $capacity): void` | 分配 `capacity` 大小的环形缓冲区，初始化 mutex/condvar |
+| `push` | `(mixed $v): void` | 阻塞式入队：满则自旋 750 次 → cnd_wait；入槽时 `_arr_val_retain`；**close 后 push 抛 `ChannelClosedException`** |
+| `pop` | `(): mixed` | 阻塞式出队：空则检查 `is_closed`（关闭返回 `null`）→ cnd_wait；返回值不额外 retain |
+| `tryPush` | `(mixed $v): bool` | 非阻塞入队：满立即返回 `false`，成功返回 `true`；**close 后抛 `ChannelClosedException`** |
+| `tryPop` | `(): mixed` | 非阻塞出队：空立即返回 `null`，成功返回元素 |
+| `close` | `(): void` | 设置 `is_closed=1` → `cnd_broadcast` 唤醒所有等待者；剩余元素由 dtor 释放 |
+| `isClosed` | `(): bool` | 无锁原子读 `is_closed` |
+| `length` | `(): int` | 无锁原子读 `count` |
+| `capacity` | `(): int` | 返回构造时固定的容量 |
+
+### Future 类
+
+> 一次性异步结果传递机制。state 机：PENDING → RESOLVED / REJECTED，状态转换原子化。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `create` (静态) | `(): Future` | 创建 PENDING 状态的 Future |
+| `resolve` | `(mixed $v): void` | CAS state PENDING→RESOLVED，retain result，`cnd_broadcast` 唤醒等待者 |
+| `reject` | `(mixed $err): void` | CAS state PENDING→REJECTED，retain error，`cnd_broadcast` 唤醒等待者 |
+| `await` | `(): mixed` | 自旋 750 次检查 state → cnd_wait；resolve 返回 result；**reject 抛 `FutureRejectedException`** |
+| `isReady` | `(): bool` | 原子读 state（RESOLVED 或 REJECTED 返回 `true`） |
+| `isRejected` | `(): bool` | 原子读 state 是否 REJECTED |
+| `then` | `(callable $cb): Future` | 链式回调：非抛出式等待原 Future，resolve 时调 `$cb(result)` 写入新 Future，reject 透传 |
+| `catch` | `(callable $cb): Future` | 错误恢复：非抛出式等待原 Future，reject 时调 `$cb(error)` 写入新 Future，resolve 透传 |
+| `all` (静态) | `(array $futures): Future` | 计数器追踪 N 个子 Future，全部 resolve 则 resolve 数组，任一 reject 则整体 reject |
+| `race` (静态) | `(array $futures): Future` | 任一子 Future 完成即转发结果/错误到新 Future |
+
+### chan_select 函数
+
+```php
+function chan_select(array $channels, int $timeout_ms = -1): int {}
+```
+
+| 返回值 | 含义 |
+|--------|------|
+| `>= 0` | 就绪通道在 `$channels` 中的索引（有元素可 pop 或已关闭） |
+| `-1` | 超时（`timeout_ms > 0` 时生效） |
+| `-2` | 所有通道都已关闭 |
+
+> spin 循环遍历 channels，间隔用 `thrd_yield` 避免空转。`timeout_ms = -1` 表示无限等待。
+
+### 异常类型
+
+| 异常 | 抛出场景 | 父类 |
+|------|----------|------|
+| `ChannelClosedException` | `push`/`tryPush` 到已关闭的 Channel | `Exception` |
+| `FutureRejectedException` | `await` 一个被 `reject` 的 Future | `Exception` |
+
+### 示例
+
+```php
+// Channel 跨线程通信
+$ch = new Channel(4);
+$t = new Thread(function() use ($ch): int {
+    $ch->push(42);
+    $ch->close();
+    return 0;
+});
+$t->start();
+$v = $ch->pop();   // 42
+$t->join();
+
+// Future 异步结果
+$f = Future::create();
+$t2 = new Thread(function() use ($f): int {
+    $f->resolve("done");
+    return 0;
+});
+$t2->start();
+echo $f->await();  // "done"
+$t2->join();
+
+// Future 链式 + 错误恢复
+$fut = Future::create();
+$fut->resolve(10);
+$doubled = $fut->then(fn(mixed $x): mixed => $x * 2);
+echo $doubled->await();  // 20
+
+// chan_select 多路复用
+$ch1 = new Channel(4);
+$ch2 = new Channel(4);
+$ch2->push("hello");
+$idx = chan_select([$ch1, $ch2], 100);  // 1
+```
+
+### 内存安全契约
+
+| 资源 | push/resolve 时 | pop/await 时 | close/dtor 时 |
+|------|----------------|--------------|---------------|
+| `t_var`（含 string/array/object） | `_arr_val_retain`（+1 引用） | 不额外 retain（调用方管理返回值生命周期） | 遍历 `_arr_val_release` 释放剩余元素 |
+| Channel 环形缓冲区 | 构造时一次性 `malloc` | — | dtor `free` ringbuf + 销毁 mtx/cnd |
+| Future result/error | resolve/reject 时 retain | await 返回时不 retain | dtor release 两者 |
+
+> **关键保证**：即使忘记 `close()`，Channel dtor 也会释放所有剩余元素；Future dtor 释放 result 和 error，无内存泄漏。
+
+### 性能契约
+
+| 机制 | 说明 |
+|------|------|
+| 自旋 750 次 | push/pop/await 阻塞前自旋，减少 syscall（与 vlang 一致） |
+| 环形缓冲区 | Channel push/pop 零 malloc，固定容量 O(1) 入队出队 |
+| 无锁原子读 | `isReady`/`isClosed`/`length`/`isRejected` 不加锁 |
+| thrd_yield | chan_select spin 间隔让出 CPU，避免空转 |
 
 ---
 

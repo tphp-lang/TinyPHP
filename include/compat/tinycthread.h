@@ -816,10 +816,27 @@ static inline int _tphp_cas32(volatile int *ptr, int expected, int desired) {
       : "memory", "cc"
   );
   return (int)result;
+#elif defined(_TTHREAD_POSIX_)
+  /* TCC aarch64 等无 CAS 平台: 用全局 mutex 模拟 CAS。
+   * is_shared 数组的 retain/free 直接调用此函数（非 spinlock 路径），
+   * 不能返回 0 — 否则 CAS 循环会无限 spin。
+   * PTHREAD_MUTEX_INITIALIZER 编译期初始化，无 init race。
+   * static 在 static inline 中: 每个 TU 独立副本，TinyPHP 单 TU 安全；
+   * 多 TU 场景（如独立测试）不使用 is_shared 数组，各自独立 mutex 无问题。 */
+  static pthread_mutex_t _tphp_cas_mtx = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&_tphp_cas_mtx);
+  int actual = *ptr;
+  if (actual == expected) {
+    *ptr = desired;
+    pthread_mutex_unlock(&_tphp_cas_mtx);
+    return 1;
+  }
+  pthread_mutex_unlock(&_tphp_cas_mtx);
+  return 0;
 #else
-  /* TCC aarch64 等无 CAS 平台: 返回 0 (不会到达此路径 — _TPHP_SPINLOCK_REAL=0 时
-   * spin lock/unlock 走 mtx 降级，不调用本函数)。仅满足 static inline 编译。 */
-  (void)ptr; (void)expected; (void)desired;
+  /* 理论路径（无 CAS + 非 POSIX），实际不触发: 退化为非原子 */
+  int actual = *ptr;
+  if (actual == expected) { *ptr = desired; return 1; }
   return 0;
 #endif
 }

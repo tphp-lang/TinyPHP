@@ -30,6 +30,7 @@ static inline void tphp_rt_free_all(void);
 #include "compat/tinycthread.h"
 #include "object/thread.h"      // Thread/Mutex/CondVar/WaitGroup COS 类
 #include "object/parallel.h"    // Parallel::map/for 数据并行 API
+#include "object/channel.h"     // Channel/Future/chan_select 异步与协程通信库
 #include "rand.h"               // CSPRNG (builtin.h 需要，内部用 tp_throw)
 #include "builtin.h"
 #include "tphp_math.h"         // TinyPHP math 扩展

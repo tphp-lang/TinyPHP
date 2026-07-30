@@ -132,6 +132,8 @@ class CodeGenerator implements ASTVisitor
         'bool' => 't_bool', 'void' => 'void', 'never' => 'void', 'array' => 't_array*',
         'mixed' => 't_var', 'null' => 'void*',
         'Generator' => 'tphp_class_Generator*',
+        'Channel' => 'tphp_class_Channel*',
+        'Future'  => 'tphp_class_Future*',
     ];
 
     /** 内置函数返回类型注册表（替代 inferCallReturnType 中的 140+ if-else） */
@@ -147,6 +149,7 @@ class CodeGenerator implements ASTVisitor
         'array_key_first' => 't_int', 'array_key_last' => 't_int', 'strtotime' => 't_int', 'mktime' => 't_int',
         'substr_count' => 't_int', 'crc32' => 't_int', 'preg_last_error' => 't_int',
         'iconv_strlen' => 't_int', 'iconv_strpos' => 't_int',
+        'chan_select' => 't_int',
         'zip_num_files' => 't_int',
         // ── zlib gz/增量 API int 返回 ──
         'gzwrite' => 't_int', 'gzputs' => 't_int', 'gzseek' => 't_int',
@@ -427,6 +430,17 @@ class CodeGenerator implements ASTVisitor
         '_pgpdo_get_notify' => 't_array*',
         'phpc_new_arr_int' => 't_array*', 'phpc_new_arr_dbl' => 't_array*',
         'phpc_new_arr_str' => 't_array*', 'phpc_new_arr' => 't_array*',
+        // ── 跨线程数组标记 API（thread-array-support spec Task 10）──
+        //   用户/CodeGenerator 可显式调用，将数组升级为跨线程安全形态（is_shared=1）。
+        //   返回值为 same pointer（便于链式调用），返回值通常忽略。
+        //   每种特化数组有对应的 make_shared 函数（entry 布局不同，不能通用）。
+        'tphp_fn_arr_make_shared' => 't_array*',
+        'tphp_fn_arr_var_make_shared' => 't_arr_var*',
+        'tphp_fn_arr_int_make_shared' => 't_arr_int*',
+        'tphp_fn_arr_str_make_shared' => 't_arr_str*',
+        'tphp_fn_arr_float_make_shared' => 't_arr_float*',
+        'tphp_fn_arr_bool_make_shared' => 't_arr_bool*',
+        'tphp_fn_arr_ptr_make_shared' => 't_arr_ptr*',
         // ── t_var ──
         'array_pop' => 't_var', 'array_shift' => 't_var', 'array_sum' => 't_var', 'array_product' => 't_var',
         'max' => 't_var', 'min' => 't_var', 'json_decode' => 't_var', 'array_rand' => 't_var',
@@ -554,6 +568,8 @@ class CodeGenerator implements ASTVisitor
         'filter_id'          => ['cName' => 'tphp_fn_filter_id'],
         'iconv'              => ['cName' => 'tphp_fn_iconv'],
         'iconv_set_encoding' => ['cName' => 'tphp_fn_iconv_set_encoding'],
+        // ── chan_select（多通道多路复用）──
+        'chan_select'        => ['cName' => 'tphp_fn_chan_select', 'modes' => ['direct', 'direct'], 'defaults' => [1 => '((t_int)-1)']],
         // ── fileinfo (内置) ──
         'mime_content_type'  => ['cName' => 'tphp_fn_mime_content_type', 'modes' => ['direct']],
         'finfo_close'        => ['cName' => 'tphp_fn_finfo_close', 'modes' => ['direct']],
@@ -1726,6 +1742,45 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->getClass('tphp_class_Parallel')->methods['for']  = new MethodInfo('void', ['t_int', 't_callback', 't_int'], true, 'public', 1, 3);
         // map(array $data, callable $fn, int $threads = 0): array — 3 params, 1 default
         $this->symbols->getClass('tphp_class_Parallel')->methods['map']  = new MethodInfo('t_array*', ['t_array*', 't_callback', 't_int'], true, 'public', 1, 3);
+
+        // 内置 Channel 类（CSP 风格有界通道）
+        $this->symbols->addClass('tphp_class_Channel');
+        $this->symbols->addClassName('Channel', 'tphp_class_Channel');
+        // __construct(int $capacity = 64): void — 1 param, 1 default
+        $this->symbols->getClass('tphp_class_Channel')->methods['__construct'] = new MethodInfo('void', ['t_int'], false, 'public', 1, 1);
+        $this->symbols->getClass('tphp_class_Channel')->methods['__destruct']  = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Channel')->methods['push']       = new MethodInfo('void', ['t_var']);
+        $this->symbols->getClass('tphp_class_Channel')->methods['pop']        = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Channel')->methods['tryPush']    = new MethodInfo('t_bool', ['t_var']);
+        $this->symbols->getClass('tphp_class_Channel')->methods['tryPop']     = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Channel')->methods['close']      = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Channel')->methods['isClosed']   = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Channel')->methods['length']     = new MethodInfo('t_int');
+        $this->symbols->getClass('tphp_class_Channel')->methods['capacity']   = new MethodInfo('t_int');
+
+        // 内置 Future 类（一次性异步结果）
+        $this->symbols->addClass('tphp_class_Future');
+        $this->symbols->addClassName('Future', 'tphp_class_Future');
+        // static create(): Future
+        $this->symbols->getClass('tphp_class_Future')->methods['create']    = new MethodInfo('tphp_class_Future*', [], true);
+        $this->symbols->getClass('tphp_class_Future')->methods['__destruct'] = new MethodInfo('void');
+        $this->symbols->getClass('tphp_class_Future')->methods['resolve']   = new MethodInfo('void', ['t_var']);
+        $this->symbols->getClass('tphp_class_Future')->methods['reject']    = new MethodInfo('void', ['t_var']);
+        $this->symbols->getClass('tphp_class_Future')->methods['await']     = new MethodInfo('t_var');
+        $this->symbols->getClass('tphp_class_Future')->methods['isReady']   = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Future')->methods['isRejected'] = new MethodInfo('t_bool');
+        $this->symbols->getClass('tphp_class_Future')->methods['then']      = new MethodInfo('tphp_class_Future*', ['t_callback']);
+        $this->symbols->getClass('tphp_class_Future')->methods['catch']     = new MethodInfo('tphp_class_Future*', ['t_callback']);
+        // static all(array $futures): Future
+        $this->symbols->getClass('tphp_class_Future')->methods['all']       = new MethodInfo('tphp_class_Future*', ['t_array*'], true);
+        // static race(array $futures): Future
+        $this->symbols->getClass('tphp_class_Future')->methods['race']      = new MethodInfo('tphp_class_Future*', ['t_array*'], true);
+
+        // 内置 ChannelClosedException / FutureRejectedException 类
+        $this->symbols->addClass('tphp_class_ChannelClosedException');
+        $this->symbols->addClassName('ChannelClosedException', 'tphp_class_ChannelClosedException');
+        $this->symbols->addClass('tphp_class_FutureRejected');
+        $this->symbols->addClassName('FutureRejectedException', 'tphp_class_FutureRejected');
 
         // 内置 AnnotationEntry 类（注解系统）
         $this->symbols->addClass('tphp_class_AnnotationEntry');
@@ -6000,6 +6055,7 @@ class CodeGenerator implements ASTVisitor
         $capDecls  = [];
         $capAssigns = []; // heap allocation assignments: _env_N->var = var;
         $hasObjCapture = false;  // 是否捕获了对象类型（需要 retain/release）
+        $arrCapFields = [];      // Task 9: 数组类型捕获字段 [varName, cType]，需要 make_shared
         foreach ($effectiveUseVars as [$vn, $_]) {
             $ct = $this->varTypes[$vn] ?? 't_int';
             // null 类型 → void*，t_var 保持原样，对象类型加 *
@@ -6010,6 +6066,13 @@ class CodeGenerator implements ASTVisitor
                 if (!str_ends_with($ct, '*')) $ct .= '*';
                 $isObj = true;
                 $hasObjCapture = true;
+            }
+            // Task 9: 检测数组类型捕获（t_array* 或任意 t_arr_* 特化类型）
+            //   方案 C（保守策略）：对所有闭包中的数组捕获字段调用 make_shared，
+            //   确保 Thread/Parallel 场景下跨线程安全。make_shared 是幂等的，
+            //   对单线程数组无副作用（仅多一次遍历）。
+            if ($ct === 't_array*' || (str_starts_with($ct, 't_arr_') && str_ends_with($ct, '*'))) {
+                $arrCapFields[] = [$vn, $ct];
             }
             $capFields[]  = "    {$ct} {$vn};";
             $capInits[]   = "    .{$vn} = {$vn}";
@@ -6153,11 +6216,35 @@ class CodeGenerator implements ASTVisitor
         // 生成 GNU 复合表达式
         $fwdParams = implode(', ', array_map(fn($p) => $this->visitParam($p), $node->params));
         $fwdParams = ($fwdParams ? $fwdParams . ', ' : '') . "void* _env";
+        // Task 9: 构建数组捕获字段的 make_shared 调用（方案 C 保守策略）
+        //   对 env 中每个数组字段调用对应的 make_shared 函数，
+        //   确保闭包传递给 Thread/Parallel 时数组为跨线程安全形态。
+        //   t_array*/t_arr_var* → tphp_fn_arr_make_shared / tphp_fn_arr_var_make_shared
+        //   t_arr_int*/t_arr_str* 等特化类型 → tphp_fn_arr_{int,str,...}_make_shared
+        //   注意：不能用 (t_array*)cast 调用通用 make_shared，因为特化数组的 entry 布局不同，
+        //   通用 make_shared 会以 sizeof(t_arr_entry) 步长遍历，导致内存越界。
+        $arrMakeSharedLines = '';
+        if (!empty($arrCapFields)) {
+            $calls = [];
+            foreach ($arrCapFields as [$avn, $act]) {
+                if ($act === 't_array*') {
+                    $fn = 'tphp_fn_arr_make_shared';
+                } elseif ($act === 't_arr_var*') {
+                    $fn = 'tphp_fn_arr_var_make_shared';
+                } else {
+                    // t_arr_int* → tphp_fn_arr_int_make_shared, etc.
+                    $fn = 'tphp_fn_arr_' . str_replace(['t_arr_', '*'], '', $act) . '_make_shared';
+                }
+                $calls[] = "        {$fn}(_env_{$id}->{$avn});";
+            }
+            $arrMakeSharedLines = implode("\n", $calls) . "\n";
+        }
         $envDecl = $hasCapture
             ? "    {$capName}* _env_{$id} = ({$capName}*)calloc(1, sizeof({$capName}));\n"
               . "    if (_env_{$id} != NULL) {\n"
               . ($hasObjCapture ? "        _env_{$id}->dtor = _env_dtor_{$id};\n" : "")
               . implode("\n", $capAssigns) . "\n"
+              . $arrMakeSharedLines
               . "    }\n"
               . "    tphp_rt_register((void*)_env_{$id}, " . ($hasObjCapture ? '5' : '3') . ");\n"
               . "    (t_callback){ .func = (void*){$name}, .env = _env_{$id} };"
@@ -6615,6 +6702,12 @@ class CodeGenerator implements ASTVisitor
                     return $isEq
                         ? "({$other}.func == NULL)"
                         : "({$other}.func != NULL)";
+                }
+                // t_var（mixed）：检查 .type == TYPE_NULL（如 Channel::pop() 关闭后返回 null）
+                if ($otype === 't_var') {
+                    return $isEq
+                        ? "({$other}.type == TYPE_NULL)"
+                        : "({$other}.type != TYPE_NULL)";
                 }
                 return $isEq ? "({$other} == null)" : "({$other} != null)";
             }

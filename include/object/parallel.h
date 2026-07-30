@@ -131,16 +131,21 @@ static int _parallel_map_worker(void *arg) {
 
 /** Parallel::map(array $data, callable $fn, int $threads = 0): array
  *  callback 签名: t_int fn(t_int $x)  —  int→int 变换
- *  限制: 回调必须为纯函数，返回值类型为 t_int (值类型，跨线程安全) */
+ *  限制: 回调必须为纯函数，返回值类型为 t_int (值类型，跨线程安全)
+ *  输入数组语义：
+ *    - 主线程在 map 期间通过 retain 保持输入数组存活
+ *    - worker 子线程只读访问 ctx->input（主线程 join 阻塞，无并发写）
+ *    - 输入数组无需 mark_shared（只读共享，字符串仍可指向主线程 str_pool） */
 static inline t_array* tphp_class_Parallel_map(t_array *data, t_callback fn, t_int threads) {
     if (data == NULL || data->length == 0) return tphp_fn_arr_create(0);
+    tphp_fn_arr_retain(data);  /* 防止 worker 并发期间主线程提前释放 */
     int n = data->length;
     int nthreads = (threads > 0) ? (int)threads : 4;
     if (nthreads > n) nthreads = n;
 
     /* 堆分配结果缓冲区（不经过 arr_freelist，避免跨线程池污染） */
     t_int *results = (t_int*)malloc(sizeof(t_int) * (size_t)n);
-    if (results == NULL) { tp_throw("Parallel::map(): out of memory"); return NULL; }
+    if (results == NULL) { tp_throw("Parallel::map(): out of memory"); tphp_fn_arr_free(data); return NULL; }
 
     /* 单线程：内联执行 */
     if (nthreads <= 1) {
@@ -201,6 +206,7 @@ static inline t_array* tphp_class_Parallel_map(t_array *data, t_callback fn, t_i
         out = tphp_fn_arr_push(out, VAR_INT(results[i]));
     }
     free(results);
+    tphp_fn_arr_free(data);  /* release 输入数组（对应入口的 retain） */
     return out;
 }
 

@@ -37,11 +37,12 @@ include/                         C 运行时头文件（全 static inline）
   │   └── tls.h                  TCC+Windows TLS 兼容层（Windows TLS API 实现 _Thread_local）
   ├── object/
   │   ├── object.h               COS 对象系统（16B 头 + struct 嵌套继承 + refcount + 对象复用池）
-  │   ├── exception.h            内置 Exception 类
+  │   ├── exception.h            内置 Exception 类（含 ChannelClosedException/FutureRejectedException）
   │   ├── try.h                  setjmp/longjmp 异常（TP_TRY/TP_CATCH/TP_THROW）
   │   ├── generator.h            Generator 类（基于 minicoro 协程）
   │   ├── resource.h             Resource 基类（资源对象化根）
-  │   └── thread.h               Thread/Mutex/CondVar/WaitGroup COS 类（基于 tinycthread）
+  │   ├── thread.h               Thread/Mutex/CondVar/WaitGroup COS 类（基于 tinycthread）
+  │   └── channel.h              Channel/Future COS 类 + chan_select（参考 vlang CSP 模型，自旋 750 次 + 环形缓冲区零 malloc）
   └── os/
       ├── times.h                时间（time/date/sleep/hrtime/microtime/strtotime/mktime）
       ├── json.h                 JSON 编解码（位图转义 + 批量安全字符写入）
@@ -520,6 +521,7 @@ phpc 提供 4 个安全辅助函数处理 C 指针生命周期边界问题。修
 | `include/object/generator.h` | — | Generator 类（基于 minicoro 协程） |
 | `include/object/resource.h` | — | Resource 基类（资源对象化根） |
 | `include/object/thread.h` | ~289 | Thread/Mutex/CondVar/WaitGroup COS 类（基于 tinycthread） |
+| `include/object/channel.h` | — | Channel/Future COS 类 + chan_select（参考 vlang CSP 模型） |
 | `include/compat/tinycthread.h` | — | tinycthread v1.1 优化版（SRWLOCK/CONDITION_VARIABLE/SpinLock/WaitGroup） |
 | `include/compat/tls.h` | — | TCC+Windows TLS 兼容层（Windows TLS API 实现 _Thread_local） |
 | `include/os/json.h` | ~385 | JSON 编解码（位图转义+批量安全字符写入） |

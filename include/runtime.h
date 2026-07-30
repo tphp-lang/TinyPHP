@@ -313,6 +313,31 @@ static inline t_string tphp_rt_str_dup(t_string s) {
     return (t_string){.data = d, .length = s.length, .is_local = false};
 }
 
+/** tphp_rt_str_dup_heap — 强制堆分配字符串（不走 str_pool）
+ *  用于跨线程共享数组：SSO 短串内联，长串 malloc，字面量原样返回。
+ *  与 tphp_rt_str_dup 的区别：长串用 malloc 而非 str_pool_alloc，
+ *  确保字符串不依赖任何线程的 thread-local str_pool，可安全跨线程访问。 */
+static inline t_string tphp_rt_str_dup_heap(t_string s) {
+    // 字面量(.rodata)安全，直接返回 — 全局只读，所有线程可访问
+    if (s.is_lit) return s;
+    const char *src = STR_PTR(s);
+    if (src == NULL || s.length <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    // SSO：短串直接内联，零堆分配，天然跨线程安全
+    if (likely(s.length <= STR_SSO_MAX)) {
+        t_string r = {.is_local = true, .length = s.length};
+        memcpy(r.local, src, (size_t)s.length);
+        r.local[s.length] = '\0';
+        return r;
+    }
+    // 长串：malloc 独立堆内存（不依赖任何线程的 str_pool）
+    t_string r = {.data = NULL, .length = s.length, .is_local = false, .is_lit = false};
+    r.data = (char*)malloc((size_t)s.length + 1);
+    if (r.data == NULL) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    memcpy(r.data, src, (size_t)s.length);
+    r.data[s.length] = '\0';
+    return r;
+}
+
 /** tphp_str_free — 安全释放 t_string（SSO 跳过，池/arena 跳过，否则 free） */
 static inline void tphp_rt_str_free(t_string* s) {
     if (unlikely(s == NULL || s->length <= 0)) return;

@@ -2847,6 +2847,7 @@ class Parser
             TokenType::YIELD_KW, // Thread::yield()
             TokenType::SLEEP,    // Thread::sleep()
             TokenType::FOR_KW,   // Parallel::for()
+            TokenType::CATCH_KW, // Future::catch()
             // 可见性关键字也可作为属性/方法名（如 $obj->private）
             TokenType::PUBLIC_KW, TokenType::PRIVATE_KW,
         ];

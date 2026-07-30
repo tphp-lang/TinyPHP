@@ -18,10 +18,12 @@
 #include <string.h>
 #include <stdio.h>
 #include "types.h"
+#include "compat/tinycthread.h"  // _tphp_cas32 — 原子 CAS 用于 is_shared 数组的引用计数
 
 /* 前向声明 runtime.h 中 array.h 需要的函数（避免循环 include，统一用 static inline） */
 static inline void tphp_rt_str_free(t_string* s);
 static inline t_string tphp_rt_str_dup(t_string s);
+static inline t_string tphp_rt_str_dup_heap(t_string s);
 static inline t_bool tphp_rt_str_eq(t_string a, t_string b);
 static inline void tphp_rt_register(void *ptr, int type);
 static inline void tphp_rt_unregister(void *ptr);
@@ -344,16 +346,24 @@ static _Thread_local t_array*  arr_freelist[ARR_POOL_MAX];
 static _Thread_local int       arr_freelist_count = 0;
 #endif
 
-/** 将数组归还到复用池（仅当引用计数为 0 且无外部持有者时调用） */
+/** 将数组归还到复用池（仅当引用计数为 0 且无外部持有者时调用）
+ *  shared 数组（is_shared=1）不入 thread-local freelist，直接 free，
+ *  避免跨线程池污染（防止其他线程从自己的 freelist 取到"陌生"共享数组） */
 static inline void arr_pool_put(t_array *a) {
     if (unlikely(a == NULL)) return;
     arr_stridx_free(a);  // free hash index before recycling or freeing
     arr_intidx_free(a);  // free int hash index before recycling or freeing
+    if (a->is_shared) {
+        // 共享数组不入 thread-local freelist，直接 free
+        free(a);
+        return;
+    }
     if (arr_freelist_count >= ARR_POOL_MAX) { free(a); return; }
     // 重置状态
     a->length   = 0;
     a->refcount = 1;
     a->cursor   = 0;
+    a->is_shared = 0;
     // 清零 entry 区域防止残留数据
     memset(a->entries, 0, (size_t)a->capacity * sizeof(t_arr_entry));
     arr_freelist[arr_freelist_count++] = a;
@@ -371,6 +381,7 @@ static inline t_array* arr_pool_get(int cap) {
             a->length   = 0;
             a->refcount = 1;
             a->cursor   = 0;
+            a->is_shared = 0;
             return a;
         }
     }
@@ -416,8 +427,19 @@ static inline t_array* tphp_fn_arr_create_hint(int cap, int total) {
     return a;
 }
 
+/** tphp_fn_arr_retain — 引用计数 +1
+ *  is_shared=1 时用 CAS 原子操作（跨线程安全）；is_shared=0 保持普通 ++（零开销） */
 static inline t_array* tphp_fn_arr_retain(t_array *a) {
-    if (a) a->refcount++;
+    if (!a) return a;
+    if (a->is_shared) {
+        int old, newv;
+        do {
+            old = a->refcount;
+            newv = old + 1;
+        } while (!_tphp_cas32(&a->refcount, old, newv));
+    } else {
+        a->refcount++;
+    }
     return a;
 }
 
@@ -441,6 +463,9 @@ static inline t_array* tphp_fn_arr_grow(t_array *a, int need) {
 
 static inline t_array* tphp_fn_arr_push(t_array *a, t_var val) {
     if (unlikely(a == NULL)) return NULL;
+    // 共享数组：string val 需堆化，避免 str_pool 指针跨线程 UAF
+    if (a->is_shared && val.type == TYPE_STRING)
+        val.value._string = tphp_rt_str_dup_heap(val.value._string);
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_INT;
     a->entries[a->length].key.value._int = a->length;
@@ -453,6 +478,9 @@ static inline t_array* tphp_fn_arr_push(t_array *a, t_var val) {
 
 static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
     if (unlikely(a == NULL || key < 0)) return a;
+    // 共享数组：string val 需堆化，避免 str_pool 指针跨线程 UAF
+    if (a->is_shared && val.type == TYPE_STRING)
+        val.value._string = tphp_rt_str_dup_heap(val.value._string);
     // 快路径 1: 连续整数键 (0,1,2,...,n-1) — 直接下标 O(1)
     if (key < a->length &&
         a->entries[key].key.type == TYPE_INT &&
@@ -508,6 +536,9 @@ static inline t_array* tphp_fn_arr_set_int(t_array *a, t_int key, t_var val) {
 
 static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) {
     if (unlikely(a == NULL)) return a;
+    // 共享数组：string val 需堆化，避免 str_pool 指针跨线程 UAF
+    if (a->is_shared && val.type == TYPE_STRING)
+        val.value._string = tphp_rt_str_dup_heap(val.value._string);
     // Use hash index for O(1) lookup if available
     if (a->str_index != NULL) {
         int idx = arr_stridx_lookup(a, key);
@@ -530,7 +561,7 @@ static inline t_array* tphp_fn_arr_set_str(t_array *a, t_string key, t_var val) 
     // Append new entry
     a = tphp_fn_arr_grow(a, a->length + 1);
     a->entries[a->length].key.type = TYPE_STRING;
-    a->entries[a->length].key.value._string = tphp_rt_str_dup(key);
+    a->entries[a->length].key.value._string = a->is_shared ? tphp_rt_str_dup_heap(key) : tphp_rt_str_dup(key);
     a->entries[a->length].val = _arr_val_retain(val);
     int new_idx = a->length;
     a->length++;
@@ -956,9 +987,24 @@ static inline t_callback tphp_fn_arr_get_int_callback(t_array *a, t_int key) {
 
 // === Free (释放 entries + 回收到复用池) ===
 
+/** tphp_fn_arr_free — 引用计数 -1，归零时释放 entries + 回收
+ *  is_shared=1 时用 CAS 原子减 1（跨线程安全），归零线程负责释放；
+ *  is_shared=0 保持普通 --（零开销） */
 static inline void tphp_fn_arr_free(t_array *a) {
     if (unlikely(a == NULL)) return;
-    if (--a->refcount > 0) return;
+    int is_shared = a->is_shared;
+    int newcount;
+    if (is_shared) {
+        int old;
+        do {
+            old = a->refcount;
+            newcount = old - 1;
+        } while (!_tphp_cas32(&a->refcount, old, newcount));
+    } else {
+        newcount = --a->refcount;
+    }
+    if (newcount > 0) return;
+    // refcount 归零，释放 entries（递归嵌套数组）+ str/int 索引
     for (int i = 0; i < a->length; i++) {
         // 释放 string key（堆分配的）
         if (a->entries[i].key.type == TYPE_STRING)
@@ -968,7 +1014,41 @@ static inline void tphp_fn_arr_free(t_array *a) {
             tphp_fn_arr_free(a->entries[i].val.value._array);
     }
     // 回收到复用池（而非 free），减少后续 malloc
+    // arr_pool_put 内部会判断 is_shared 决定入池还是直接 free
     arr_pool_put(a);
+}
+
+/** tphp_fn_arr_make_shared — 将数组升级为跨线程安全形态
+ *  - 设置 is_shared=1（启用原子引用计数 + freelist 旁路）
+ *  - 递归处理嵌套数组
+ *  - str_pool 字符串替换为 heap 拷贝（或 SSO），字面量原样保留
+ *  幂等：已 is_shared=1 的数组直接返回（同时天然避免循环引用无限递归） */
+static inline t_array* tphp_fn_arr_make_shared(t_array *a) {
+    if (a == NULL || a->is_shared) return a;
+    a->is_shared = 1;
+    for (int i = 0; i < a->length; i++) {
+        // string key 堆化：非字面量、非 SSO（有外部 data 指针）的字符串需 heap 拷贝
+        if (a->entries[i].key.type == TYPE_STRING) {
+            t_string *k = &a->entries[i].key.value._string;
+            if (!k->is_lit && !k->is_local && k->data != NULL) {
+                // 保守策略：不 free 原字符串（可能是 str_pool 或独立 malloc），
+                // str_pool 由线程退出清理，独立 malloc 的暂不回收（可接受的小泄漏）
+                *k = tphp_rt_str_dup_heap(*k);
+            }
+        }
+        // string val 堆化
+        if (a->entries[i].val.type == TYPE_STRING) {
+            t_string *v = &a->entries[i].val.value._string;
+            if (!v->is_lit && !v->is_local && v->data != NULL) {
+                *v = tphp_rt_str_dup_heap(*v);
+            }
+        }
+        // 嵌套数组递归（已 shared 的子数组直接返回，避免循环引用无限递归）
+        if (a->entries[i].val.type == TYPE_ARRAY && a->entries[i].val.value._array != NULL) {
+            tphp_fn_arr_make_shared(a->entries[i].val.value._array);
+        }
+    }
+    return a;
 }
 
 // === Shift (remove first element, shift left) ===
@@ -1673,7 +1753,10 @@ static inline t_string tphp_arr_empty_str(void) {
 
 // ── 标量/string/ptr 类型宏模板 ──
 // 这些类型的 value 无需引用计数: push 直接值拷贝, free 不释放 value
-#define DEFINE_ARRAY_OPS(NAME, VALTYPE, ENTRYTYPE, ARRTYPE, ZERO_EXPR) \
+// HEAPIFY_VAL_LOCAL: 在 push/set 中对 VALTYPE val 做共享堆化（仅 t_arr_str 需要）
+// HEAPIFY_VAL_ENTRY: 在 make_shared 中对 a->entries[i].val 做共享堆化（仅 t_arr_str 需要）
+#define DEFINE_ARRAY_OPS(NAME, VALTYPE, ENTRYTYPE, ARRTYPE, ZERO_EXPR, \
+                          HEAPIFY_VAL_LOCAL, HEAPIFY_VAL_ENTRY) \
     \
     static inline ARRTYPE* tphp_fn_arr_##NAME##_create(int cap) { \
         if (cap < 4) cap = 4; \
@@ -1686,14 +1769,41 @@ static inline t_string tphp_arr_empty_str(void) {
     } \
     \
     static inline ARRTYPE* tphp_fn_arr_##NAME##_retain(ARRTYPE *a) { \
-        if (a) a->refcount++; \
+        if (!a) return a; \
+        if (a->is_shared) { \
+            int old, newv; \
+            do { old = a->refcount; newv = old + 1; } while (!_tphp_cas32(&a->refcount, old, newv)); \
+        } else { a->refcount++; } \
         return a; \
     } \
     \
     static inline void tphp_fn_arr_##NAME##_free(ARRTYPE *a) { \
         if (unlikely(a == NULL)) return; \
-        if (--a->refcount > 0) return; \
+        int newcount; \
+        if (a->is_shared) { \
+            int old; \
+            do { old = a->refcount; newcount = old - 1; } while (!_tphp_cas32(&a->refcount, old, newcount)); \
+        } else { newcount = --a->refcount; } \
+        if (newcount > 0) return; \
+        for (int i = 0; i < a->length; i++) { \
+            if (a->entries[i].key.type == TYPE_STRING) \
+                tphp_rt_str_free(&a->entries[i].key.value._string); \
+        } \
         free(a); \
+    } \
+    \
+    static inline ARRTYPE* tphp_fn_arr_##NAME##_make_shared(ARRTYPE *a) { \
+        if (a == NULL || a->is_shared) return a; \
+        a->is_shared = 1; \
+        for (int i = 0; i < a->length; i++) { \
+            if (a->entries[i].key.type == TYPE_STRING) { \
+                t_string *k = &a->entries[i].key.value._string; \
+                if (!k->is_lit && !k->is_local && k->data != NULL) \
+                    *k = tphp_rt_str_dup_heap(*k); \
+            } \
+            HEAPIFY_VAL_ENTRY; \
+        } \
+        return a; \
     } \
     \
     static inline int tphp_fn_arr_##NAME##_len(ARRTYPE *a) { \
@@ -1715,6 +1825,7 @@ static inline t_string tphp_arr_empty_str(void) {
     \
     static inline ARRTYPE* tphp_fn_arr_##NAME##_push(ARRTYPE *a, VALTYPE val) { \
         if (unlikely(a == NULL)) return NULL; \
+        HEAPIFY_VAL_LOCAL; \
         a = tphp_fn_arr_##NAME##_grow(a, a->length + 1); \
         a->entries[a->length].key.type = TYPE_INT; \
         a->entries[a->length].key.value._int = a->length; \
@@ -1725,6 +1836,7 @@ static inline t_string tphp_arr_empty_str(void) {
     \
     static inline ARRTYPE* tphp_fn_arr_##NAME##_set_int(ARRTYPE *a, t_int key, VALTYPE val) { \
         if (unlikely(a == NULL || key < 0)) return a; \
+        HEAPIFY_VAL_LOCAL; \
         if (key < a->length && \
             a->entries[key].key.type == TYPE_INT && \
             a->entries[key].key.value._int == key) { \
@@ -1748,6 +1860,7 @@ static inline t_string tphp_arr_empty_str(void) {
     \
     static inline ARRTYPE* tphp_fn_arr_##NAME##_set_str(ARRTYPE *a, t_string key, VALTYPE val) { \
         if (unlikely(a == NULL)) return a; \
+        HEAPIFY_VAL_LOCAL; \
         for (int i = 0; i < a->length; i++) { \
             if (a->entries[i].key.type == TYPE_STRING && \
                 tphp_rt_str_eq(a->entries[i].key.value._string, key)) { \
@@ -1757,7 +1870,7 @@ static inline t_string tphp_arr_empty_str(void) {
         } \
         a = tphp_fn_arr_##NAME##_grow(a, a->length + 1); \
         a->entries[a->length].key.type = TYPE_STRING; \
-        a->entries[a->length].key.value._string = tphp_rt_str_dup(key); \
+        a->entries[a->length].key.value._string = a->is_shared ? tphp_rt_str_dup_heap(key) : tphp_rt_str_dup(key); \
         a->entries[a->length].val = val; \
         a->length++; \
         return a; \
@@ -1798,16 +1911,20 @@ static inline t_string tphp_arr_empty_str(void) {
     }
 
 // 实例化标量/string/ptr 类型
-DEFINE_ARRAY_OPS(int,   t_int,    t_arr_entry_int,   t_arr_int,   (t_int)0)
-DEFINE_ARRAY_OPS(float, t_float,  t_arr_entry_float, t_arr_float, (t_float)0)
-DEFINE_ARRAY_OPS(bool,  t_bool,   t_arr_entry_bool,  t_arr_bool,  (t_bool)0)
-DEFINE_ARRAY_OPS(str,   t_string, t_arr_entry_str,   t_arr_str,   tphp_arr_empty_str())
-DEFINE_ARRAY_OPS(ptr,   void*,    t_arr_entry_ptr,   t_arr_ptr,   NULL)
+// HEAPIFY_VAL_LOCAL/ENTRY: 仅 t_arr_str 需要对 string value 做共享堆化，其他类型为 no-op
+DEFINE_ARRAY_OPS(int,   t_int,    t_arr_entry_int,   t_arr_int,   (t_int)0,           (void)0, (void)0)
+DEFINE_ARRAY_OPS(float, t_float,  t_arr_entry_float, t_arr_float, (t_float)0,         (void)0, (void)0)
+DEFINE_ARRAY_OPS(bool,  t_bool,   t_arr_entry_bool,  t_arr_bool,  (t_bool)0,          (void)0, (void)0)
+DEFINE_ARRAY_OPS(str,   t_string, t_arr_entry_str,   t_arr_str,   tphp_arr_empty_str(), \
+    if ((a)->is_shared) (val) = tphp_rt_str_dup_heap(val);, \
+    { t_string *_v = &a->entries[i].val; if (!_v->is_lit && !_v->is_local && _v->data != NULL) *_v = tphp_rt_str_dup_heap(*_v); })
+DEFINE_ARRAY_OPS(ptr,   void*,    t_arr_entry_ptr,   t_arr_ptr,   NULL,               (void)0, (void)0)
 
 // ── var 类型（array<mixed>）── 复用 t_array 万能数组 ──
 static inline t_arr_var* tphp_fn_arr_var_create(int cap) { return tphp_fn_arr_create(cap); }
 static inline t_arr_var* tphp_fn_arr_var_retain(t_arr_var *a) { return tphp_fn_arr_retain(a); }
 static inline void tphp_fn_arr_var_free(t_arr_var *a) { tphp_fn_arr_free(a); }
+static inline t_arr_var* tphp_fn_arr_var_make_shared(t_arr_var *a) { return tphp_fn_arr_make_shared(a); }
 static inline int tphp_fn_arr_var_len(t_arr_var *a) { return a ? a->length : 0; }
 static inline t_arr_var* tphp_fn_arr_var_push(t_arr_var *a, t_var val) { return tphp_fn_arr_push(a, val); }
 static inline t_arr_var* tphp_fn_arr_var_set_int(t_arr_var *a, t_int key, t_var val) { return tphp_fn_arr_set_int(a, key, val); }

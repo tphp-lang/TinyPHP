@@ -74,6 +74,7 @@ class C {
 | `mixed` | `t_var` | 标签联合体，有运行时开销 |
 | `Generator` | `tphp_class_Generator*` | 协程对象（minicoro 实现，stackless） |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | `tphp_class_X*` | 多线程 COS 类（tinycthread 封装，Thread-Local 运行时） |
+| `Channel`/`Future` | `tphp_class_X*` | 异步与协程通信 COS 类（参考 vlang CSP 模型，自旋 750 次 + 环形缓冲区零 malloc） |
 | 类类型 | `tphp_class_X*` 或 `tphp_na_Ns_tphp_class_X*` | COS 对象指针（命名空间类带 `tphp_na_` 前缀） |
 
 > ⚠️ **`===` 和 `==` 等价**：类型固定意味着编译期已知类型，"同时类型不同"的情况不存在。
@@ -1010,6 +1011,7 @@ phpc_ptr_bridge:
 | C 指针泄漏编译期提醒 | `C.T*` transfer 指针未 defer/free 时输出 `[WARN]` 到 stderr（不阻断编译；识别 `*_free`/`*_destroy`/`*_release`/`*_close`/`*_delete` 等清理函数命名约定） |
 | `phpc_ptr_to_int` `phpc_int_to_ptr` | 指针↔整数桥接(让 C 指针以 t_int 在 PHP 层流转) |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | 多线程 OOP API（tinycthread 封装，Thread-Local 运行时无锁竞争） |
+| `Channel`/`Future`/`chan_select` | 异步与协程通信（参考 vlang CSP 模型，自旋 750 次 + 环形缓冲区零 malloc，close 后 push 抛 `ChannelClosedException`，await reject 抛 `FutureRejectedException`） |
 | `Parallel::for`/`Parallel::map` | 数据并行（连续分片，线程失败降级为内联执行） |
 | `#[Attribute(p: type, ...)] const NAME = [];` | 注解类型声明（附着于全局/命名空间 const，详见 §14） |
 | `#[NAME(arg1, arg2, ...)]` | 注解使用（仅位置参数，附着于 class/method/function，编译期收集） |

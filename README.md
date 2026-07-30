@@ -161,6 +161,7 @@ use MyApp\Models\User;
 | 语法糖 | `list()/$a[] =` 解构、`$a[] = ` push、`[...$arr1, ...$arr2]` 数组展开（spread）、`int &$x` 引用传参（全类型）、`int $x = 10` 默认值参数（编译时重载）、`int $x = 42;` 局部变量可选类型标记、`const int MAX = 100;` 全局常量可选类型标记、字符串插值、heredoc、魔术常量 (`__LINE__` `__FILE__` `__DIR__`) |
 | Generator | `yield`、`yield $k => $v`、`send()`、`getReturn()`、`return`、foreach 迭代（基于 minicoro 协程，不使用 yield 时零开销） |
 | 多线程 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` OOP 线程 API（基于 tinycthread，Thread-Local 运行时无锁竞争） |
+| 异步与协程 | `Channel`/`Future` OOP 异步通信原语 + `chan_select` 多路复用（参考 vlang CSP 模型，自旋 750 次减少 syscall，环形缓冲区零 malloc） |
 | 注解 | `#[Attribute(p: type, ...)] const NAME = [];` 声明 + `#[NAME(args)]` 使用（仅位置参数），`ROUTE[0]->call()/newInstance()` 编译期展开为零开销直接调用，详见 [GRAMMAR.md §14](GRAMMAR.md) |
 
 ### ❌ 不支持（AOT 物理不可行）
@@ -201,7 +202,7 @@ use MyApp\Models\User;
 
 ### 🔢 内置函数
 
-已实现 **430+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup)/zlib(gzip 压缩+流式+增量上下文)/zip(归档读写)/stream(socket stream)/curl(HTTP/HTTPS 客户端，690 常量+35 函数)/pgsql(PostgreSQL 纯 C 协议，78 函数+60 常量)/pdo_pgsql(PostgreSQL PDO 驱动) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+已实现 **450+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup)/异步与协程(Channel/Future/chan_select，参考 vlang CSP 模型)/zlib(gzip 压缩+流式+增量上下文)/zip(归档读写)/stream(socket stream)/curl(HTTP/HTTPS 客户端，690 常量+35 函数)/pgsql(PostgreSQL 纯 C 协议，78 函数+60 常量)/pdo_pgsql(PostgreSQL PDO 驱动) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 ## 独有特性
 
@@ -279,6 +280,43 @@ $tid = Thread::id();
 | `WaitGroup` | `add/done/wait` | 单 u64 state + Semaphore，等待 N 个线程完成 |
 
 > TCC+Windows 通过 `compat/tls.h` 用 Windows TLS API 实现真正的线程隔离（TCC 不支持 `_Thread_local`）。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+
+### 异步与协程通信
+
+参考 vlang 的 CSP 通信模型，提供 `Channel`/`Future` OOP 异步原语 + `chan_select` 多路复用函数。基于 tinycthread 的 mutex + condvar 实现，采用自旋 750 次再阻塞的混合策略减少 syscall，Channel 使用固定容量环形缓冲区实现零 malloc。
+
+```php
+// Channel 跨线程通信（CSP 风格）
+$ch = new Channel(4);
+$t = new Thread(function() use ($ch): int {
+    $ch->push(42);
+    $ch->close();
+    return 0;
+});
+$t->start();
+echo $ch->pop();   // 42
+$t->join();
+
+// Future 异步结果 + 链式回调
+$f = Future::create();
+$f->resolve(10);
+$doubled = $f->then(fn(mixed $x): mixed => $x * 2);
+echo $doubled->await();  // 20
+
+// chan_select 多路复用（带超时）
+$ch1 = new Channel(4);
+$ch2 = new Channel(4);
+$ch2->push("hello");
+$idx = chan_select([$ch1, $ch2], 100);  // 1
+```
+
+| 类 / 函数 | 方法 | 说明 |
+|---|---|---|
+| `Channel` | `push/pop/tryPush/tryPop/close/isClosed/length/capacity` | 有界通道，环形缓冲区零 malloc，close 后 push 抛 `ChannelClosedException` |
+| `Future` | `create`/`resolve/reject/await/isReady/isRejected/then/catch` + 静态 `all/race` | 一次性异步结果，await reject 抛 `FutureRejectedException`，支持链式回调与组合器 |
+| `chan_select` | `(array $channels, int $timeout_ms = -1): int` | 返回就绪通道索引，全关闭返回 -2，超时返回 -1 |
+
+> 内存安全：push/resolve 时 `_arr_val_retain`，pop/await 时不额外 retain，dtor 保证即使忘记 close 也释放所有资源。详见 [FUNCTIONS.md](FUNCTIONS.md) 异步与协程通信章节。
 
 ### C 互操作（PHPC）
 
