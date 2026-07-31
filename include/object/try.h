@@ -291,16 +291,16 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
             if (_orig != NULL) tphp_rt_unregister(_orig); \
             _tp_do_longjmp(_tp_ex_top); \
         } else { \
-            /* 提取消息到 malloc 缓冲区（survives tphp_rt_free_all），先打印再清理 */ \
+            /* 提取消息到 malloc 缓冲区（survives tphp_rt_free_all），先清理再打印 */ \
             char *_tp_fatal_msg = (_e && STR_PTR_V(_e->message)) \
                 ? _tp_dup_msg_n(STR_PTR_V(_e->message), _e->message.length) \
                 : NULL; \
+            tphp_rt_free_all(); \
             fflush(stdout); \
             fprintf(stderr, "\nFatal error: Uncaught exception: %s\n\n", \
                 _tp_fatal_msg ? _tp_fatal_msg : "(null)"); \
             fflush(stderr); \
             free(_tp_fatal_msg); \
-            tphp_rt_free_all(); \
             exit(1); \
         } \
     } while(0)
@@ -327,12 +327,12 @@ static inline char* _tp_dup_msg_n(const char* s, int len) {
         } else { \
             /* _tp_msg 可能指向 str_pool/arena，tphp_rt_free_all 后失效，先复制 */ \
             char *_tp_fatal_msg = _tp_dup_msg(_tp_msg); \
+            tphp_rt_free_all(); \
             fflush(stdout); \
             fprintf(stderr, "\nFatal error: Uncaught exception: %s\n\n", \
                 _tp_fatal_msg ? _tp_fatal_msg : "(null)"); \
             fflush(stderr); \
             free(_tp_fatal_msg); \
-            tphp_rt_free_all(); \
             exit(1); \
         } \
     } while(0)

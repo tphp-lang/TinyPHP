@@ -566,6 +566,12 @@ static inline t_int tphp_fn_stream_socket_accept(t_int server_fd, t_int timeout_
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
 
+    // 无效 fd 直接抛异常（select/FD_SET 对负 fd 是未定义行为）
+    if (server_fd < 0) {
+        _stream_throw("stream_socket_accept: invalid server fd");
+        return -1;
+    }
+
     // 超时等待：用 select 检查可读
     if (timeout_ms >= 0) {
         fd_set rfds;

@@ -5,7 +5,6 @@
 #debug
 #debug Fatal error: Uncaught exception: test uncaught message
 #debug
-#debug (process should exit with code 1, not crash with ACCESS_VIOLATION)
 
 // This test verifies that uncaught exceptions print the error message
 // to stderr BEFORE tphp_rt_free_all() cleanup, instead of crashing
