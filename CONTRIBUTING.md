@@ -351,11 +351,21 @@ ext/
 │   └── src/
 │       ├── pcntl.c
 │       └── pcntl.php   ← #flag pcntl.c + #include pcntl.h
-└── posix/              ← C 直接模式
-    ├── posix.h
+├── posix/              ← C 直接模式
+│   ├── posix.h
+│   └── src/
+│       ├── posix.c
+│       └── posix.php   ← #flag posix.c + #include posix.h
+└── ui/                 ← 图形界面（纯 phpc + 内置 sokol C 库）
+    ├── compat/         ← TCC 兼容头文件（sal.h / shellapi.h / windowsx.h）
+    ├── sokol/          ← sokol C 库源码（sokol_app/gfx/glue/log/time .h）
     └── src/
-        ├── posix.c
-        └── posix.php   ← #flag posix.c + #include posix.h
+        ├── ui.h        ← C 包装层（tphp_fn_ui_* + sokol 回调桥）
+        ├── ui.php      ← App/Window/Event/Color/Rect/Graphics
+        ├── ui_enums.php ← EventType/Key/MouseButton/KeyMod/Cursor/Direction/WidgetState/LayoutAlign/ChildSize
+        ├── ui_widget.php ← Widget/Button/Label/TextBox/CheckBox/Slider/WidgetContainer
+        ├── ui_layout.php ← Layout/Stack/CanvasLayout
+        └── ui_softinput.php ← SoftInput（软键盘桥接）
 ```
 
 **两种实现方式，可混用：**

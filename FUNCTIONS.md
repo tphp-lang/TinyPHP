@@ -40,6 +40,7 @@
 | 多线程 (Thread/Mutex/CondVar/WaitGroup) | `object/thread.h` + `compat/tinycthread.h` + `compat/tls.h` | 15 |
 | 异步与协程 (Channel/Future/chan_select) | `object/channel.h` | 20 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
+| `ext/ui` (图形界面，基于 sokol) | `ext/ui/src/ui*.php` + `ui.h` | 9 类 + 9 枚举 |
 | **合计** | | **490+** |
 
 ---
@@ -2686,6 +2687,349 @@ try {
     $db->exec("SELECT * FROM nonexistent_table");
 } catch (Exception $e) {
     echo $e->getMessage();
+}
+```
+
+---
+
+## ui — 图形界面扩展（基于 sokol）✅ 已完成
+
+> 文件: `ext/ui/src/ui.php` / `ui_widget.php` / `ui_layout.php` / `ui_softinput.php` / `ui_enums.php` + `ui.h`
+>
+> 基于 sokol C 库（sokol_app/sokol_gfx/sokol_glue/sokol_log/sokol_time）实现跨平台图形界面。
+> 纯 phpc 模式：C 包装函数在 `ui.h`，PHP 类在 `ui*.php`。所有 UI 类使用 `namespace UI`，
+> 用户通过 `use UI\App;` 引入。`#import ui` 自动加载全部 PHP 源文件。
+>
+> **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)。
+> TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11。GL 版本固定为 3.3 Core（覆盖绝大多数桌面 GPU，比 sokol 默认 4.3 兼容性更好）。
+>
+> **异常处理契约**（关键设计，杜绝静默崩溃）：
+> - **sokol panic 不再 `abort()`**：自定义 `_ui_slog_func` 替代 `sokol_log.h` 的 `slog_func`，panic 级别（log_level==0）输出到 stderr 后调 `tp_throw`（可被 try-catch 捕获），而非 `slog_func` 的 `abort()`（直接杀死进程，PHP 侧无法处理）。
+> - **C 回调异常捕获**：三个 sokol 回调（init/frame/event）均包裹 `TP_TRY`/`TP_CATCH_ANY`。PHP 回调内 `tp_throw` 触发 `longjmp`，若不捕获会跳过 sokol 事件循环导致静默崩溃。捕获后输出到 stderr 并调 `sapp_request_quit()` 干净退出。
+> - **`sapp_run` 异常包裹**：`ui_app_run` 用 `TP_TRY`/`TP_CATCH_ANY` 包裹 `sapp_run`，sokol 初始化 panic（如 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`）转为返回 -1，而非走 `tp_throw` 无帧分支 `exit(1)`。
+> - **pass 自动收尾**：`ui_state_t.pass_active` 跟踪 `sg_begin_pass` 状态，frame 回调末尾自动调用 `sg_end_pass`+`sg_commit`，即使 PHP 回调中途抛异常也不会漏掉，防止 sokol 状态不一致导致下一帧渲染崩溃。
+>
+> **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`。`ui_clear` 调用 `sg_begin_pass` 并设置 `pass_active=true`；`ui_end_frame` 手动结束 pass（可选，frame 回调会自动调用）；无 active pass 时调 `ui_end_frame` 抛 `Exception("end_frame called without active pass")`。
+>
+> **参数校验**（不静默处理）：
+> - `App::__construct` / `ui_app_run`：width/height 必须 > 0，否则抛 `Exception("app_run: invalid window dimensions")`
+> - `Window::setCursor`：cursor 必须 < `_SAPP_MOUSECURSOR_NUM`，否则抛 `Exception("set_cursor: invalid cursor value")`
+> - `Event::fromPtr` 系列：NULL 事件指针抛 `Exception("event_*: NULL event pointer")`（不返回 0 误导调用方）
+> - `ui_end_frame`：在 frame 回调外调用或无 active pass 时抛异常（不静默 return）
+>
+> **事件契约**：sokol `sapp_event*` 指针以 `t_int` 流转（`intptr_t` 转换），PHP 侧通过 `Event::fromPtr($evPtr)` 解析。
+>
+> **回调存储**：`onInit`/`onFrame`/`onEvent`/`SoftInput::onInput` 注册的闭包通过 `phpc_env_pin` 钉在全局 pin 表，防异步回调 UAF。
+>
+> **编译链接标志**（`#import ui` 自动添加）：
+> - Windows：`-lgdi32 -luser32 -lopengl32 -lshell32`
+> - Linux：`-lX11 -lGL -lXi -lXcursor -ldl -lpthread`
+> - macOS：`-framework Cocoa -framework MetalKit -framework Metal`
+>
+> **命名空间**：所有 UI 类位于 `UI` 命名空间下，通过 `use UI\App;` 等引入。C 包装函数使用 `tphp_fn__ui_*` 双下划线前缀（内部使用，不暴露给用户空间）；PHP 侧通过 `_ui_*()` 函数调用（带前导下划线，约定为内部使用）。用户通过 OOP 类使用 UI 功能，不直接调用 `_ui_*` 函数。
+
+### App 类 — 应用入口
+
+> 管理窗口生命周期和回调。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `__construct` | `(int $width, int $height, string $title): void` | 设置窗口尺寸和标题 |
+| `onInit` | `(callable $cb): void` | 注册初始化回调（`sg_setup` 后调用一次） |
+| `onFrame` | `(callable $cb): void` | 注册每帧回调（闭包内调用 `Graphics::*` 绘图） |
+| `onEvent` | `(callable $cb): void` | 注册事件回调，签名 `function(int $evPtr)` |
+| `run` | `(): void` | 进入主循环（阻塞，直到窗口关闭） |
+
+### Window 类 — 窗口查询（静态）
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `width` (静态) | `(): int` | 当前窗口宽度（可随 `Resized` 事件变化） |
+| `height` (静态) | `(): int` | 当前窗口高度 |
+| `dpiScale` (静态) | `(): float` | DPI 缩放比例（high_dpi 模式） |
+| `setCursor` (静态) | `(int $cursor): void` | 设置鼠标光标类型（`Cursor` 枚举值） |
+
+### Event 类 — 事件对象
+
+> 由 `Event::fromPtr(int $evPtr)` 从 `sapp_event*` 指针解析。属性映射 sokol 事件字段。
+
+| 属性/方法 | 类型 | 说明 |
+|-----------|------|------|
+| `type` | `int` | 事件类型（`EventType` 枚举值） |
+| `x` | `int` | 鼠标 X 坐标 |
+| `y` | `int` | 鼠标 Y 坐标 |
+| `button` | `int` | 鼠标按键（`MouseButton` 枚举值） |
+| `key` | `int` | 键码（`Key` 枚举值） |
+| `modifiers` | `int` | 修饰键位掩码（`KeyMod` 位组合） |
+| `codepoint` | `int` | 字符输入 Unicode codepoint（`Char` 事件） |
+| `touchCount` | `int` | 触摸点数量 |
+| `fromPtr` (静态) | `(int $evPtr): Event` | 从 C 事件指针构造 Event 对象 |
+
+### Color 类 — RGBA 颜色
+
+> 0-255 分量。`toUint()` 返回 `0xAABBGGRR` 格式（sokol little-endian RGBA）。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `r` | `int` | 红色分量（0-255） |
+| `g` | `int` | 绿色分量（0-255） |
+| `b` | `int` | 蓝色分量（0-255） |
+| `a` | `int` | 透明度分量（0-255） |
+| `__construct` | `(int $r = 0, int $g = 0, int $b = 0, int $a = 255): void` | RGBA 分量构造 |
+| `toUint` | `(): int` | 转换为 `0xAABBGGRR` uint32 |
+| `black` (静态) | `(): Color` | 黑色 (0,0,0,255) |
+| `white` (静态) | `(): Color` | 白色 (255,255,255,255) |
+| `red` (静态) | `(): Color` | 红色 (255,0,0,255) |
+| `green` (静态) | `(): Color` | 绿色 (0,255,0,255) |
+| `blue` (静态) | `(): Color` | 蓝色 (0,0,255,255) |
+
+### Rect 类 — 矩形区域
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `x` | `int` | 左上角 X 坐标 |
+| `y` | `int` | 左上角 Y 坐标 |
+| `width` | `int` | 宽度 |
+| `height` | `int` | 高度 |
+| `__construct` | `(int $x = 0, int $y = 0, int $width = 0, int $height = 0): void` | 坐标和尺寸构造 |
+| `contains` | `(int $x, int $y): bool` | 判断点是否在矩形内（含左上角，不含右下角） |
+
+### Graphics 类 — 2D 绘图（静态）
+
+> 所有方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `clear` (静态) | `(Color $color): void` | 清屏（设置 pass action clear color） |
+| `fillRect` (静态) | `(Rect $rect, Color $color): void` | 填充矩形 |
+| `drawText` (静态) | `(int $x, int $y, string $text, Color $color): void` | 绘制文本 |
+| `drawLine` (静态) | `(int $x1, int $y1, int $x2, int $y2, Color $color): void` | 绘制直线 |
+| `drawRect` (静态) | `(Rect $rect, Color $color): void` | 绘制矩形边框 |
+| `drawCircle` (静态) | `(int $cx, int $cy, int $r, Color $color): void` | 绘制圆形 |
+
+### Widget 抽象基类 — 控件基类
+
+> 所有控件的基类。生命周期：`init` → `proposeSize` → `setPos` → `draw` → `cleanup`。
+>
+> 注：TinyPHP CodeGenerator 对 `interface` 不生成方法实现，故用 `abstract class` + stub 方法。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `bounds` | `Rect` | 控件边界矩形 |
+| `init` | `(): void` | 初始化控件状态 |
+| `draw` | `(): void` | 渲染控件（在 frame 回调内调用） |
+| `setPos` | `(int $x, int $y): void` | 设置位置（由布局系统调用） |
+| `proposeSize` | `(int $availableW, int $availableH): array` | 提议尺寸，返回 `[w, h]` |
+| `size` | `(): array` | 返回 `[width, height]` |
+| `pointInside` | `(int $x, int $y): bool` | 命中测试 |
+| `cleanup` | `(): void` | 释放资源 |
+| `onMouseDown` | `(int $x, int $y): void` | 鼠标按下事件 |
+| `onMouseUp` | `(int $x, int $y): void` | 鼠标释放事件 |
+| `onMouseMove` | `(int $x, int $y): void` | 鼠标移动事件 |
+| `onKeyDown` | `(int $key): void` | 键盘按下事件 |
+| `onChar` | `(int $codepoint): void` | 字符输入事件 |
+
+### WidgetContainer 类 — 控件容器
+
+> 管理子控件列表和事件分发。z-index = 插入顺序（后加 = 上层）。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `children` | `array` | 子控件列表 |
+| `focusedIdx` | `int` | 当前焦点控件索引（-1 = 无焦点） |
+| `addChild` | `(Widget $w): void` | 添加子控件 |
+| `removeChild` | `(Widget $w): void` | 移除子控件（重置焦点） |
+| `childCount` | `(): int` | 子控件数量 |
+| `drawAll` | `(): void` | 按 z-index 升序绘制所有子控件 |
+| `hitTestIndex` | `(int $x, int $y): int` | 从上层到下层命中测试，返回索引（-1 = 未命中） |
+| `dispatchMouseDown` | `(int $x, int $y): void` | 分发鼠标按下（命中控件设为焦点） |
+| `dispatchMouseUp` | `(int $x, int $y): void` | 向所有子控件广播鼠标释放 |
+| `dispatchMouseMove` | `(int $x, int $y): void` | 向所有子控件广播鼠标移动 |
+| `dispatchKeyDown` | `(int $key): void` | 向焦点控件分发键盘按下 |
+| `dispatchChar` | `(int $codepoint): void` | 向焦点控件分发字符输入 |
+| `cleanupAll` | `(): void` | 清理所有子控件 |
+
+### Button 类 — 按钮控件
+
+> 继承 `Widget`。属性：`text`/`bgColor`/`textColor`/`onClick`/`bounds`/`state`。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `text` | `string` | 按钮文本 |
+| `bgColor` | `Color` | 背景色 |
+| `textColor` | `Color` | 文本颜色 |
+| `onClick` | `mixed` | 点击回调（`function(): void`） |
+| `state` | `int` | 控件状态（`WidgetState` 枚举值） |
+| `__construct` | `(string $text = ""): void` | 构造按钮并设置文本 |
+| `press` | `(): void` | 按下（设置 Pressed 状态） |
+| `release` | `(): void` | 释放（若 Pressed 则触发 `click`） |
+| `click` | `(): void` | 触发 `onClick` 回调 |
+
+### Label 类 — 文本标签
+
+> 继承 `Widget`。无交互，仅显示。属性：`text`/`color`/`fontSize`/`bounds`。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `text` | `string` | 标签文本 |
+| `color` | `Color` | 文本颜色 |
+| `fontSize` | `int` | 字体大小（默认 14） |
+| `__construct` | `(string $text = ""): void` | 构造标签并设置文本 |
+
+### TextBox 类 — 文本输入框
+
+> 继承 `Widget`。支持文本编辑、光标移动、焦点管理。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `text` | `string` | 当前文本 |
+| `cursorPos` | `int` | 光标位置（0 到 `strlen(text)`） |
+| `focused` | `bool` | 是否聚焦 |
+| `bgColor` | `Color` | 背景色 |
+| `textColor` | `Color` | 文本颜色 |
+| `cursorColor` | `Color` | 光标颜色 |
+| `__construct` | `(string $text = ""): void` | 构造输入框并设置初始文本 |
+| `focus` | `(): void` | 获取焦点 |
+| `blur` | `(): void` | 失去焦点 |
+| `handleKeyDown` | `(int $key): void` | 处理键盘（Backspace/Delete/Left/Right/Home/End） |
+| `handleChar` | `(int $codepoint): void` | 处理字符输入（仅可打印 ASCII 32-126） |
+
+### CheckBox 类 — 复选框
+
+> 继承 `Widget`。属性：`checked`/`text`/`onChange`/`color`。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `checked` | `bool` | 是否选中 |
+| `text` | `string` | 复选框标签文本 |
+| `onChange` | `mixed` | 状态变化回调（`function(bool $checked): void`） |
+| `color` | `Color` | 边框颜色 |
+| `__construct` | `(string $text = ""): void` | 构造复选框并设置标签文本 |
+| `toggle` | `(): void` | 切换选中状态，触发 `onChange` |
+| `setChecked` | `(bool $checked): void` | 直接设置选中状态（不触发回调） |
+
+### Slider 类 — 滑块
+
+> 继承 `Widget`。值夹紧到 `[min, max]`。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `min` | `int` | 最小值 |
+| `max` | `int` | 最大值 |
+| `value` | `int` | 当前值（始终在 `[min, max]` 内） |
+| `onChange` | `mixed` | 值变化回调（`function(int $value): void`） |
+| `trackColor` | `Color` | 轨道颜色 |
+| `handleColor` | `Color` | 手柄颜色 |
+| `__construct` | `(int $min, int $max, int $value): void` | 构造滑块并设置范围与初始值 |
+| `beginDrag` | `(int $x, int $y): void` | 开始拖动 |
+| `drag` | `(int $x, int $y): void` | 拖动中（仅 `dragging=true` 时更新） |
+| `endDrag` | `(): void` | 结束拖动 |
+| `setValue` | `(int $value): void` | 直接设置值（夹紧，不触发回调） |
+
+### Layout 抽象基类 — 布局基类
+
+> 继承 `Widget`。布局本身也是控件，可嵌套。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `addWidget` | `(Widget $w, int $a = 0, int $b = 0, int $c = 0, int $d = 0): void` | 添加子控件（参数语义由子类定义） |
+| `updateLayout` | `(): void` | 重新计算子控件位置和尺寸 |
+| `asWidget` | `(): Widget` | 返回自身作为 Widget（用于嵌套） |
+
+### Stack 类 — flex 线性布局
+
+> 继承 `Layout`。支持 Row/Column 方向、Compact/Stretch/Fixed 尺寸模式。
+>
+> **静态分派限制**：`proposeSize` 由 Widget 基类返回 `[0,0]`，Compact 模式直接读取子控件预计算的 `bounds`（用户需在 `addWidget` 前先调用 `proposeSize`）。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `direction` | `int` | 方向（`Direction::Row=0` / `Column=1`） |
+| `spacing` | `int` | 子控件间距（默认 4） |
+| `padding` | `int` | 容器内边距（默认 0） |
+| `children` | `array` | 子控件列表 |
+| `sizeModes` | `array` | 各子控件的尺寸模式（`ChildSize` 枚举值） |
+| `dimensions` | `array` | 各子控件的固定尺寸（Fixed 模式） |
+| `__construct` | `(int $direction = 0): void` | 构造布局，`direction`=`Direction::Row=0` / `Column=1` |
+| `column` (静态) | `(...$children): Stack` | 创建垂直排列布局（Compact 模式） |
+| `row` (静态) | `(...$children): Stack` | 创建水平排列布局（Compact 模式） |
+| `addWidget` | `(Widget $w, int $sizeMode = 0, int $fixedDim = 0): void` | 添加子控件，`sizeMode`=`ChildSize` 枚举值 |
+
+### CanvasLayout 类 — 绝对定位布局
+
+> 继承 `Layout`。子控件位置由 `addWidget` 时指定。
+
+| 属性/方法 | 类型/签名 | 说明 |
+|-----------|----------|------|
+| `children` | `array` | 子控件列表 |
+| `childX` | `array` | 各子控件 X 坐标 |
+| `childY` | `array` | 各子控件 Y 坐标 |
+| `childW` | `array` | 各子控件宽度 |
+| `childH` | `array` | 各子控件高度 |
+| `addWidget` | `(Widget $w, int $x, int $y, int $width, int $height): void` | 添加子控件并设置边界 |
+| `updateLayout` | `(): void` | 重新应用 `addWidget` 时记录的边界 |
+
+### SoftInput 类 — 软键盘管理（静态）
+
+> 桌面端 `show`/`hide` 为 no-op（有物理键盘），`isVisible` 始终返回 false。
+> 移动端未来调用平台原生 API。回调存储在 C 层 `_ui_softinput_cb`。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `show` (静态) | `(): void` | 显示软键盘（桌面端 no-op） |
+| `hide` (静态) | `(): void` | 隐藏软键盘（桌面端 no-op） |
+| `isVisible` (静态) | `(): bool` | 软键盘是否可见 |
+| `onInput` (静态) | `(callable $cb): void` | 注册字符输入回调（`function(int $codepoint): void`） |
+| `dispatch` (静态) | `(int $codepoint): void` | 分发字符输入（由 `Char` 事件触发） |
+| `clear` (静态) | `(): void` | 清理回调 |
+
+### 枚举
+
+| 枚举 | 类型 | 说明 |
+|------|------|------|
+| `EventType` | `int` | 事件类型（Invalid=0/KeyDown=1/KeyUp=2/Char=3/MouseDown=4/MouseUp=5/MouseScroll=6/MouseMove=7/MouseEnter=8/MouseLeave=9/TouchDown=10/TouchMove=11/TouchUp=12/TouchCancel=13/Resized=14/Iconified=15/Restored=16/Focused=17/Unfocused=18/Suspended=19/Resumed=20/Quit=21） |
+| `Key` | `int` | 常用键码（Invalid=0/Backspace=8/Tab=9/Enter=13/Escape=27/Space=32/PageUp=33/PageDown=34/End=35/Home=36/Left=37/Up=38/Right=39/Down=40/Delete=46/A-Z=65-90/Shift=16/Ctrl=17/Alt=18/F1-F12=112-123） |
+| `MouseButton` | `int` | 鼠标按键（Left=0/Right=1/Middle=2） |
+| `KeyMod` | `int` | 修饰键位掩码（Shift=1/Ctrl=2/Alt=4/Super=8） |
+| `Cursor` | `int` | 光标类型（Arrow=0/IBeam=1/Cross=2/Hand=3/ResizeX=4/ResizeY=5/ResizeAll=6/None=7） |
+| `Direction` | `int` | 布局方向（Row=0/Column=1） |
+| `WidgetState` | `int` | 控件状态（Normal=0/Hovered=1/Pressed=2/Focused=3/Disabled=4） |
+| `LayoutAlign` | `int` | 布局对齐（Start=0/Center=1/End=2/Stretch=3） |
+| `ChildSize` | `int` | 子元素尺寸模式（Compact=0/Stretch=1/Fixed=2） |
+
+### 示例
+
+```php
+#import ui
+
+use UI\App;
+use UI\Color;
+use UI\Rect;
+use UI\Graphics;
+use UI\Event;
+use UI\EventType;
+use UI\Key;
+
+class Main {
+    public function main(): void {
+        $app = new App(640, 480, "My App");
+
+        $app->onFrame(function(): void {
+            Graphics::clear(Color::black());
+            Graphics::fillRect(new Rect(10, 10, 100, 50), Color::red());
+            Graphics::drawText(10, 80, "Hello UI", Color::white());
+        });
+
+        $app->onEvent(function(int $evPtr): void {
+            $ev = Event::fromPtr($evPtr);
+            if ($ev->type === EventType::KeyDown->value
+                && $ev->key === Key::Escape->value) {
+                echo "escape pressed\n";
+            }
+        });
+
+        $app->run();
+    }
 }
 ```
 

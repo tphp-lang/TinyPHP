@@ -875,6 +875,8 @@ class TypeChecker implements ASTVisitor
     /** C 类型字符串 → PHP 等价类型字符串（用于 TypeChecker 注册 C 函数签名）
      *  C.int → t_int, C.double → t_float, C.char* → t_string,
      *  C.void → void, 其他指针 → mixed（不透明指针）, 其他标量 → t_int
+     *  TinyPHP 内部类型（t_int/t_string/t_callback/t_float/t_bool/t_array*）原样透传，
+     *  用于 phpc 扩展中 C 函数直接接收 TinyPHP 值类型参数（如 t_callback 回调）。
      *  变参 '...' 原样返回（由消费方识别为变参标记） */
     private static function cTypeToPHPEquiv(string $cType): string
     {
@@ -884,6 +886,12 @@ class TypeChecker implements ASTVisitor
         // 剥去 C. 前缀
         if (str_starts_with($cType, 'C.')) {
             $cType = substr($cType, 2);
+        }
+
+        // TinyPHP 内部类型原样透传（t_int/t_string/t_callback/t_float/t_bool/t_array*）
+        // 用于 phpc 扩展中 C 函数直接接收 TinyPHP 值类型参数
+        if (in_array($cType, ['t_int', 't_string', 't_callback', 't_float', 't_bool', 't_array*'], true)) {
+            return $cType;
         }
 
         // void → void

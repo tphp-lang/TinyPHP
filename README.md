@@ -324,7 +324,9 @@ $idx = chan_select([$ch1, $ch2], 100);  // 1
 
 ### 扩展系统
 
-对标 PHP extension，`#import` 按需引入。已内置 `pcntl`、`posix`、`stream`、`openssl`、`curl`、`sqlite3`、`pdo`(SQLite+MySQL+PostgreSQL)、`pgsql`、`pdo_pgsql`、`zlib`、`zip`、`iconv`、`exif`、`fileinfo`、`calendar`、`filter`、`hash`、`gd` 扩展：
+对标 PHP extension，`#import` 按需引入。已内置 `pcntl`、`posix`、`stream`、`openssl`、`curl`、`sqlite3`、`pdo`(SQLite+MySQL+PostgreSQL)、`pgsql`、`pdo_pgsql`、`zlib`、`zip`、`iconv`、`exif`、`fileinfo`、`calendar`、`filter`、`hash`、`gd`、`ui` 扩展：
+
+- **ui** — 基于 sokol 的跨平台图形界面扩展（`#import ui`），提供 App/Window/Graphics 2D 绘图、Widget 控件体系（Button/Label/TextBox/CheckBox/Slider）、Stack/CanvasLayout 布局、事件系统和软键盘桥接。Windows/Linux 使用 OpenGL，macOS 使用 Metal。
 
 ```php
 <?php

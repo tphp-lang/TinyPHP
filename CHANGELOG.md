@@ -8,6 +8,20 @@
 
 ### 新增
 
+- **ext/ui**（`ext/ui/`）：基于 sokol C 库的跨平台图形界面扩展（纯 phpc 模式）。9 个 PHP 类 + 9 个枚举，覆盖窗口管理、2D 绘图、控件体系、布局系统和事件处理。
+  - **底层依赖**：内置 sokol C 库源码（sokol_app/sokol_gfx/sokol_glue/sokol_log/sokol_time），位于 `ext/ui/sokol/`，零运行时依赖
+  - **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)。TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11
+  - **核心类**：`App`（窗口生命周期 + onInit/onFrame/onEvent 回调）、`Window`（静态：width/height/dpiScale/setCursor）、`Event`（fromPtr 解析 sapp_event 指针）、`Color`（RGBA + toUint 0xAABBGGRR）、`Rect`（contains 命中测试）、`Graphics`（静态：clear/fillRect/drawText/drawLine/drawRect/drawCircle）
+  - **控件体系**：`Widget` 抽象基类（init/draw/setPos/proposeSize/pointInside + 事件方法）、`WidgetContainer`（addChild/drawAll/hitTestIndex/dispatch*）、`Button`（press/release/click + onClick）、`Label`、`TextBox`（focus/blur/handleKeyDown/handleChar）、`CheckBox`（toggle/setChecked + onChange）、`Slider`（beginDrag/drag/endDrag/setValue + 值夹紧）
+  - **布局系统**：`Layout` 抽象基类（addWidget/updateLayout/asWidget）、`Stack`（flex 风格，row/column 静态方法，Compact/Stretch/Fixed 尺寸模式）、`CanvasLayout`（绝对定位）
+  - **软键盘桥接**：`SoftInput` 静态类（show/hide/isVisible/onInput/dispatch/clear），桌面端 show/hide 为 no-op，移动端未来支持
+  - **枚举**：EventType（22 值）/ Key（ASCII+VK_*）/ MouseButton / KeyMod / Cursor / Direction / WidgetState / LayoutAlign / ChildSize
+  - **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`
+  - **事件契约**：sokol `sapp_event*` 指针以 `t_int` 流转（intptr_t 转换），PHP 侧通过 `Event::fromPtr($evPtr)` 解析
+  - **回调安全**：`onInit`/`onFrame`/`onEvent`/`SoftInput::onInput` 注册的闭包通过 `phpc_env_pin` 钉在全局 pin 表，防异步回调 UAF
+  - **TCC Windows 兼容**：`RegisterRawInputDevices`/`GetRawInputData` 在 user32.def 缺失，提供 stub 满足链接器（仅 mouse_lock 时调用，UI 测试不使用）
+  - 测试：`test/ui/ui_color_test.php`（Color 单元测试）+ `test/ui/ui_widget_smoke_test.php`（Widget/Layout 冒烟测试）+ 4 个集成测试（`ui_basic.php`/`ui_events.php`/`ui_widget_render.php`/`ui_layout_render.php`，标记 `@skip` 需图形环境）
+
 - **异步与协程通信库**（`include/object/channel.h`）：参考 vlang 设计的 CSP 风格异步通信原语，采用 tphp OOP 思想。1 个全局函数 + 2 个类 + 2 个异常类型。
   - **Channel 类**：CSP 风格有界通道，环形缓冲区实现（push/pop 零 malloc），阻塞前自旋 750 次以减少 syscall。9 个方法：`__construct/push/pop/tryPush/tryPop/close/isClosed/length/capacity`
   - **Future 类**：一次性异步结果传递机制，支持 await/then/catch 链式调用和 all/race 组合器。10 个方法：`create`（静态）/`resolve/reject/await/isReady/isRejected/then/catch` + 静态 `all/race`
@@ -57,6 +71,16 @@
   - 测试：`test/type/array_generic_test.php`（基础功能）+ `test/type/array_generic_funcs_test.php`（内置函数全覆盖）
 
 ### 变更
+
+- **ext/ui 异常处理修复**（`ext/ui/src/ui.h`）：解决 UI 测试窗口秒退且无错误输出的静默崩溃问题。
+  - **sokol panic 不再 `abort()`**：新增自定义 `_ui_slog_func` 替代 `sokol_log.h` 的 `slog_func`。原实现中 sokol panic（如 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`）会调 `abort()` 直接杀死进程（exit code 3），无任何错误输出。新实现 panic 级别输出到 stderr 后调 `tp_throw`（可被 try-catch 捕获），错误信息可见
+  - **C 回调异常捕获**：三个 sokol 回调（`_ui_sokol_init_cb`/`_ui_sokol_frame_cb`/`_ui_sokol_event_cb`）均包裹 `TP_TRY`/`TP_CATCH_ANY`。原实现中 PHP 回调内 `tp_throw` 触发 `longjmp` 会跳过 sokol 事件循环导致静默崩溃。捕获后输出到 stderr 并调 `sapp_request_quit()` 干净退出
+  - **`ui_app_run` 异常包裹**：用 `TP_TRY`/`TP_CATCH_ANY` 包裹 `sapp_run`，sokol 初始化 panic 转为返回 -1，而非走 `tp_throw` 无帧分支 `exit(1)`
+  - **pass 自动收尾**：`ui_state_t` 新增 `pass_active` 字段跟踪 `sg_begin_pass` 状态。frame 回调末尾自动调用 `sg_end_pass`+`sg_commit`，即使 PHP 回调中途抛异常也不会漏掉，防止 sokol 状态不一致导致下一帧渲染崩溃
+  - **`sapp_desc` 配置 logger**：原 `sapp_desc` 未配 `.logger`，sokol 错误无处输出。现已配置 `.logger = { .func = _ui_slog_func }`；`sg_desc` 同步配置
+  - **GL 版本降级**：从 sokol 默认 4.3 降到 3.3 Core，覆盖绝大多数桌面 GPU
+  - **参数校验**（不静默处理）：`ui_app_run` 校验 width/height > 0；`ui_window_set_cursor` 校验 cursor < `_SAPP_MOUSECURSOR_NUM`；所有 `ui_event_*` 函数 NULL 指针从返回 0 改为 `tp_throw`；`ui_end_frame` 静默 return 改为 `tp_throw`
+  - 测试验证：`test/ui/ui_basic.php` 编译通过，WGL panic 错误信息可见（`[sapp][panic] WIN32_WGL_FIND_PIXELFORMAT_FAILED: failed to find matching WGL pixel format`），进程正常退出（exit code 0）
 
 - **扩展 `$builtinArrElemTypes` 注册表**（`CodeGenerator.php`）：
   - 新增 `array_fill`→`t_var`、`array_column`→`t_var`（元素通过 VAR_* 包装存储）
