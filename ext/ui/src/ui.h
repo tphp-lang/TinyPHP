@@ -391,6 +391,7 @@ static inline bool _ui_probe_gpu_available(void) {
 //   - msg_hwnd：辅助窗口（WS_HIDE，用于加载 WGL 扩展）
 //   - 主窗口：WS_SHOW（用户可见）
 //   FindWindowW 只返回一个，故用 EnumWindows 枚举所有 "SOKOLAPP" 窗口并逐个销毁。
+#if defined(_WIN32) || defined(_WIN64)
 static BOOL CALLBACK _ui_destroy_sokol_enumproc(HWND hwnd, LPARAM lparam) {
     (void)lparam;
     wchar_t cls[32];
@@ -399,6 +400,7 @@ static BOOL CALLBACK _ui_destroy_sokol_enumproc(HWND hwnd, LPARAM lparam) {
     }
     return TRUE;  // 继续枚举
 }
+#endif
 
 static inline void _ui_destroy_sokol_orphans(void) {
 #if defined(_WIN32) || defined(_WIN64)
