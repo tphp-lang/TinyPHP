@@ -1,4 +1,5 @@
 <?php
+// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
 // test/ui/ui_button_test.php — UI\Button 控件单元测试
 //
 // 验证 Button 构造、默认/自定义颜色、onClick 回调、pointInside 命中、

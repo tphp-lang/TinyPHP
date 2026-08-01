@@ -1,4 +1,5 @@
 <?php
+// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
 // test/ui/ui_widget_smoke_test.php — UI Widget/Layout 冒烟测试
 //
 // 验证 Widget/Layout 体系能编译且基本逻辑正确。

@@ -1,4 +1,5 @@
 <?php
+// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
 // test/ui/ui_textbox_test.php — UI\TextBox 控件单元测试
 //
 // 验证 TextBox 构造、光标移动、Home/End、非打印字符过滤、focus/blur、

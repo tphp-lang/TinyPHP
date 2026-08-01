@@ -1,4 +1,5 @@
 <?php
+// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
 // test/ui/ui_softinput_test.php — UI\SoftInput 软键盘单元测试（桌面端）
 //
 // 验证 show/hide/isVisible 状态切换、onInput 回调注册 + dispatch 触发、clear 清理回调。

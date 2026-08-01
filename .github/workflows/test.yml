@@ -162,7 +162,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev default-mysql-client postgresql-client
+          sudo apt install -y gcc make libc6-dev default-mysql-client postgresql-client libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
       - name: Add TCC
@@ -251,7 +251,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y gcc make libc6-dev default-mysql-client postgresql-client
+          sudo apt install -y gcc make libc6-dev default-mysql-client postgresql-client libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev
           if [ "${{ matrix.compiler }}" = "clang" ]; then sudo apt install -y clang; fi
 
       - name: Add TCC

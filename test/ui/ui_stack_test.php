@@ -1,4 +1,5 @@
 <?php
+// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
 // test/ui/ui_stack_test.php — UI\Stack 布局单元测试
 //
 // 验证 Stack Row/Column 排列、Compact/Stretch/Fixed 尺寸模式、spacing/padding 应用、

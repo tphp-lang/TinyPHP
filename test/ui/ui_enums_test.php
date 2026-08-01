@@ -1,4 +1,5 @@
 <?php
+// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
 // test/ui/ui_enums_test.php — UI 枚举完整性单元测试
 //
 // 验证所有枚举值可访问且数值正确（映射 sokol / 标准 VK 键码）。

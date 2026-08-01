@@ -1,4 +1,5 @@
 <?php
+// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
 // test/ui/ui_checkbox_test.php — UI\CheckBox 控件单元测试
 //
 // 验证 CheckBox 构造（默认/带初始值）、toggle 切换、onChange 回调、
