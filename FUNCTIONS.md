@@ -2703,13 +2703,20 @@ try {
 > **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)。
 > TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11。GL 版本固定为 3.3 Core（覆盖绝大多数桌面 GPU，比 sokol 默认 4.3 兼容性更好）。
 >
+> **后端自动选择（GPU → CPU 软件渲染回退）**：
+> `ui_app_run` 先尝试 sokol（GPU）后端，若初始化失败（如无硬件 GPU、RDP/虚拟机环境下 WGL 像素格式选择失败 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`），sokol panic 经 `_ui_slog_func` 转为 `tp_throw`，`ui_app_run` 捕获后自动回退到 CPU 软件渲染后端（`_cpu_app_run`，输出 `[ui] GPU backend unavailable, falling back to CPU software renderer`）。整个过程对 PHP 侧透明，用户代码无需任何改动。
+> - **DrawDevice 抽象**（`ui_draw_device_t`，参考 vlang/ui 的 DrawDevice 接口设计）：定义 `begin_pass`/`end_pass`/`fill_rect`/`draw_text`/`draw_line`/`draw_rect`/`draw_circle` 函数指针表。`ui_clear`/`ui_fill_rect` 等公共 API 通过 `_ui_state.device` 分派到当前后端（`_ui_sokol_device` 或 `_ui_cpu_device`）。
+> - **CPU 软件渲染后端**（`ui_cpu.h`，Windows 实现）：Win32 窗口 + `CreateDIBSection` 帧缓冲 + GDI 显示。`fill_rect`/`draw_line`（Bresenham）/`draw_rect`/`draw_circle`（中点圆算法）直接操作帧缓冲像素；`draw_text` 用 GDI `TextOut` 绘制（利用系统字体，无需内嵌字体）。事件循环用 `PeekMessage`，事件构造 `sapp_event` 结构保持与 sokol 后端兼容（PHP 侧 `Event::fromPtr` 无需改动）。
+> - **后端类型**（`ui_backend_t`）：`UI_BACKEND_SOKOL`（GPU）/ `UI_BACKEND_CPU`（软件渲染）。窗口查询函数（`ui_window_width` 等）按 `backend` 分派到 `sapp_*` 或 `_cpu_window_*`。
+> - macOS Metal 总是可用（含软件回退），无需 CPU 后端；Linux 桌面通常有 GPU 或 llvmpipe，X11 CPU 后端预留未实现。
+>
 > **异常处理契约**（关键设计，杜绝静默崩溃）：
 > - **sokol panic 不再 `abort()`**：自定义 `_ui_slog_func` 替代 `sokol_log.h` 的 `slog_func`，panic 级别（log_level==0）输出到 stderr 后调 `tp_throw`（可被 try-catch 捕获），而非 `slog_func` 的 `abort()`（直接杀死进程，PHP 侧无法处理）。
-> - **C 回调异常捕获**：三个 sokol 回调（init/frame/event）均包裹 `TP_TRY`/`TP_CATCH_ANY`。PHP 回调内 `tp_throw` 触发 `longjmp`，若不捕获会跳过 sokol 事件循环导致静默崩溃。捕获后输出到 stderr 并调 `sapp_request_quit()` 干净退出。
-> - **`sapp_run` 异常包裹**：`ui_app_run` 用 `TP_TRY`/`TP_CATCH_ANY` 包裹 `sapp_run`，sokol 初始化 panic（如 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`）转为返回 -1，而非走 `tp_throw` 无帧分支 `exit(1)`。
-> - **pass 自动收尾**：`ui_state_t.pass_active` 跟踪 `sg_begin_pass` 状态，frame 回调末尾自动调用 `sg_end_pass`+`sg_commit`，即使 PHP 回调中途抛异常也不会漏掉，防止 sokol 状态不一致导致下一帧渲染崩溃。
+> - **C 回调异常捕获**：三个 sokol 回调（init/frame/event）均包裹 `TP_TRY`/`TP_CATCH_ANY`。PHP 回调内 `tp_throw` 触发 `longjmp`，若不捕获会跳过 sokol 事件循环导致静默崩溃。捕获后输出到 stderr 并调 `sapp_request_quit()` 干净退出。CPU 后端的事件循环同样包裹回调异常。
+> - **`sapp_run` 异常包裹 + 自动回退**：`ui_app_run` 用 `TP_TRY`/`TP_CATCH_ANY` 包裹 `sapp_run`，sokol 初始化 panic（如 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`）被捕获后自动回退到 CPU 软件渲染后端，而非直接返回错误或 `exit(1)`。
+> - **pass 自动收尾**：`ui_state_t.pass_active` 跟踪 `begin_pass` 状态，frame 回调末尾自动调用 `end_pass`，即使 PHP 回调中途抛异常也不会漏掉，防止后端状态不一致导致下一帧渲染崩溃。
 >
-> **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`。`ui_clear` 调用 `sg_begin_pass` 并设置 `pass_active=true`；`ui_end_frame` 手动结束 pass（可选，frame 回调会自动调用）；无 active pass 时调 `ui_end_frame` 抛 `Exception("end_frame called without active pass")`。
+> **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`；无绘图设备时抛 `Exception("no draw device initialized")`。`ui_clear` 调用 `device->begin_pass` 并设置 `pass_active=true`；`ui_end_frame` 调用 `device->end_pass` 手动结束 pass（可选，frame 回调会自动调用）；无 active pass 时调 `ui_end_frame` 抛 `Exception("end_frame called without active pass")`。GPU 后端的形状绘制（`fill_rect` 等）尚未实现时抛异常提示（无 GPU 环境会自动回退到 CPU 后端，CPU 后端全部已实现）。
 >
 > **参数校验**（不静默处理）：
 > - `App::__construct` / `ui_app_run`：width/height 必须 > 0，否则抛 `Exception("app_run: invalid window dimensions")`

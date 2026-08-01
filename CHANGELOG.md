@@ -82,6 +82,14 @@
   - **参数校验**（不静默处理）：`ui_app_run` 校验 width/height > 0；`ui_window_set_cursor` 校验 cursor < `_SAPP_MOUSECURSOR_NUM`；所有 `ui_event_*` 函数 NULL 指针从返回 0 改为 `tp_throw`；`ui_end_frame` 静默 return 改为 `tp_throw`
   - 测试验证：`test/ui/ui_basic.php` 编译通过，WGL panic 错误信息可见（`[sapp][panic] WIN32_WGL_FIND_PIXELFORMAT_FAILED: failed to find matching WGL pixel format`），进程正常退出（exit code 0）
 
+- **ext/ui GPU → CPU 软件渲染自动回退**（`ext/ui/src/ui.h` / `ext/ui/src/ui_cpu.h`）：无硬件 GPU 环境（RDP/虚拟机）下 sokol WGL 像素格式失败时，自动回退到 CPU 软件渲染后端，窗口正常显示，对 PHP 侧透明。
+  - **DrawDevice 抽象**（`ui_draw_device_t`，参考 vlang/ui 的 DrawDevice 接口设计）：定义 `begin_pass`/`end_pass`/`fill_rect`/`draw_text`/`draw_line`/`draw_rect`/`draw_circle` 函数指针表。`ui_clear`/`ui_fill_rect` 等公共 API 通过 `_ui_state.device` 分派到当前后端（`_ui_sokol_device` 或 `_ui_cpu_device`），实现后端解耦
+  - **后端自动选择**：`ui_app_run` 先尝试 sokol（GPU）后端，`sapp_run` 的 panic 经 `_ui_slog_func` 转为 `tp_throw`，被 `TP_CATCH_ANY` 捕获后重置状态、切换 `backend=UI_BACKEND_CPU`、`device=&_ui_cpu_device`，调用 `_cpu_app_run` 回退。输出 `[ui] GPU backend unavailable, falling back to CPU software renderer`
+  - **CPU 软件渲染后端**（`ui_cpu.h`，Windows 实现）：Win32 窗口 + `CreateDIBSection` 帧缓冲（top-down 32bit BGR）+ GDI `BitBlt` 显示。`fill_rect` 直接操作帧缓冲像素；`draw_line` 用 Bresenham 算法；`draw_rect` 绘制矩形边框；`draw_circle` 用中点圆算法；`draw_text` 用 GDI `TextOut`（系统字体，无需内嵌字体）。事件循环用 `PeekMessage`，事件构造 `sapp_event` 结构保持与 sokol 后端兼容（PHP 侧 `Event::fromPtr` 无需改动）。窗口查询函数（`ui_window_width` 等）按 `backend` 分派到 `sapp_*` 或 `_cpu_window_*`
+  - **sokol 后端形状绘制**：`begin_pass`/`end_pass` 已实现（复用 `sg_begin_pass`/`sg_end_pass`/`sg_commit`）；`fill_rect` 等形状绘制在 GPU 后端尚未实现时抛异常提示（无 GPU 环境会自动回退到 CPU 后端，CPU 后端全部已实现）
+  - macOS Metal 总是可用（含软件回退），无需 CPU 后端；Linux 桌面通常有 GPU 或 llvmpipe，X11 CPU 后端预留未实现
+  - 测试验证：`test/ui/ui_basic.php` 在无 GPU 环境下编译运行，sokol WGL panic 后自动回退到 CPU 后端，窗口正常显示（640x480 黑色背景 + 红色矩形 + 白色文本），不再秒退
+
 - **扩展 `$builtinArrElemTypes` 注册表**（`CodeGenerator.php`）：
   - 新增 `array_fill`→`t_var`、`array_column`→`t_var`（元素通过 VAR_* 包装存储）
   - 新增 `str_split`/`parse_str`/`parse_url`/`iconv_get_encoding`→`t_string`（内部 VAR_STRING 存储）

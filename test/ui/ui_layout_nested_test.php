@@ -18,7 +18,7 @@
 #debug 3. inner2 btnC bounds=40,0,40,24
 #debug
 #debug -- proposeSize (outer) --
-#debug 4. outer proposeSize w>=80
+#debug 4. outer proposeSize w>=80 -> 1 (w=80)
 #debug
 #debug -- Deep nesting (3 levels) --
 #debug 5. deep btn bounds=0,0,40,24

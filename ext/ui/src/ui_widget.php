@@ -503,14 +503,17 @@ class TextBox extends Widget
 
         if ($key === Key::Backspace->value) {
             if ($this->cursorPos > 0) {
-                $this->text = substr($this->text, 0, $this->cursorPos - 1) .
-                              substr($this->text, $this->cursorPos);
+                // 注意：TinyPHP substr 中 length=0 表示"到末尾"，故 cursorPos-1==0 时
+                // 不能用 substr(text,0,0)（会返回整个串），需用空串字面量
+                $prefix = ($this->cursorPos > 1) ? substr($this->text, 0, $this->cursorPos - 1) : "";
+                $this->text = $prefix . substr($this->text, $this->cursorPos);
                 $this->cursorPos = $this->cursorPos - 1;
             }
         } elseif ($key === Key::Delete->value) {
             if ($this->cursorPos < strlen($this->text)) {
-                $this->text = substr($this->text, 0, $this->cursorPos) .
-                              substr($this->text, $this->cursorPos + 1);
+                // 同上：cursorPos==0 时前缀为空串，避免 substr(text,0,0) 返回整个串
+                $prefix = ($this->cursorPos > 0) ? substr($this->text, 0, $this->cursorPos) : "";
+                $this->text = $prefix . substr($this->text, $this->cursorPos + 1);
             }
         } elseif ($key === Key::Left->value) {
             if ($this->cursorPos > 0) {
@@ -813,7 +816,7 @@ class Slider extends Widget
         $relX = $x - $this->bounds->x;
         if ($relX < 0) { $relX = 0; }
         if ($relX > $w) { $relX = $w; }
-        $ratio = $relX / $w;
+        $ratio = (float)$relX / (float)$w;
         $this->value = $this->min + (int)($ratio * $range);
         $this->clampValue();
         if ($this->onChange !== null) {

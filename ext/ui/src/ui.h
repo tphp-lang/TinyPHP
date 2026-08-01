@@ -74,15 +74,37 @@ static __attribute__((used)) UINT __stdcall _tphp_GetRawInputData_stub(
 #include "sokol_log.h"
 #include "sokol_time.h"
 
+// ── DrawDevice：绘图设备抽象（函数指针表）──
+//   参考 vlang/ui 的 DrawDevice 接口设计，允许 sokol(GPU) 和 CPU(软件) 两种后端。
+//   ui_clear/ui_fill_rect 等公共 API 通过 _ui_device 分派到具体后端实现。
+typedef struct ui_draw_device {
+    void (*begin_pass)(t_int rgba);  // 清屏 + 开始 pass
+    void (*end_pass)(void);           // 结束 pass + 准备上屏
+    void (*fill_rect)(t_int x, t_int y, t_int w, t_int h, t_int rgba);
+    void (*draw_text)(t_int x, t_int y, const char* text, int len, t_int rgba);
+    void (*draw_line)(t_int x1, t_int y1, t_int x2, t_int y2, t_int rgba);
+    void (*draw_rect)(t_int x, t_int y, t_int w, t_int h, t_int rgba);
+    void (*draw_circle)(t_int cx, t_int cy, t_int r, t_int rgba);
+} ui_draw_device_t;
+
+// ── 后端类型 ──
+typedef enum {
+    UI_BACKEND_NONE = 0,   // 未初始化
+    UI_BACKEND_SOKOL,      // GPU 加速（sokol_gfx）
+    UI_BACKEND_CPU,        // CPU 软件渲染
+} ui_backend_t;
+
 // ── UI 全局状态结构 ──
 typedef struct {
     bool initialized;       // sg_setup 是否已调用
     bool in_frame;          // 是否在 frame 回调内（绘图 API 前置条件）
-    bool pass_active;       // sg_begin_pass 已调用，需匹配 sg_end_pass+sg_commit
+    bool pass_active;       // begin_pass 已调用，需匹配 end_pass
+    ui_backend_t backend;   // 当前后端类型
+    ui_draw_device_t* device; // 当前绘图设备（sokol 或 CPU）
     t_callback on_init_cb;  // PHP 侧 init 回调
     t_callback on_frame_cb; // PHP 侧 frame 回调
     t_callback on_event_cb; // PHP 侧 event 回调
-    // 绘图管线状态
+    // sokol 绘图管线状态（仅 GPU 后端使用）
     sg_pipeline quad_pip;   // 矩形绘制管线
     sg_buffer quad_buf;     // 顶点缓冲区
 } ui_state_t;
@@ -185,14 +207,229 @@ static void _ui_sokol_cleanup_cb(void) {
     _ui_state.initialized = false;
 }
 
+// ── 包含 CPU 软件渲染后端 ──
+//   必须在此处包含：ui_cpu.h 依赖上文的 _ui_state、sapp_event、ui_draw_device_t、
+//   TP_TRY/tp_throw 等定义；其定义的 _ui_cpu_device / _cpu_app_run 供下文 ui_app_run
+//   的后端选择与窗口/绘图分派使用。
+#include "ui_cpu.h"
+
+// ── sokol 后端 DrawDevice 实现 ──
+//   begin_pass/end_pass 复用 sokol pass 管理（sg_begin_pass/sg_end_pass/sg_commit）；
+//   形状绘制（fill_rect 等）在 GPU 后端尚未实现，抛异常提示。
+//   无 GPU 环境下 ui_app_run 会自动回退到 CPU 后端，不会走到这些函数。
+static void _sokol_begin_pass(t_int rgba) {
+    float a = (float)((rgba >> 24) & 0xFF) / 255.0f;
+    float r = (float)((rgba >> 16) & 0xFF) / 255.0f;
+    float g = (float)((rgba >> 8) & 0xFF) / 255.0f;
+    float b = (float)(rgba & 0xFF) / 255.0f;
+    sg_pass_action pa = (sg_pass_action){
+        .colors[0] = { .load_action = SG_LOADACTION_CLEAR, .clear_value = { r, g, b, a } }
+    };
+    sg_begin_pass(&(sg_pass){ .action = pa, .swapchain = sglue_swapchain() });
+}
+
+static void _sokol_end_pass(void) {
+    sg_end_pass();
+    sg_commit();
+}
+
+static void _sokol_fill_rect(t_int x, t_int y, t_int w, t_int h, t_int rgba) {
+    (void)x; (void)y; (void)w; (void)h; (void)rgba;
+    tp_throw("fill_rect not yet implemented on GPU backend (auto-fallback to CPU in non-GPU environments)");
+}
+
+static void _sokol_draw_text(t_int x, t_int y, const char* text, int len, t_int rgba) {
+    (void)x; (void)y; (void)text; (void)len; (void)rgba;
+    tp_throw("draw_text not yet implemented on GPU backend (auto-fallback to CPU in non-GPU environments)");
+}
+
+static void _sokol_draw_line(t_int x1, t_int y1, t_int x2, t_int y2, t_int rgba) {
+    (void)x1; (void)y1; (void)x2; (void)y2; (void)rgba;
+    tp_throw("draw_line not yet implemented on GPU backend (auto-fallback to CPU in non-GPU environments)");
+}
+
+static void _sokol_draw_rect(t_int x, t_int y, t_int w, t_int h, t_int rgba) {
+    (void)x; (void)y; (void)w; (void)h; (void)rgba;
+    tp_throw("draw_rect not yet implemented on GPU backend (auto-fallback to CPU in non-GPU environments)");
+}
+
+static void _sokol_draw_circle(t_int cx, t_int cy, t_int r, t_int rgba) {
+    (void)cx; (void)cy; (void)r; (void)rgba;
+    tp_throw("draw_circle not yet implemented on GPU backend (auto-fallback to CPU in non-GPU environments)");
+}
+
+static ui_draw_device_t _ui_sokol_device = {
+    .begin_pass  = _sokol_begin_pass,
+    .end_pass    = _sokol_end_pass,
+    .fill_rect   = _sokol_fill_rect,
+    .draw_text   = _sokol_draw_text,
+    .draw_line   = _sokol_draw_line,
+    .draw_rect   = _sokol_draw_rect,
+    .draw_circle = _sokol_draw_circle,
+};
+
 // ── ui_* C 函数（通过 function C.xxx(...): C.ret; 声明 + C->xxx() 调用）──
 
+// ── GPU 可用性预探测 ──
+//   在调用 sapp_run 之前判断是否有硬件加速的 OpenGL 像素格式。sokol 的 Win32 初始化
+//   先 CreateWindowEx + ShowWindow（窗口可见），再 _sapp_wgl_create_context（WGL 像素
+//   格式选择）。若 WGL 失败 panic longjmp，跳过 destroy_window 清理，留下可见孤儿窗口。
+//   因此尽量在 sapp_run 之前探测：无 GPU 时直接走 CPU 后端，sokol 完全不参与。
+//
+//   探测方式（与 sokol 用同一套 WGL_ARB_pixel_format 扩展）：
+//   1. 创建临时隐藏窗口 + 临时 GL context（加载 WGL 扩展必须有 context）
+//   2. 通过 wglGetProcAddress 获取 wglGetPixelFormatAttribivARB
+//   3. 遍历所有像素格式，查找 WGL_ACCELERATION_ARB != WGL_NO_ACCELERATION_ARB 的格式
+//   4. 有硬件加速格式 → GPU 可用；全部软件渲染 → 无 GPU
+//   5. 销毁临时窗口/context（不留痕迹）
+//
+//   注意：预探测用临时窗口 DC，sokol 用主窗口 DC，某些环境（如 RDP）下两者查询结果
+//   可能不同。因此预探测仅作为快速路径优化；若预探测误判（sokol 仍失败），由
+//   ui_app_run 的 TP_CATCH_ANY 兜底，通过 _ui_destroy_sokol_orphans 清理孤儿窗口后
+//   回退 CPU 后端。
+static inline bool _ui_probe_gpu_available(void) {
+#if defined(_WIN32) || defined(_WIN64)
+    // WGL 扩展常量（避免依赖 wglext.h）
+    #define _TPHP_WGL_NUMBER_PIXEL_FORMATS_ARB   0x2000
+    #define _TPHP_WGL_DRAW_TO_WINDOW_ARB         0x2001
+    #define _TPHP_WGL_ACCELERATION_ARB           0x2003
+    #define _TPHP_WGL_SUPPORT_OPENGL_ARB         0x2010
+    #define _TPHP_WGL_PIXEL_TYPE_ARB             0x2013
+    #define _TPHP_WGL_TYPE_RGBA_ARB              0x202B
+    #define _TPHP_WGL_NO_ACCELERATION_ARB        0x2025
+
+    typedef BOOL (WINAPI *_tphp_fn_wglGetPixelFormatAttribivARB)(HDC, int, int, UINT, const int*, int*);
+    typedef const char* (WINAPI *_tphp_fn_wglGetExtensionsStringARB)(HDC);
+
+    HINSTANCE hinst = GetModuleHandleW(NULL);
+    WNDCLASSW wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.hInstance = hinst;
+    wc.lpszClassName = L"TinyPHP_UI_GPUProbe";
+    if (!RegisterClassW(&wc)) return true;  // 注册失败保守视为可用
+
+    // 创建隐藏窗口（无 WS_VISIBLE），不留痕迹
+    HWND hwnd = CreateWindowExW(0, L"TinyPHP_UI_GPUProbe", L"", WS_POPUP,
+                                0, 0, 1, 1, NULL, NULL, hinst, NULL);
+    if (!hwnd) {
+        UnregisterClassW(L"TinyPHP_UI_GPUProbe", hinst);
+        return true;
+    }
+    HDC dc = GetDC(hwnd);
+
+    // 用旧 API 设置一个基础像素格式（创建 context 必须先 SetPixelFormat）
+    PIXELFORMATDESCRIPTOR pfd;
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.nSize = sizeof(pfd);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.cColorBits = 24;
+    pfd.iLayerType = PFD_MAIN_PLANE;
+    int pf = ChoosePixelFormat(dc, &pfd);
+    bool gpu_ok = false;
+    if (pf != 0 && SetPixelFormat(dc, pf, &pfd)) {
+        HGLRC ctx = wglCreateContext(dc);
+        if (ctx && wglMakeCurrent(dc, ctx)) {
+            _tphp_fn_wglGetPixelFormatAttribivARB wglGetAttrib =
+                (_tphp_fn_wglGetPixelFormatAttribivARB)wglGetProcAddress("wglGetPixelFormatAttribivARB");
+            _tphp_fn_wglGetExtensionsStringARB wglGetExtStr =
+                (_tphp_fn_wglGetExtensionsStringARB)wglGetProcAddress("wglGetExtensionsStringARB");
+
+            if (wglGetExtStr) {
+                const char* exts = wglGetExtStr(dc);
+                bool has_arb_pf = exts && strstr(exts, "WGL_ARB_pixel_format");
+                if (has_arb_pf && wglGetAttrib) {
+                    int num_formats = 0;
+                    int attr = _TPHP_WGL_NUMBER_PIXEL_FORMATS_ARB;
+                    if (wglGetAttrib(dc, 0, 0, 1, &attr, &num_formats) && num_formats > 0) {
+                        // 遍历查找硬件加速格式（与 sokol _sapp_wgl_find_pixel_format 同一标准）
+                        int tags[4] = {
+                            _TPHP_WGL_SUPPORT_OPENGL_ARB,
+                            _TPHP_WGL_DRAW_TO_WINDOW_ARB,
+                            _TPHP_WGL_PIXEL_TYPE_ARB,
+                            _TPHP_WGL_ACCELERATION_ARB,
+                        };
+                        int vals[4] = {0};
+                        for (int i = 1; i <= num_formats; i++) {
+                            if (wglGetAttrib(dc, i, 0, 4, tags, vals)) {
+                                if (vals[0] /* support_opengl */
+                                    && vals[1] /* draw_to_window */
+                                    && vals[2] == _TPHP_WGL_TYPE_RGBA_ARB
+                                    && vals[3] != _TPHP_WGL_NO_ACCELERATION_ARB) {
+                                    gpu_ok = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            wglMakeCurrent(NULL, NULL);
+            wglDeleteContext(ctx);
+        }
+    }
+
+    ReleaseDC(hwnd, dc);
+    DestroyWindow(hwnd);
+    UnregisterClassW(L"TinyPHP_UI_GPUProbe", hinst);
+    return gpu_ok;
+#else
+    // macOS Metal 总是可用；Linux 桌面通常有 GPU 或 llvmpipe
+    return true;
+#endif
+}
+
+// ── 销毁 sokol 孤儿窗口 ──
+//   sokol 的 Win32 初始化顺序：先 CreateWindowEx + ShowWindow（主窗口可见），再
+//   _sapp_wgl_create_context（WGL 像素格式选择）。若 WGL 失败 _SAPP_PANIC，经
+//   _ui_slog_func 转为 tp_throw（longjmp），跳过 sokol 的 _sapp_win32_destroy_window
+//   清理，留下可见的孤儿窗口。
+//
+//   sokol 共创建两个窗口（类名均为 "SOKOLAPP"）：
+//   - msg_hwnd：辅助窗口（WS_HIDE，用于加载 WGL 扩展）
+//   - 主窗口：WS_SHOW（用户可见）
+//   FindWindowW 只返回一个，故用 EnumWindows 枚举所有 "SOKOLAPP" 窗口并逐个销毁。
+static BOOL CALLBACK _ui_destroy_sokol_enumproc(HWND hwnd, LPARAM lparam) {
+    (void)lparam;
+    wchar_t cls[32];
+    if (GetClassNameW(hwnd, cls, 32) && wcscmp(cls, L"SOKOLAPP") == 0) {
+        DestroyWindow(hwnd);
+    }
+    return TRUE;  // 继续枚举
+}
+
+static inline void _ui_destroy_sokol_orphans(void) {
+#if defined(_WIN32) || defined(_WIN64)
+    EnumWindows(_ui_destroy_sokol_enumproc, 0);
+    UnregisterClassW(L"SOKOLAPP", GetModuleHandleW(NULL));
+#endif
+}
+
 // App 类
+//   后端自动选择（双层保险，确保任何环境下只有一个窗口）：
+//   1. 预探测 GPU：无 GPU 时直接走 CPU 后端，sokol 完全不参与（无孤儿窗口）
+//   2. 预探测误判兜底：sapp_run 的 panic 被 TP_CATCH_ANY 捕获后，先 _ui_destroy_sokol_orphans
+//      销毁所有 sokol 窗口，再回退 CPU 后端。即使预探测不准确（如 RDP 下临时窗口 DC
+//      与主窗口 DC 查询结果不同），也不会留下孤儿窗口。
+//   整个过程对 PHP 侧透明，用户代码无需改动。
 static inline t_int ui_app_run(t_int width, t_int height, t_string title) {
     if (width <= 0 || height <= 0) {
         tp_throw("app_run: invalid window dimensions (width and height must be > 0)");
         return -1;
     }
+    // 第一层：预探测 GPU，无 GPU 直接走 CPU（sokol 不参与，无孤儿窗口）
+    if (!_ui_probe_gpu_available()) {
+        _ui_state.backend = UI_BACKEND_CPU;
+        _ui_state.device = &_ui_cpu_device;
+        fflush(stderr);
+        fprintf(stderr, "[ui] GPU unavailable, using CPU software renderer\n");
+        return _cpu_app_run(width, height, title);
+    }
+    // GPU 可用（或预探测不确定）：走 sokol 后端
+    _ui_state.backend = UI_BACKEND_SOKOL;
+    _ui_state.device = &_ui_sokol_device;
     sapp_desc desc = (sapp_desc){
         .init_cb = _ui_sokol_init_cb,
         .frame_cb = _ui_sokol_frame_cb,
@@ -207,12 +444,21 @@ static inline t_int ui_app_run(t_int width, t_int height, t_string title) {
         .gl.major_version = 3,
         .gl.minor_version = 3,
     };
-    // 包裹 sapp_run：sokol panic（如 WGL 像素格式失败）会通过 _ui_slog_func 抛异常，
-    // 在此捕获后返回 -1，而非让 tp_throw 走到无帧分支 exit(1)
+    // 第二层：sokol panic 兜底。预探测用临时窗口 DC，sokol 用主窗口 DC，某些环境
+    // （如 RDP）下两者结果不同，预探测可能误判。sapp_run 的 panic 被 TP_CATCH_ANY
+    // 捕获后，先销毁所有 sokol 孤儿窗口（msg_hwnd + 主窗口），再回退 CPU 后端。
     TP_TRY {
         sapp_run(&desc);
     } TP_CATCH_ANY(_tp_msg) {
-        return -1;
+        _ui_destroy_sokol_orphans();
+        _ui_state.initialized = false;
+        _ui_state.in_frame = false;
+        _ui_state.pass_active = false;
+        _ui_state.backend = UI_BACKEND_CPU;
+        _ui_state.device = &_ui_cpu_device;
+        fflush(stderr);
+        fprintf(stderr, "[ui] GPU backend unavailable, falling back to CPU software renderer\n");
+        return _cpu_app_run(width, height, title);
     } TP_END_TRY
     return 0;
 }
@@ -232,33 +478,39 @@ static inline void ui_app_on_event(t_callback cb) {
     tphp_fn_phpc_env_pin(cb);
 }
 
-// Window 类
-static inline t_int ui_window_width(void) { return (t_int)sapp_width(); }
-static inline t_int ui_window_height(void) { return (t_int)sapp_height(); }
-static inline t_float ui_window_dpi_scale(void) { return (t_float)sapp_dpi_scale(); }
+// Window 类（按 backend 分派：sokol 用 sapp_*，CPU 用 _cpu_window_*）
+static inline t_int ui_window_width(void) {
+    if (_ui_state.backend == UI_BACKEND_CPU) return _cpu_window_width();
+    return (t_int)sapp_width();
+}
+static inline t_int ui_window_height(void) {
+    if (_ui_state.backend == UI_BACKEND_CPU) return _cpu_window_height();
+    return (t_int)sapp_height();
+}
+static inline t_float ui_window_dpi_scale(void) {
+    if (_ui_state.backend == UI_BACKEND_CPU) return _cpu_window_dpi_scale();
+    return (t_float)sapp_dpi_scale();
+}
 static inline void ui_window_set_cursor(t_int cursor) {
     if (cursor < 0 || cursor >= (t_int)_SAPP_MOUSECURSOR_NUM) {
         tp_throw("set_cursor: invalid cursor value (must be 0..SAPP_MOUSECURSOR_NUM-1)");
         return;
     }
+    if (_ui_state.backend == UI_BACKEND_CPU) { _cpu_window_set_cursor(cursor); return; }
     sapp_set_mouse_cursor((sapp_mouse_cursor)(int)cursor);
 }
 
-// Graphics 绘图 API
+// Graphics 绘图 API（通过 _ui_state.device 分派到 sokol 或 CPU 后端）
 static inline void ui_clear(t_int rgba) {
     if (!_ui_state.in_frame) {
         tp_throw("drawing outside frame callback");
         return;
     }
-    // 拆分 0xAABBGGRR → float RGBA
-    float a = (float)((rgba >> 24) & 0xFF) / 255.0f;
-    float r = (float)((rgba >> 16) & 0xFF) / 255.0f;
-    float g = (float)((rgba >> 8) & 0xFF) / 255.0f;
-    float b = (float)(rgba & 0xFF) / 255.0f;
-    sg_pass_action pa = (sg_pass_action){
-        .colors[0] = { .load_action = SG_LOADACTION_CLEAR, .clear_value = { r, g, b, a } }
-    };
-    sg_begin_pass(&(sg_pass){ .action = pa, .swapchain = sglue_swapchain() });
+    if (!_ui_state.device) {
+        tp_throw("no draw device initialized");
+        return;
+    }
+    _ui_state.device->begin_pass(rgba);
     _ui_state.pass_active = true;
 }
 
@@ -273,8 +525,7 @@ static inline void ui_end_frame(void) {
         tp_throw("end_frame called without active pass (missing clear?)");
         return;
     }
-    sg_end_pass();
-    sg_commit();
+    if (_ui_state.device) _ui_state.device->end_pass();
     _ui_state.pass_active = false;
 }
 
@@ -283,7 +534,11 @@ static inline void ui_fill_rect(t_int x, t_int y, t_int w, t_int h, t_int rgba) 
         tp_throw("drawing outside frame callback");
         return;
     }
-    tp_throw("fill_rect not yet implemented");
+    if (!_ui_state.device) {
+        tp_throw("no draw device initialized");
+        return;
+    }
+    _ui_state.device->fill_rect(x, y, w, h, rgba);
 }
 
 static inline void ui_draw_text(t_int x, t_int y, t_string text, t_int rgba) {
@@ -291,7 +546,11 @@ static inline void ui_draw_text(t_int x, t_int y, t_string text, t_int rgba) {
         tp_throw("drawing outside frame callback");
         return;
     }
-    tp_throw("text rendering not yet implemented");
+    if (!_ui_state.device) {
+        tp_throw("no draw device initialized");
+        return;
+    }
+    _ui_state.device->draw_text(x, y, STR_PTR(text), text.length, rgba);
 }
 
 static inline void ui_draw_line(t_int x1, t_int y1, t_int x2, t_int y2, t_int rgba) {
@@ -299,7 +558,11 @@ static inline void ui_draw_line(t_int x1, t_int y1, t_int x2, t_int y2, t_int rg
         tp_throw("drawing outside frame callback");
         return;
     }
-    tp_throw("draw_line not yet implemented");
+    if (!_ui_state.device) {
+        tp_throw("no draw device initialized");
+        return;
+    }
+    _ui_state.device->draw_line(x1, y1, x2, y2, rgba);
 }
 
 static inline void ui_draw_rect(t_int x, t_int y, t_int w, t_int h, t_int rgba) {
@@ -307,7 +570,11 @@ static inline void ui_draw_rect(t_int x, t_int y, t_int w, t_int h, t_int rgba) 
         tp_throw("drawing outside frame callback");
         return;
     }
-    tp_throw("draw_rect not yet implemented");
+    if (!_ui_state.device) {
+        tp_throw("no draw device initialized");
+        return;
+    }
+    _ui_state.device->draw_rect(x, y, w, h, rgba);
 }
 
 static inline void ui_draw_circle(t_int cx, t_int cy, t_int r, t_int rgba) {
@@ -315,7 +582,11 @@ static inline void ui_draw_circle(t_int cx, t_int cy, t_int r, t_int rgba) {
         tp_throw("drawing outside frame callback");
         return;
     }
-    tp_throw("draw_circle not yet implemented");
+    if (!_ui_state.device) {
+        tp_throw("no draw device initialized");
+        return;
+    }
+    _ui_state.device->draw_circle(cx, cy, r, rgba);
 }
 
 // 事件查询（从 sapp_event 指针提取字段）

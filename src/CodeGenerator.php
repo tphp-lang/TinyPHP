@@ -2497,8 +2497,11 @@ class CodeGenerator implements ASTVisitor
                         // 短形式: set => expr;  → self->prop = expr; ($value 是新值)
                         $exprCode = $hook->expr->accept($this);
                         if ($ptype === 't_string') {
+                            // 先求值到临时，再 free 旧值（防止 expr 读取同一属性）
+                            $tmp = '_tmp_' . (++$this->tmpVarCounter);
+                            $o[] = $this->ind("t_string {$tmp} = {$exprCode};");
                             $o[] = $this->ind("tphp_rt_str_free(&self->{$pname});");
-                            $o[] = $this->ind("self->{$pname} = tphp_rt_str_dup({$exprCode});");
+                            $o[] = $this->ind("self->{$pname} = tphp_rt_str_dup({$tmp});");
                         } else {
                             $o[] = $this->ind("self->{$pname} = {$exprCode};");
                         }
@@ -3724,7 +3727,10 @@ class CodeGenerator implements ASTVisitor
                 // self-assignment guard: $obj = $obj->method() 时 method 可能返回 this
                 $code = "{$prevType} {$tmp} = {$expr}; if ({$tmp} != (void*){$var}) tp_obj_release((void*){$var}); {$var} = {$tmp};";
             } elseif ($prevType === 't_string') {
-                $code = "tphp_rt_str_free(&{$var}); {$w} = {$expr};";
+                // 先求值 RHS 到临时变量，再 free 旧值，再赋值
+                // （防止 RHS 读取自身时读到已 free 的空串，如 $s = substr($s,0,1) . "X" . substr($s,1)）
+                $tmp = '_tmp_' . (++$this->tmpVarCounter);
+                $code = "t_string {$tmp} = {$expr}; tphp_rt_str_free(&{$var}); {$w} = {$tmp};";
             } elseif ($prevType === 't_array*') {
                 // 数组重赋值：先求值新值，释放旧数组，再赋值
                 // self-assignment guard: $result = func(..., $result, ...) 时 func 可能返回同一个指针
@@ -3757,7 +3763,9 @@ class CodeGenerator implements ASTVisitor
                         $tmp = '_tmp_' . (++$this->tmpVarCounter);
                         $code = "{$prevType} {$tmp} = {$unwrapped}; if ({$tmp} != (void*){$var}) tp_obj_release((void*){$var}); {$var} = {$tmp};";
                     } elseif ($prevType === 't_string') {
-                        $code = "tphp_rt_str_free(&{$var}); {$w2} = {$unwrapped};";
+                        // 先求值到临时，再 free 旧值（同 3727 修复，防止 RHS 读取自身）
+                        $tmp = '_tmp_' . (++$this->tmpVarCounter);
+                        $code = "t_string {$tmp} = {$unwrapped}; tphp_rt_str_free(&{$var}); {$w2} = {$tmp};";
                     } else {
                         $code = "{$w2} = {$unwrapped};";
                     }
@@ -4900,11 +4908,15 @@ class CodeGenerator implements ASTVisitor
         $srcType = $this->inferType($node->value);
         $isSrcTVar = ($srcType === 't_var');
         if ($propType === 't_string') {
+            // 先求值 RHS 到临时变量，再 free 旧值，再 str_dup 赋值
+            // （防止 RHS 读取同一属性时读到已 free 的空串，如 $this->text = substr($this->text,0,1) . "X"）
             if ($isSrcTVar) {
                 // mixed → string：用 tphp_fn_strval 提取字符串
-                return "tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup(tphp_fn_strval({$val}));";
+                $tmp = '_tmp_' . (++$this->tmpVarCounter);
+                return "t_string {$tmp} = tphp_fn_strval({$val}); tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup({$tmp});";
             }
-            return "tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup({$val});";
+            $tmp = '_tmp_' . (++$this->tmpVarCounter);
+            return "t_string {$tmp} = {$val}; tphp_rt_str_free(&{$target}); {$target} = tphp_rt_str_dup({$tmp});";
         }
         if ($propType === 't_array*') {
             // 属性持有数组引用：retain 新值，释放旧值（防止外层作用域释放后属性悬空）
@@ -4947,7 +4959,9 @@ class CodeGenerator implements ASTVisitor
                 return "{$target} = VAR_NULL();";
             }
             if ($srcType === 't_string') {
-                return "tphp_rt_str_free(&({$target})); {$target} = VAR_STRING(tphp_rt_str_dup({$val}));";
+                // 先求值到临时，再 free 旧值（同上，防止 RHS 读取同一 t_var 属性自身）
+                $tmp = '_tmp_' . (++$this->tmpVarCounter);
+                return "t_string {$tmp} = {$val}; tphp_rt_str_free(&({$target})); {$target} = VAR_STRING(tphp_rt_str_dup({$tmp}));";
             }
             if ($srcType === 't_array*') {
                 return "tphp_fn_arr_retain({$val}); if ({$target}.value._array != NULL) tphp_fn_arr_free({$target}.value._array); {$target} = VAR_ARRAY({$val});";
