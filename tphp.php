@@ -1261,6 +1261,13 @@ if (is_file($cFile) && strpos(file_get_contents($cFile), 'openssl/src/openssl.h'
 }
 // openssl 链接 flags 由 ext/openssl/src/openssl.php 通过 #flag 声明（-I 路径）
 // 源码已由 tphp.php 自动收集到 $allCFiles，无需额外 -lssl -lcrypto
+// macOS + clang/gcc: sokol_app.h 通过 #import <AppKit/AppKit.h> 引入 Objective-C 框架,
+//   纯 C 模式下 clang 不识别 @class 等 ObjC 语法,需用 -x objective-c 切换编译模式。
+//   TCC 不支持 -x objective-c,已有 @skip:darwin+tcc 跳过。
+if (PHP_OS_FAMILY === 'Darwin' && !$isTCC
+    && is_file($cFile) && strpos(file_get_contents($cFile), 'sokol_app.h') !== false) {
+    $extraFlags .= ' -x objective-c';
+}
 // -shared 模式：生成动态库
 $sharedFlag = $isShared ? ' -shared' : '';
 // 项目根目录作为额外 -I 路径，让 ext/ 下的扩展头文件（如 ext/stream/src/stream.h）可被 #include 查找到

@@ -3415,6 +3415,24 @@ class CodeGenerator implements ASTVisitor
                     $code = "(({$cn}*)({$vn}).value._object)";
                 }
             }
+            // 子类→父类 upcast（与参数 upcast 对称）
+            //   如 Layout::asWidget(): Widget { return $this; }
+            //   $this 为 Layout*，返回类型 Widget*，需生成 (Widget*)this
+            if ($node->expr instanceof VariableExpr
+                && str_starts_with($node->expr->name, '$')
+                && self::isClassCType($this->currentRetType)) {
+                // 对 $this 直接用 className，避免 inferType 走 inferredType 路径返回错误类型
+                $exprType = ($node->expr->name === '$this')
+                    ? $this->className . '*'
+                    : $this->inferType($node->expr);
+                if (self::isClassCType($exprType)) {
+                    $exprCn = rtrim($exprType, '*');
+                    $retCn  = rtrim($this->currentRetType, '*');
+                    if ($exprCn !== $retCn && $this->isSubclassOf($exprCn, $retCn)) {
+                        $code = "({$this->currentRetType}){$code}";
+                    }
+                }
+            }
             if ($this->currentRetType === 't_var') {
                 $code = $this->wrapTvarAssign($node->expr, $code);
             }
