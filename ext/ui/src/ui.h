@@ -69,6 +69,9 @@ static __attribute__((used)) UINT __stdcall _tphp_GetRawInputData_stub(
     #define SOKOL_GLCORE
 #elif defined(__APPLE__)
     #define SOKOL_METAL
+    // macOS ObjC 模式: AppKit 系统头链最终引入 <netinet/ip.h>,使用 BSD 类型 u_int/u_char/u_short。
+    //   ObjC 编译模式下这些类型的定义链断裂,显式包含 <sys/types.h> 补全。
+    #include <sys/types.h>
 #elif defined(__linux__)
     #define SOKOL_GLCORE
 #endif
