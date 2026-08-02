@@ -25,7 +25,13 @@
 #include "val.h"
 #include "phpc.h"
 
-// ── SAL 标注兼容（TCC 的 windows.h 不含 sal.h，sokol WinMain 需要）──
+// ── SAL 标注兼容 ──
+// clang on Windows: UCRT 头使用 _In_opt_z_/_Check_return_ 等 SAL 注解,
+//   clang 不像 MSVC 自动包含 <sal.h>,需显式包含。
+// TCC: <sal.h> 不可用,手动定义常用注解为空（sokol WinMain 需要）。
+#if defined(_WIN32) && defined(__clang__)
+#include <sal.h>
+#endif
 #ifndef _In_
 #define _In_
 #endif
@@ -68,11 +74,20 @@ static __attribute__((used)) UINT __stdcall _tphp_GetRawInputData_stub(
 #endif
 #define SOKOL_IMPL
 #define SOKOL_NO_ENTRY
+// macOS: sokol_app.h #import <AppKit/AppKit.h>, ObjC 头中 +null 方法声明
+//   会被 types.h 的 #define null ((void *)0) 破坏（展开为 +((void*)0) 语法错误）。
+//   sokol 头中 null 仅出现在注释,无 C 标识符使用,undef 安全。
+#if defined(__APPLE__)
+#undef null
+#endif
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "sokol_glue.h"
 #include "sokol_log.h"
 #include "sokol_time.h"
+#if defined(__APPLE__)
+#define null ((void *)0)
+#endif
 
 // ── DrawDevice：绘图设备抽象（函数指针表）──
 //   参考 vlang/ui 的 DrawDevice 接口设计，允许 sokol(GPU) 和 CPU(软件) 两种后端。

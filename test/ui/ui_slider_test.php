@@ -1,6 +1,5 @@
 <?php
-// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
-// @skip:windows+clang — clang 编译 Win32 头时 SAL 注解未定义,需 MSVC 头文件兼容
+// @skip:darwin+tcc — TCC 不支持 -x objective-c 和 -framework 链接（clang/gcc 正常）
 // test/ui/ui_slider_test.php — UI\Slider 控件单元测试
 //
 // 验证 Slider 构造、值夹紧、setValue、onChange 回调、拖动模拟、范围为 0 处理。

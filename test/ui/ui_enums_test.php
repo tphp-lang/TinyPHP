@@ -1,6 +1,5 @@
 <?php
-// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
-// @skip:windows+clang — clang 编译 Win32 头时 SAL 注解未定义,需 MSVC 头文件兼容
+// @skip:darwin+tcc — TCC 不支持 -x objective-c 和 -framework 链接（clang/gcc 正常）
 // test/ui/ui_enums_test.php — UI 枚举完整性单元测试
 //
 // 验证所有枚举值可访问且数值正确（映射 sokol / 标准 VK 键码）。
