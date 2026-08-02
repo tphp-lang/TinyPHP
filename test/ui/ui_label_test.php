@@ -1,5 +1,5 @@
 <?php
-// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
+// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
 // test/ui/ui_label_test.php — UI\Label 控件单元测试
 //
 // 验证 Label 构造、默认/自定义属性、setPos + pointInside 命中、

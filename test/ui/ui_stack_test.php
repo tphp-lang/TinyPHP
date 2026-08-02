@@ -1,5 +1,5 @@
 <?php
-// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
+// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
 // test/ui/ui_stack_test.php — UI\Stack 布局单元测试
 //
 // 验证 Stack Row/Column 排列、Compact/Stretch/Fixed 尺寸模式、spacing/padding 应用、

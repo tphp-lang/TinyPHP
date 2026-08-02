@@ -30,6 +30,11 @@ foreach ($iter as $file) {
             $curOS = strtolower(PHP_OS_FAMILY);
             $curCC = strtolower($compiler);
             if (str_contains($curOS, $skipOS) && $curCC === $skipCC) continue;
+        } elseif (preg_match('/@skip:(\w+)/', $content, $m)) {
+            // 纯平台 skip（如 @skip:darwin）— 跳过该平台所有编译器
+            $skipOS = strtolower($m[1]);
+            $curOS = strtolower(PHP_OS_FAMILY);
+            if (str_contains($curOS, $skipOS)) continue;
         } else {
             continue;
         }

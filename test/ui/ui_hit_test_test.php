@@ -1,5 +1,5 @@
 <?php
-// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
+// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
 // test/ui/ui_hit_test_test.php — UI 命中测试单元测试
 //
 // 验证 WidgetContainer.hitTestIndex：多控件分区命中、z-index 倒序（后添加=上层优先）、

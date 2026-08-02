@@ -1,5 +1,5 @@
 <?php
-// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
+// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
 // test/ui/ui_button_test.php — UI\Button 控件单元测试
 //
 // 验证 Button 构造、默认/自定义颜色、onClick 回调、pointInside 命中、

@@ -1,5 +1,5 @@
 <?php
-// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
+// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
 // test/ui/ui_slider_test.php — UI\Slider 控件单元测试
 //
 // 验证 Slider 构造、值夹紧、setValue、onChange 回调、拖动模拟、范围为 0 处理。

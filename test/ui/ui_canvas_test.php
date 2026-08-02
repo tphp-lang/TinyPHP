@@ -1,5 +1,5 @@
 <?php
-// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
+// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
 // test/ui/ui_canvas_test.php — UI\CanvasLayout 布局单元测试
 //
 // 验证 CanvasLayout 绝对定位：addWidget 设置子项 bounds、多子项坐标、

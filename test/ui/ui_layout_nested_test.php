@@ -1,5 +1,5 @@
 <?php
-// @skip:darwin+tcc — TCC on macOS 不支持 -framework 链接选项（gcc/clang 正常）
+// @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
 // test/ui/ui_layout_nested_test.php — UI 嵌套布局单元测试
 //
 // 验证 Stack 内 Stack 的递归布局：外层 updateLayout 后需手动调用内层 updateLayout
