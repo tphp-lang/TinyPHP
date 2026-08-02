@@ -709,14 +709,16 @@ class Slider extends Widget
         Graphics::fillRect($trackRect, $this->trackColor);
 
         // 绘制手柄
+        // 注意：TinyPHP 对 int / int 生成整数除法（截断为 0），需 (float) 强制
+        // 转换为浮点除法，否则 ratio 恒为 0，手柄始终在最左端不随 value 移动。
         $handleW = 12;
         $handleH = 12;
         $range = $this->max - $this->min;
-        $ratio = 0;
+        $ratio = 0.0;
         if ($range > 0) {
-            $ratio = ($this->value - $this->min) / $range;
+            $ratio = (float)($this->value - $this->min) / (float)$range;
         }
-        $handleX = $this->bounds->x + (int)($ratio * ($this->bounds->width - $handleW));
+        $handleX = $this->bounds->x + (int)($ratio * (float)($this->bounds->width - $handleW));
         $handleY = $this->bounds->y + ($this->bounds->height - $handleH) / 2;
         $handleRect = new Rect($handleX, $handleY, $handleW, $handleH);
         Graphics::fillRect($handleRect, $this->handleColor);
