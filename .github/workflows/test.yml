@@ -116,6 +116,14 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
+          if ('${{ matrix.compiler }}' -ne 'tcc') {
+            # 项目不支持 MSVC。Windows 下 clang/gcc 必须用 MSYS2 安装的 MinGW 版
+            # （gnu/MinGW target，走 MinGW 头而非 MSVC UCRT），而非 GitHub runner
+            # 预装的 LLVM MSVC-target clang。否则 clang 拉 MSVC UCRT 头会导致
+            # sokol→windows.h→corecrt.h 的 SAL 注解未定义而编译失败。
+            # MSYS2 默认安装到 C:\msys64（msys2/setup-msys2@v2 的默认路径）。
+            $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
+          }
           $cc = "${{ matrix.compiler }}"
           $ccFlag = if ($cc -eq 'tcc') { '' } else { '-cc ' + $cc }
           $proc = Start-Process php.exe -ArgumentList '.github/scripts/run_tests.php',$ccFlag -NoNewWindow -PassThru -Wait
