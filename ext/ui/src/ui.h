@@ -69,9 +69,21 @@ static __attribute__((used)) UINT __stdcall _tphp_GetRawInputData_stub(
     #define SOKOL_GLCORE
 #elif defined(__APPLE__)
     #define SOKOL_METAL
-    // macOS ObjC 模式: AppKit 系统头链最终引入 <netinet/ip.h>,使用 BSD 类型 u_int/u_char/u_short。
-    //   ObjC 编译模式下这些类型的定义链断裂,显式包含 <sys/types.h> 补全。
-    #include <sys/types.h>
+    // macOS ObjC 模式: AppKit→PrintCore→cups→netinet/ip.h 使用 BSD 遗留类型 u_int/u_char/u_short。
+    //   ObjC 编译模式下 _POSIX_C_SOURCE 可能被系统头设置,导致 <sys/types.h> 的 BSD 类型被 guard 排除。
+    //   直接定义缺失类型,避免依赖系统头的不确定行为。
+    #ifndef u_char
+    typedef unsigned char  u_char;
+    #endif
+    #ifndef u_short
+    typedef unsigned short u_short;
+    #endif
+    #ifndef u_int
+    typedef unsigned int   u_int;
+    #endif
+    #ifndef u_long
+    typedef unsigned long  u_long;
+    #endif
 #elif defined(__linux__)
     #define SOKOL_GLCORE
 #endif
