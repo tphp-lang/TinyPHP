@@ -1298,7 +1298,7 @@ class CodeGenerator implements ASTVisitor
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_OS_FAMILY STR_LIT("' . $phpOsFamily . '")');
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_SAPI STR_LIT("cli")');
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_VERSION STR_LIT("' . (defined('TPHP_VERSION') ? TPHP_VERSION : '0.0.0') . '")');
-        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_EXTRA_VERSION STR_LIT("-beta.3")');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_EXTRA_VERSION STR_LIT("-beta.9")');
         // 整数常量
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_INT_MAX INT64_MAX');
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_INT_MIN INT64_MIN');
