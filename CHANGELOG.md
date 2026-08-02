@@ -8,6 +8,20 @@
 
 ### 新增
 
+- **ext/ui**（`ext/ui/`）：基于 sokol C 库的跨平台图形界面扩展（纯 phpc 模式）。9 个 PHP 类 + 9 个枚举，覆盖窗口管理、2D 绘图、控件体系、布局系统和事件处理。
+  - **底层依赖**：内置 sokol C 库源码（sokol_app/sokol_gfx/sokol_glue/sokol_log/sokol_time），位于 `ext/ui/sokol/`，零运行时依赖
+  - **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)。TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11
+  - **核心类**：`App`（窗口生命周期 + onInit/onFrame/onEvent 回调）、`Window`（静态：width/height/dpiScale/setCursor）、`Event`（fromPtr 解析 sapp_event 指针）、`Color`（RGBA + toUint 0xAABBGGRR）、`Rect`（contains 命中测试）、`Graphics`（静态：clear/fillRect/drawText/drawLine/drawRect/drawCircle）
+  - **控件体系**：`Widget` 抽象基类（init/draw/setPos/proposeSize/pointInside + 事件方法）、`WidgetContainer`（addChild/drawAll/hitTestIndex/dispatch*）、`Button`（press/release/click + onClick）、`Label`、`TextBox`（focus/blur/handleKeyDown/handleChar）、`CheckBox`（toggle/setChecked + onChange）、`Slider`（beginDrag/drag/endDrag/setValue + 值夹紧）
+  - **布局系统**：`Layout` 抽象基类（addWidget/updateLayout/asWidget）、`Stack`（flex 风格，row/column 静态方法，Compact/Stretch/Fixed 尺寸模式）、`CanvasLayout`（绝对定位）
+  - **软键盘桥接**：`SoftInput` 静态类（show/hide/isVisible/onInput/dispatch/clear），桌面端 show/hide 为 no-op，移动端未来支持
+  - **枚举**：EventType（22 值）/ Key（ASCII+VK_*）/ MouseButton / KeyMod / Cursor / Direction / WidgetState / LayoutAlign / ChildSize
+  - **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`
+  - **事件契约**：sokol `sapp_event*` 指针以 `t_int` 流转（intptr_t 转换），PHP 侧通过 `Event::fromPtr($evPtr)` 解析
+  - **回调安全**：`onInit`/`onFrame`/`onEvent`/`SoftInput::onInput` 注册的闭包通过 `phpc_env_pin` 钉在全局 pin 表，防异步回调 UAF
+  - **TCC Windows 兼容**：`RegisterRawInputDevices`/`GetRawInputData` 在 user32.def 缺失，提供 stub 满足链接器（仅 mouse_lock 时调用，UI 测试不使用）
+  - 测试：`test/ui/ui_color_test.php`（Color 单元测试）+ `test/ui/ui_widget_smoke_test.php`（Widget/Layout 冒烟测试）+ 4 个集成测试（`ui_basic.php`/`ui_events.php`/`ui_widget_render.php`/`ui_layout_render.php`，标记 `@skip` 需图形环境）
+
 - **异步与协程通信库**（`include/object/channel.h`）：参考 vlang 设计的 CSP 风格异步通信原语，采用 tphp OOP 思想。1 个全局函数 + 2 个类 + 2 个异常类型。
   - **Channel 类**：CSP 风格有界通道，环形缓冲区实现（push/pop 零 malloc），阻塞前自旋 750 次以减少 syscall。9 个方法：`__construct/push/pop/tryPush/tryPop/close/isClosed/length/capacity`
   - **Future 类**：一次性异步结果传递机制，支持 await/then/catch 链式调用和 all/race 组合器。10 个方法：`create`（静态）/`resolve/reject/await/isReady/isRejected/then/catch` + 静态 `all/race`
@@ -58,6 +72,24 @@
 
 ### 变更
 
+- **ext/ui 异常处理修复**（`ext/ui/src/ui.h`）：解决 UI 测试窗口秒退且无错误输出的静默崩溃问题。
+  - **sokol panic 不再 `abort()`**：新增自定义 `_ui_slog_func` 替代 `sokol_log.h` 的 `slog_func`。原实现中 sokol panic（如 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`）会调 `abort()` 直接杀死进程（exit code 3），无任何错误输出。新实现 panic 级别输出到 stderr 后调 `tp_throw`（可被 try-catch 捕获），错误信息可见
+  - **C 回调异常捕获**：三个 sokol 回调（`_ui_sokol_init_cb`/`_ui_sokol_frame_cb`/`_ui_sokol_event_cb`）均包裹 `TP_TRY`/`TP_CATCH_ANY`。原实现中 PHP 回调内 `tp_throw` 触发 `longjmp` 会跳过 sokol 事件循环导致静默崩溃。捕获后输出到 stderr 并调 `sapp_request_quit()` 干净退出
+  - **`ui_app_run` 异常包裹**：用 `TP_TRY`/`TP_CATCH_ANY` 包裹 `sapp_run`，sokol 初始化 panic 转为返回 -1，而非走 `tp_throw` 无帧分支 `exit(1)`
+  - **pass 自动收尾**：`ui_state_t` 新增 `pass_active` 字段跟踪 `sg_begin_pass` 状态。frame 回调末尾自动调用 `sg_end_pass`+`sg_commit`，即使 PHP 回调中途抛异常也不会漏掉，防止 sokol 状态不一致导致下一帧渲染崩溃
+  - **`sapp_desc` 配置 logger**：原 `sapp_desc` 未配 `.logger`，sokol 错误无处输出。现已配置 `.logger = { .func = _ui_slog_func }`；`sg_desc` 同步配置
+  - **GL 版本降级**：从 sokol 默认 4.3 降到 3.3 Core，覆盖绝大多数桌面 GPU
+  - **参数校验**（不静默处理）：`ui_app_run` 校验 width/height > 0；`ui_window_set_cursor` 校验 cursor < `_SAPP_MOUSECURSOR_NUM`；所有 `ui_event_*` 函数 NULL 指针从返回 0 改为 `tp_throw`；`ui_end_frame` 静默 return 改为 `tp_throw`
+  - 测试验证：`test/ui/ui_basic.php` 编译通过，WGL panic 错误信息可见（`[sapp][panic] WIN32_WGL_FIND_PIXELFORMAT_FAILED: failed to find matching WGL pixel format`），进程正常退出（exit code 0）
+
+- **ext/ui GPU → CPU 软件渲染自动回退**（`ext/ui/src/ui.h` / `ext/ui/src/ui_cpu.h`）：无硬件 GPU 环境（RDP/虚拟机）下 sokol WGL 像素格式失败时，自动回退到 CPU 软件渲染后端，窗口正常显示，对 PHP 侧透明。
+  - **DrawDevice 抽象**（`ui_draw_device_t`，参考 vlang/ui 的 DrawDevice 接口设计）：定义 `begin_pass`/`end_pass`/`fill_rect`/`draw_text`/`draw_line`/`draw_rect`/`draw_circle` 函数指针表。`ui_clear`/`ui_fill_rect` 等公共 API 通过 `_ui_state.device` 分派到当前后端（`_ui_sokol_device` 或 `_ui_cpu_device`），实现后端解耦
+  - **后端自动选择**：`ui_app_run` 先尝试 sokol（GPU）后端，`sapp_run` 的 panic 经 `_ui_slog_func` 转为 `tp_throw`，被 `TP_CATCH_ANY` 捕获后重置状态、切换 `backend=UI_BACKEND_CPU`、`device=&_ui_cpu_device`，调用 `_cpu_app_run` 回退。输出 `[ui] GPU backend unavailable, falling back to CPU software renderer`
+  - **CPU 软件渲染后端**（`ui_cpu.h`，Windows 实现）：Win32 窗口 + `CreateDIBSection` 帧缓冲（top-down 32bit BGR）+ GDI `BitBlt` 显示。`fill_rect` 直接操作帧缓冲像素；`draw_line` 用 Bresenham 算法；`draw_rect` 绘制矩形边框；`draw_circle` 用中点圆算法；`draw_text` 用 GDI `TextOut`（系统字体，无需内嵌字体）。事件循环用 `PeekMessage`，事件构造 `sapp_event` 结构保持与 sokol 后端兼容（PHP 侧 `Event::fromPtr` 无需改动）。窗口查询函数（`ui_window_width` 等）按 `backend` 分派到 `sapp_*` 或 `_cpu_window_*`
+  - **sokol 后端形状绘制**：`begin_pass`/`end_pass` 已实现（复用 `sg_begin_pass`/`sg_end_pass`/`sg_commit`）；`fill_rect` 等形状绘制在 GPU 后端尚未实现时抛异常提示（无 GPU 环境会自动回退到 CPU 后端，CPU 后端全部已实现）
+  - macOS Metal 总是可用（含软件回退），无需 CPU 后端；Linux 桌面通常有 GPU 或 llvmpipe，X11 CPU 后端预留未实现
+  - 测试验证：`test/ui/ui_basic.php` 在无 GPU 环境下编译运行，sokol WGL panic 后自动回退到 CPU 后端，窗口正常显示（640x480 黑色背景 + 红色矩形 + 白色文本），不再秒退
+
 - **扩展 `$builtinArrElemTypes` 注册表**（`CodeGenerator.php`）：
   - 新增 `array_fill`→`t_var`、`array_column`→`t_var`（元素通过 VAR_* 包装存储）
   - 新增 `str_split`/`parse_str`/`parse_url`/`iconv_get_encoding`→`t_string`（内部 VAR_STRING 存储）
@@ -73,6 +105,9 @@
 - **数组重赋值自赋值 guard 双重释放**（`CodeGenerator.php`）：当数组变量同时作为函数参数且为赋值目标时（如 `$result = exif_parse_ifd(..., $result, ...)`），函数内部可能 `realloc` 了 `$var` 指向的内存，旧指针已失效，此时不能再 `tphp_fn_arr_free` 旧指针。新增 `exprIsCallWithVarArg` 检测赋值表达式是否为函数调用且参数列表包含被赋值变量，命中时跳过旧指针释放，避免双重释放导致的堆损坏（`STATUS_HEAP_CORRUPTION` / `Segmentation fault`）。
 - **注解 `newInstance()` 类型推断**（`CodeGenerator.php`）：`foreach (ROUTE as $v) { $v->newInstance(); }` 中 `$v` 来自 foreach 遍历注解数组时，通过 `varAnnotSource` 追踪来源注解常量，正确推导 `newInstance()` 返回的类指针类型。修复 Linux/macOS 上 `Call to undefined method t_int::hello()` / `void::hello()` 转译错误。
 - **`stream_socket_accept` 错误处理契约**（`stream.h`）：真正的错误（accept 失败等）抛异常供用户 try-catch 捕获，EAGAIN/超时等非错误返回 `-1`，符合 AOT 错误处理原则（用户可通过异常捕获真正的错误，而非静默返回 false）。
+- **非阻塞 socket EAGAIN/EWOULDBLOCK/EINTR 处理**（`stream.h`）：`stream_socket_accept`/`stream_socket_recvfrom`/`stream_socket_sendto` 在非阻塞模式下遇到 EAGAIN/EWOULDBLOCK/EINTR 时返回错误值（`-1`/空字符串）而非抛异常，符合非阻塞 I/O 模型（这些是"预期的非阻塞状态"，由事件循环重试，而非真正错误）。新增 `STREAM_EINTR` 跨平台宏（Windows `WSAEINTR` / POSIX `EINTR`），同时修复 Windows 下 `EINTR` 未定义的编译错误。修复 Workerman 事件循环因未捕获 EAGAIN 异常导致进程崩溃（`STATUS_ACCESS_VIOLATION`）的问题。测试：`test/stream/stream_nonblock_eagain.php`。
+- **未捕获异常 use-after-free 崩溃**（`try.h`）：`tp_throw_ex`/`tp_throw` 宏在未捕获异常路径中先调用 `tphp_rt_free_all()` 释放异常对象，再访问 `_e->message` 打印错误消息，导致 use-after-free（进程以 `STATUS_ACCESS_VIOLATION` 退出，无任何错误信息）。修复：先将异常消息提取到 malloc 缓冲区，打印后再 `tphp_rt_free_all()`。修复后未捕获异常会打印 `Fatal error: Uncaught exception: <msg>` 并 `exit(1)`。测试：`test/error/uncaught_exception_msg.php`。
+- **数组对象属性访问 getter 类型推断**（`CodeGenerator.php`）：`visitArrayAccess` 中未类型化 `array` 属性（如 `public array $conns = []`）的元素类型推断默认走 `tphp_fn_arr_get_int_int`（返回 0/NULL），导致后续对象成员访问空指针解引用崩溃。修复：当 TypeChecker 推导元素类型为 `void*`（对象）时，生成 `tphp_fn_arr_get_int_object` 调用提取对象指针。修复 Workerman `ConnectionPool::$connections[$id]` 返回 NULL 导致 `handleRead` 崩溃的问题。测试：`test/array/prop_array_object_getter.php`。
 - **macOS `-framework` 链接支持**：TCC 不识别 macOS 的 `-framework X` 语法（会把 `X` 当作输入文件，报错 `file 'OpenGL' not found`）。`tphp.php` 在 #flag 处理中自动把 `-framework X` 转换为 `-Wl,-framework,X`（透传给系统 `ld`），`-F path` 同理转换为 `-Wl,-F,path`。`-Wl,` 开头的 token 分离到 `$lateLinkFlags`（链接器选项放在源文件之后，遵循单遍扫描顺序）
 - **gcc/clang 下特化排序/洗牌函数指针类型不兼容**（`array.h`）：`_TPHP_ARR_TYPED_SORT` 和 `_TPHP_ARR_TYPED_SHUFFLE` 宏在特化数组（`t_arr_int*`/`t_arr_str*` 等）上直接调用 `arr_stridx_free`/`arr_intidx_free`，但这两个函数接收 `t_array*`，gcc/clang 严格检查 `-Wincompatible-pointer-types` 报错。修复：调用前显式 cast 为 `(t_array*)`。特化数组结构与 `t_array` 前 6 个字段布局完全一致，cast 安全。TCC 比较宽松未报错，本地测试未发现。CI Windows gcc 全部 247 个测试编译失败，clang 因超时被取消。
 - **`isset`/`empty` 返回类型推导缺失**（`CodeGenerator.php`）：`inferCallReturnType()` 未覆盖 `isset`/`empty`，导致使用这些函数的表达式触发 "Unknown function return type" 编译错误。修复：在类型推导路径中添加 `isset`/`empty` 返回 `t_bool` 的处理。

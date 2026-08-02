@@ -23,16 +23,28 @@ foreach ($iter as $file) {
     $content = file_get_contents($file->getPathname());
     if ($content === false) continue;
     if (str_contains($content, '@skip')) {
-        // 检查是否为平台+编译器特定 skip（如 @skip:macos+tcc）
-        if (preg_match('/@skip:(\w+)\+(\w+)/', $content, $m)) {
-            $skipOS = strtolower($m[1]);
-            $skipCC = strtolower($m[2]);
-            $curOS = strtolower(PHP_OS_FAMILY);
-            $curCC = strtolower($compiler);
-            if (str_contains($curOS, $skipOS) && $curCC === $skipCC) continue;
+        // 支持多个 @skip 标记，任一匹配则跳过
+        // 语法：@skip（无条件跳过）、@skip:darwin（纯平台）、@skip:windows+clang（平台+编译器）
+        $shouldSkip = false;
+        $curOS = strtolower(PHP_OS_FAMILY);
+        $curCC = strtolower($compiler);
+        if (preg_match_all('/@skip(?::(\w+)(?:\+(\w+))?)/', $content, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $m) {
+                if (!isset($m[1]) || $m[1] === '') {
+                    $shouldSkip = true; break;
+                }
+                $skipOS = strtolower($m[1]);
+                if (!str_contains($curOS, $skipOS)) continue;
+                if (isset($m[2]) && $m[2] !== '') {
+                    if ($curCC === strtolower($m[2])) { $shouldSkip = true; break; }
+                } else {
+                    $shouldSkip = true; break;
+                }
+            }
         } else {
-            continue;
+            $shouldSkip = true; // 只有 @skip 无参数
         }
+        if ($shouldSkip) continue;
     }
     if (!str_contains($content, '#debug')) continue;
     $testFiles[] = $file->getPathname();
