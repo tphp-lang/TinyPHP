@@ -23,7 +23,7 @@ namespace UI;
 // 平台链接库
 #flag windows -lgdi32 -luser32 -lopengl32 -lshell32
 #flag linux -lX11 -lGL -lXi -lXcursor -ldl -lpthread
-#flag darwin -framework Cocoa -framework MetalKit -framework Metal
+#flag darwin -framework Cocoa -framework MetalKit -framework Metal -framework QuartzCore
 
 #include __EXT__ . "ui/src/ui.h"
 
