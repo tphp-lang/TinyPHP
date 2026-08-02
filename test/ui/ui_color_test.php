@@ -1,5 +1,6 @@
 <?php
 // @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
+// @skip:windows+clang — clang 编译 Win32 头时 SAL 注解未定义,需 MSVC 头文件兼容
 // test/ui/ui_color_test.php — UI\Color 值对象单元测试
 //
 // 验证 Color 构造、toUint 转换（0xAABBGGRR 格式）、预定义颜色、边界值。

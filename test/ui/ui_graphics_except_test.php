@@ -1,5 +1,6 @@
 <?php
 // @skip:darwin — sokol_app.h #import <AppKit/AppKit.h> 需 ObjC 模式,与 types.h 冲突
+// @skip:windows+clang — clang 编译 Win32 头时 SAL 注解未定义,需 MSVC 头文件兼容
 // test/ui/ui_graphics_except_test.php — UI 异常路径单元测试
 //
 // 验证：
