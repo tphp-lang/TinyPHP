@@ -13,12 +13,21 @@
 | sokol_log.h   | 日志回调（sokol 函数错误输出） |
 | sokol_time.h  | 高精度计时（帧时间测量） |
 
+## 平台后端
+
+| 平台 | sokol 后端 | 说明 |
+|------|-----------|------|
+| Windows | `SOKOL_GLCORE` | GL 3.3 Core（TCC 缺 `windowsx.h`，用 OpenGL 而非 D3D11） |
+| Linux | `SOKOL_GLCORE` | GL 3.3 Core |
+| macOS | `SOKOL_METAL` | Metal |
+| Android | `SOKOL_GLES3` + `SOKOL_NO_ENTRY` | GLES 3.0（NativeActivity 模式，入口为 `sokol_main()` 而非 `main()`） |
+
 ## 不包含的文件（及替代方案）
 
 | 原计划文件 | 状态 | 替代方案 |
 |-----------|------|---------|
 | sokol_sgl.h / sokol_gl.h | 仓库中不存在 | 直接用 sokol_gfx 实现 2D 绘图 |
-| fontstash.h | 仓库不可访问 | 自定义位图字体渲染器（ui.h 内实现） |
+| fontstash.h | 仓库不可访问 | 内置 font8x8 点阵字体表（ui.h 内实现，跨平台通用，含 Android） |
 
 ## 使用方式
 

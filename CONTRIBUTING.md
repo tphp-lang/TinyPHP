@@ -357,15 +357,17 @@ ext/
 │       ├── posix.c
 │       └── posix.php   ← #flag posix.c + #include posix.h
 └── ui/                 ← 图形界面（纯 phpc + 内置 sokol C 库）
+    ├── android/        ← Android 工程模板（Gradle Wrapper + build.gradle + AndroidManifest.xml + MainActivity.kt）
     ├── compat/         ← TCC 兼容头文件（sal.h / shellapi.h / windowsx.h）
     ├── sokol/          ← sokol C 库源码（sokol_app/gfx/glue/log/time .h）
     └── src/
-        ├── ui.h        ← C 包装层（tphp_fn_ui_* + sokol 回调桥）
+        ├── ui.h        ← C 包装层（tphp_fn_ui_* + sokol 回调桥 + DrawDevice 抽象 + Android JNI/按键/触摸适配）
+        ├── ui_cpu.h    ← CPU 软件渲染后端（Win32 DIB + GDI，无 GPU 环境回退）
         ├── ui.php      ← App/Window/Event/Color/Rect/Graphics
         ├── ui_enums.php ← EventType/Key/MouseButton/KeyMod/Cursor/Direction/WidgetState/LayoutAlign/ChildSize
         ├── ui_widget.php ← Widget/Button/Label/TextBox/CheckBox/Slider/WidgetContainer
         ├── ui_layout.php ← Layout/Stack/CanvasLayout
-        └── ui_softinput.php ← SoftInput（软键盘桥接）
+        └── ui_softinput.php ← SoftInput（软键盘桥接，桌面端 no-op，Android 端 JNI 实现）
 ```
 
 **两种实现方式，可混用：**

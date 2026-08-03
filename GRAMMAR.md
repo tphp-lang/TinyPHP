@@ -827,11 +827,15 @@ __TRAIT__             ❌
 | OS | `Windows` / `Win` | 目标 OS = Windows |
 | | `Linux` | 目标 OS = Linux |
 | | `MacOS` / `Darwin` / `Mac` | 目标 OS = Darwin |
+| | `Android` | 目标 OS = Android（`-os android`） |
 | 编译器 | `TCC` / `TinyC` | 当前编译器类 = TCC |
 | | `GCC` | 当前编译器类 = GCC |
 | | `Clang` | 当前编译器类 = Clang |
+| | `NDK` / `NDKClang` | 当前编译器类 = NDK Clang（`-os android` 时） |
 | 架构 | `x86_64` / `amd64` / `x64` | 目标架构 = x86_64 |
 | | `aarch64` / `arm64` | 目标架构 = aarch64 |
+| | `armv7a` / `armeabi-v7a` | 目标架构 = armeabi-v7a（仅 Android） |
+| | `i686` / `x86` | 目标架构 = x86（仅 Android） |
 | 模式 | `debug` | `--debug` 模式 |
 | | `prod` | 非 `--debug` 模式 |
 
@@ -998,7 +1002,7 @@ phpc_ptr_bridge:
 | `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,`$p->field` 原生访问 |
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
 | `#import name` | 按需引入扩展（自动加载 ext/name/src/） |
-| `#if`/`#elseif`/`#else`/`#endif` | 条件编译：解析期求值，非命中分支跳过不生成代码。支持顶层和函数体内，条件表达式含 `Windows`/`Linux`/`Darwin`/`TCC`/`GCC`/`Clang`/`x86_64`/`aarch64`/`debug`/`prod` 标识符 + `!`/`&&`/`\|\|`/`()` 组合（详见 §11.1） |
+| `#if`/`#elseif`/`#else`/`#endif` | 条件编译：解析期求值，非命中分支跳过不生成代码。支持顶层和函数体内，条件表达式含 `Windows`/`Linux`/`Darwin`/`Android`/`TCC`/`GCC`/`Clang`/`NDK`/`x86_64`/`aarch64`/`armv7a`/`i686`/`debug`/`prod` 标识符 + `!`/`&&`/`\|\|`/`()` 组合（详见 §11.1） |
 | `C->func(args)` | 直接 C 函数调用 |
 | `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
 | `C.Type` | C 类型注解（函数参数/返回值。值类型 `C.int`→`int`/`C.double`→`double`/`C.char`→`char`；定宽 `C.int32`→`int32_t`/`C.uint64`→`uint64_t`；指针 `C.void*`→`void*`/`C.Point*`→`Point*`，用 `*` 后缀） |

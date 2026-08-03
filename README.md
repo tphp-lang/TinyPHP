@@ -33,6 +33,11 @@ php tphp.php main.php -os linux            # x86_64 Linux
 php tphp.php main.php -os linux -arch aarch64  # ARM64 Linux
 php tphp.php main.php -os windows          # Windows .exe
 
+# Android APK（需 NDK + JDK + Android SDK）
+set ANDROID_NDK=C:\Android\ndk\27.0.12077973
+php tphp.php ui.php -os android            # 默认编译全部 ABI，生成 <baseName>-debug.apk
+php tphp.php ui.php -os android -o myapp   # 生成 myapp-debug.apk
+
 # 动态库导出（配合 #[Export] 注解）
 php tphp.php lib.php -shared -o mylib.dll  # Windows
 php tphp.php lib.php -shared -o mylib.so   # Linux
@@ -44,11 +49,20 @@ php tphp.php lib.php -shared -o mylib.so   # Linux
 |---|---|
 | `-o <output>` | 输出文件路径 |
 | `-cc <compiler>` | 指定 C 编译器（默认内置 TCC） |
-| `-os <target>` | 跨编译目标：`windows`、`linux`、`macos` |
-| `-arch <arch>` | 目标架构：`x86_64`、`aarch64`（Windows/Linux 默认 x86_64，macOS 默认 aarch64） |
+| `-os <target>` | 跨编译目标：`windows`、`linux`、`macos`、`android` |
+| `-arch <arch>` | 目标架构：`x86_64`、`aarch64`（Windows/Linux 默认 x86_64，macOS 默认 aarch64）；Android 默认编译全部 ABI（arm64-v8a/x86_64/armeabi-v7a/x86） |
 | `-shared` | 编译为动态库（`.dll`/`.so`/`.dylib`），配合 `#[Export]` 导出 C 函数 |
 | `--debug` | 打印编译命令，运行二进制并与 `#debug` 预期输出逐行比对 |
 | `-h, --help` | 显示帮助 |
+
+**Android 环境变量**：
+
+| 变量 | 说明 |
+|---|---|
+| `ANDROID_NDK` | NDK 根目录路径（必需） |
+| `JAVA_HOME` | JDK 17/21 路径（APK 打包必需，Java 24+ 不兼容 Gradle 8.9） |
+| `ANDROID_HOME` | Android SDK 路径（APK 打包必需） |
+| `TPHP_ANDROID_API` | 目标 API 级别（默认 24 = Android 7.0） |
 
 ### 测试与调试（`#debug`）
 
@@ -226,16 +240,17 @@ use MyApp\Models\User;
 | Thread-Local 运行时 | 每线程独立 str_pool/arr_pool/obj_pool | 多线程无锁竞争 |
 | 泛型数组紧凑存储 | `array<T>` 按 T 紧凑存储 value | `array<int>` 比 `array<mixed>` 节省 67% 内存（8B vs 24B/元素） |
 
-### 三编译器 + 四平台
+### 三编译器 + 五平台
 
-| | TCC | GCC | Clang |
-|---|---|---|---|
-| **Windows x86_64** | ✅ 默认内置 | ✅ | ✅ |
-| **Linux x86_64** | ✅ | ✅ | ✅ |
-| **Linux aarch64** | ✅ | ✅ | ✅ |
-| **macOS aarch64** | ✅ | ✅ | ✅ |
+| | TCC | GCC | Clang | NDK Clang |
+|---|---|---|---|---|
+| **Windows x86_64** | ✅ 默认内置 | ✅ | ✅ | — |
+| **Linux x86_64** | ✅ | ✅ | ✅ | — |
+| **Linux aarch64** | ✅ | ✅ | ✅ | — |
+| **macOS aarch64** | ✅ | ✅ | ✅ | — |
+| **Android (arm64-v8a/x86_64/armeabi-v7a/x86)** | — | — | — | ✅ |
 
-TCC 亚秒编译，GCC/Clang -O2 带来 3-10 倍额外提速。`compat.h` 统一处理三编译器差异。
+TCC 亚秒编译，GCC/Clang -O2 带来 3-10 倍额外提速。Android 目标使用 NDK 工具链（`-os android`），编译为 `libtphp.so` 并通过 Gradle 打包为 APK。`compat.h` 统一处理三编译器差异。
 
 ### 多线程支持
 
@@ -326,7 +341,7 @@ $idx = chan_select([$ch1, $ch2], 100);  // 1
 
 对标 PHP extension，`#import` 按需引入。已内置 `pcntl`、`posix`、`stream`、`openssl`、`curl`、`sqlite3`、`pdo`(SQLite+MySQL+PostgreSQL)、`pgsql`、`pdo_pgsql`、`zlib`、`zip`、`iconv`、`exif`、`fileinfo`、`calendar`、`filter`、`hash`、`gd`、`ui` 扩展：
 
-- **ui** — 基于 sokol 的跨平台图形界面扩展（`#import ui`），提供 App/Window/Graphics 2D 绘图、Widget 控件体系（Button/Label/TextBox/CheckBox/Slider）、Stack/CanvasLayout 布局、事件系统和软键盘桥接。Windows/Linux 使用 OpenGL，macOS 使用 Metal。
+- **ui** — 基于 sokol 的跨平台图形界面扩展（`#import ui`），提供 App/Window/Graphics 2D 绘图、Widget 控件体系（Button/Label/TextBox/CheckBox/Slider）、Stack/CanvasLayout 布局、事件系统和软键盘桥接。Windows/Linux 使用 OpenGL，macOS 使用 Metal，Android 使用 GLES3。Android 平台支持 NDK 交叉编译并打包为 APK（`-os android`），包含 JNI 软键盘、触摸事件转换、原生按键事件拦截等移动端适配。
 
 ```php
 <?php

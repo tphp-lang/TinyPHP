@@ -254,7 +254,54 @@ php tphp.php async_demo.php --debug
 
 ---
 
-## 5. 开发流程
+## 5. Android 构建
+
+TinyPHP 支持将 PHP UI 应用编译为 Android APK。使用 NDK Clang 工具链交叉编译为 `libtphp.so`，通过 Gradle 打包为 APK。
+
+### 前置条件
+
+| 环境变量 | 说明 |
+|----------|------|
+| `ANDROID_NDK` | NDK 根目录（必需，如 `C:\Android\ndk\27.0.12077973`） |
+| `JAVA_HOME` | JDK 17/21 路径（APK 打包必需，Java 24+ 不兼容 Gradle 8.9） |
+| `ANDROID_HOME` | Android SDK 路径（APK 打包必需） |
+| `TPHP_ANDROID_API` | 目标 API 级别（默认 24 = Android 7.0） |
+
+### 一键编译
+
+```bash
+# 默认编译全部 4 种 ABI，生成 <baseName>-debug.apk
+php tphp.php test/ui/ui_basic.php -os android
+
+# 指定输出名（生成 myapp-debug.apk）
+php tphp.php test/ui/ui_basic.php -os android -o myapp
+
+# 仅编译单 ABI（加速本地测试）
+php tphp.php test/ui/ui_basic.php -os android -arch x86_64   # 模拟器
+php tphp.php test/ui/ui_basic.php -os android -arch aarch64   # 真机
+```
+
+### 产物位置
+
+| 产物 | 路径 | 说明 |
+|------|------|------|
+| `libtphp.so` | `build/android/jniLibs/<abi>/` | 各 ABI 共享库（供 Gradle 打包） |
+| `<baseName>-debug.apk` | 当前工作目录 | 最终 APK |
+
+### 支持的 ABI
+
+| `-arch` 值 | ABI | 典型场景 |
+|----------|-----|---------|
+| `aarch64` | arm64-v8a | 64 位真机 |
+| `x86_64` | x86_64 | 64 位模拟器 |
+| `armv7a` | armeabi-v7a | 32 位真机 |
+| `i686` | x86 | 32 位模拟器 |
+
+> 仅设置 `ANDROID_NDK` 而不设置 `JAVA_HOME`/`ANDROID_HOME` 时，跳过 APK 打包但仍生成 `libtphp.so`。详见 [ext/ui/android/README.md](ext/ui/android/README.md)。
+
+---
+
+## 6. 开发流程
 
 ```text
 改代码 → 跑相关测试 → 全量 CI → PR
@@ -273,7 +320,7 @@ php tphp.php async_demo.php --debug
 
 ---
 
-## 6. 代码约定
+## 7. 代码约定
 
 | 文件 | 职责 |
 |---|---|
@@ -289,7 +336,7 @@ php tphp.php async_demo.php --debug
 
 ---
 
-## 7. 常见问题
+## 8. 常见问题
 
 **Q: 编译报 `macro used with too many args`？**
 
