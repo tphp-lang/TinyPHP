@@ -893,6 +893,25 @@ if ($targetOS !== null) {
                     break;
                 }
             }
+            // clang -target 跨编译需要目标平台的 sysroot（glibc 头文件 + crt objects）。
+            // Windows 上的 clang 默认只有 MSVC/MinGW 头文件，没有 Linux glibc。
+            // 用户可通过 TPHP_SYSROOT 环境变量指定 sysroot 路径（如 WSL rootfs）。
+            if ($found !== null && $targetOS !== $currentOS) {
+                $sysroot = getenv('TPHP_SYSROOT');
+                if ($sysroot && is_dir($sysroot)) {
+                    $sysroot = str_replace('\\', '/', $sysroot);
+                    $extraFlags = '--sysroot=' . escapeshellarg($sysroot) . ' ' . $extraFlags;
+                    echo "[*] Using sysroot: {$sysroot}\n";
+                } elseif ($targetOS === 'linux' && PHP_OS_FAMILY === 'Windows') {
+                    die("[!] Cross-compile to Linux requires a Linux sysroot (glibc headers + crt).\n"
+                      . "    clang -target cannot find glibc headers without --sysroot.\n\n"
+                      . "    Option 1: Install WSL and set TPHP_SYSROOT\n"
+                      . "      set TPHP_SYSROOT=\\\\wsl$\\Ubuntu\n"
+                      . "    Option 2: Install a GCC cross-compiler and specify it\n"
+                      . "      -cc x86_64-linux-gnu-gcc -os linux\n"
+                      . "    Option 3: Compile natively on the target platform.\n");
+                }
+            }
             // 2nd: try GCC cross-compiler triplets
             if ($found === null) {
                 $gccTriplets = [
@@ -1665,6 +1684,7 @@ Options:
   -cc <compiler>    specify C compiler (default: built-in TCC)
   -os <target>      cross-compile target: windows, linux, macos
   -arch <arch>      target architecture: x86_64, aarch64 (default: host)
+  TPHP_SYSROOT      env: sysroot path for clang -target cross-compile (e.g. \\wsl$\Ubuntu)
   -shared           compile as shared library (.dll/.so/.dylib)
   --debug           print full compile command
   --ssa             enable SSA IR pipeline (FlatAst → SSA → optimize → C)
