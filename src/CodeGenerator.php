@@ -105,6 +105,9 @@ class CodeGenerator implements ASTVisitor
     /** 是否 -shared 共享库模式（生成导出 trampoline + 库自动初始化） */
     public bool $isShared = false;
 
+    /** 目标 OS（null = 宿主平台，'android' 时生成 tphp_android_main 而非 main） */
+    public ?string $targetOS = null;
+
     /** 字面量 → C 类型的映射 */
     private static array $litTypeMap = [
         IntLiteralExpr::class    => 't_int',
@@ -12092,9 +12095,11 @@ class CodeGenerator implements ASTVisitor
     // ============================================================
     private function generateCEntry(): string
     {
+        $isAndroid = ($this->targetOS === 'android');
+        $entryName = $isAndroid ? 'tphp_android_main' : 'main';
         $lines = [
-            "/* ── C entry: main() ─────────────────────────── */",
-            "int main(int argc, char* argv[]) {",
+            "/* ── C entry: {$entryName}() ─────────────────────────── */",
+            "int {$entryName}(int argc, char* argv[]) {",
             $this->ind("tphp_rt_init();"),
         ];
         // PDO 驱动自动注册（类似 PHP MINIT，在用户代码之前）
@@ -12109,8 +12114,16 @@ class CodeGenerator implements ASTVisitor
         $lines[] = $this->ind("{$this->className}* _main = new_{$this->className}((t_int)argc, _argv);");
         $lines[] = $this->ind("if (_main == NULL) { tphp_fn_arr_free(_argv); return 1; }");
         $lines[] = $this->ind("{$this->className}_main(_main);");
-        $lines[] = $this->ind("tp_obj_release(_main);");
-        $lines[] = $this->ind("tphp_fn_arr_free(_argv);");
+        if ($isAndroid) {
+            // Android NativeActivity 模式：sokol_main 返回后事件循环才启动，
+            // 用户闭包可能通过 $this 捕获 Main 对象，不能在此释放。
+            // 应用退出时进程直接终止，无需手动清理。
+            // _argv 也保持存活（闭包可能通过 $argv 访问）
+            $lines[] = $this->ind("/* Android: keep _main/_argv alive — closures capture \$this */");
+        } else {
+            $lines[] = $this->ind("tp_obj_release(_main);");
+            $lines[] = $this->ind("tphp_fn_arr_free(_argv);");
+        }
         $lines[] = $this->ind("return 0;");
         $lines[] = "}";
         return implode("\n", $lines);

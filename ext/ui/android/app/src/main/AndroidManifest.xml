@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:label="TinyPHP App"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|navigation|uiMode|fontScale|density"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- 指定 NativeActivity 加载的库名（去掉 lib 前缀和 .so 后缀） -->
+            <meta-data android:name="android.app.lib_name" android:value="tphp" />
+        </activity>
+    </application>
+
+</manifest>

@@ -3288,6 +3288,7 @@ class Parser
             'windows' => 'windows', 'win' => 'windows',
             'linux' => 'linux',
             'macos' => 'darwin', 'darwin' => 'darwin', 'mac' => 'darwin',
+            'android' => 'android',
         ];
         if (isset($osMap[$lower])) {
             return strtolower($this->targetOS) === $osMap[$lower];

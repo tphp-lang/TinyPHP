@@ -5,7 +5,7 @@
 // 桌面端实现：show/hide 为 no-op（桌面端有物理键盘，无需软键盘），
 //             onInput 注册的回调由 Char 事件触发。
 //
-// 移动端（未来支持）：show/hide 调用平台原生 API 弹出/收起软键盘。
+// 移动端（Android）：show/hide 通过 JNI 调用 InputMethodManager 弹出/收起软键盘。
 //
 // 回调存储在 C 层（C->_ui_softinput_cb），避免 PHP mixed 属性的 null 赋值问题。
 
@@ -38,14 +38,14 @@ class SoftInput
 
     public static function show(): void
     {
-        // 桌面端：C 层 no-op；Android 端：C 层 stub 抛 Exception（需 ext/jni）
+        // 桌面端：C 层 no-op；Android 端：通过 JNI 调用 InputMethodManager
         C->ui_softinput_show();
         self::$visible = true;
     }
 
     public static function hide(): void
     {
-        // 桌面端：C 层 no-op；Android 端：C 层 stub 抛 Exception（需 ext/jni）
+        // 桌面端：C 层 no-op；Android 端：通过 JNI 调用 InputMethodManager
         C->ui_softinput_hide();
         self::$visible = false;
     }

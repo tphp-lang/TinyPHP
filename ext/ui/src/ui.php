@@ -24,6 +24,7 @@ namespace UI;
 #flag windows -lgdi32 -luser32 -lopengl32 -lshell32
 #flag linux -lX11 -lGL -lXi -lXcursor -ldl -lpthread
 #flag darwin -framework Cocoa -framework MetalKit -framework Metal -framework QuartzCore
+#flag android -landroid -lEGL -lGLESv3 -llog
 
 #include __EXT__ . "ui/src/ui.h"
 
