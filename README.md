@@ -187,6 +187,7 @@ use MyApp\Models\User;
 | `include/require` | 没有运行时文件加载 | `#include` 引入 C 头文件，或多文件编译 |
 | `__call` `__get` `__set` | 没有运行时分发 | 显式定义方法，或用 `switch` 在单个方法内分发 |
 | `$obj->{$method}()` | 编译时不知道方法名 | 回调 map：`$fn = $map[$name]; $fn($args);` |
+| `$obj->$var` 动态属性名 | 编译时不知道属性名，与 `$$var` 同理 | 用 `get_object_vars($obj)` 转数组后 `$arr[$key]` 访问，或直接用关联数组 |
 
 ### ⬜ 不做（权衡决定）
 
@@ -217,6 +218,17 @@ use MyApp\Models\User;
 ### 🔢 内置函数
 
 已实现 **450+ 个**内置函数，覆盖 PHP 标准库的常用子集，覆盖数组/字符串/数学/时间/JSON/哈希/password(bcrypt)/进程控制/CSPRNG/ctype/正则表达式(PCRE NFA VM)/字符集转换(iconv)/过滤器(filter_var)/多线程(Thread/Mutex/CondVar/WaitGroup)/异步与协程(Channel/Future/chan_select，参考 vlang CSP 模型)/zlib(gzip 压缩+流式+增量上下文)/zip(归档读写)/stream(socket stream)/curl(HTTP/HTTPS 客户端，690 常量+35 函数)/pgsql(PostgreSQL 纯 C 协议，78 函数+60 常量)/pdo_pgsql(PostgreSQL PDO 驱动) 等。详见 [FUNCTIONS.md](FUNCTIONS.md)。
+
+### 📦 内置类
+
+| 类 | 说明 |
+|----|------|
+| `stdClass` | PHP 原生动态属性容器，`new stdClass()` 创建空对象，支持字面量属性名读写、isset/unset、foreach、`(object)`/`(array)` 转换、`get_object_vars()`。基于 `t_array` 哈希索引实现 O(1) 属性查找。不支持 `$obj->$var` 动态属性名（AOT 约束） |
+| `Exception` | 异常基类，`try/catch/finally` + `throw`，支持 `getMessage()`/`getCode()`/`getPrevious()` |
+| `Generator` | 协程生成器，基于 minicoro，支持 `yield`/`send()`/`getReturn()` |
+| `Resource` | 资源对象化根，`File` 子类替代 `fopen` resource |
+| `Thread`/`Mutex`/`CondVar`/`WaitGroup` | 多线程 OOP API |
+| `AnnotationEntry` | 注解系统条目类 |
 
 ## 独有特性
 

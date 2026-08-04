@@ -2333,6 +2333,10 @@ class Parser
             if (in_array($nextType->type, $typeTokens, true)) {
                 return $this->setPos($this->parseCastExpr(), $line, $col);
             }
+            // (object) cast — object 是普通 IDENTIFIER（非类型关键字），需额外识别
+            if ($nextType->type === TokenType::IDENTIFIER && $nextType->lexeme === 'object') {
+                return $this->setPos($this->parseCastExpr(), $line, $col);
+            }
             // (C.XXX) cast — C 类型转换: (C.void*)$x, (C.char*)$buf, (C.int)$n
             if ($nextType->type === TokenType::IDENTIFIER && $nextType->lexeme === 'C'
                 && $this->peek(2)->type === TokenType::DOT) {

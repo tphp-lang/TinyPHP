@@ -227,6 +227,7 @@ class CodeGenerator implements ASTVisitor
         'parse_str' => 't_array*', 'preg_match' => 't_array*', 'preg_match_all' => 't_array*',
         'preg_split' => 't_array*', 'preg_grep' => 't_array*',
         'iconv_get_encoding' => 't_array*',
+        'get_object_vars' => 't_array*',
         // ── zip 数组返回 ──
         'zip_read' => 't_array*', 'zip_stat' => 't_array*',
         // ── zlib gz 数组返回 ──
@@ -1810,6 +1811,10 @@ class CodeGenerator implements ASTVisitor
         $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'name', 't_string');
         $this->symbols->getClass('tphp_class_AnnotationEntry')->methods['__construct'] = new MethodInfo('void', ['t_array*', 't_string', 't_string']);
         $this->symbols->getClass('tphp_class_AnnotationEntry')->methods['__destruct']  = new MethodInfo('void');
+
+        // 内置 stdClass 类（动态属性容器，无 struct 字段，属性走 tphp_fn_stdclass_* 运行时函数）
+        $this->symbols->addClass('tphp_class_stdClass');
+        $this->symbols->addClassName('stdClass', 'tphp_class_stdClass');
     }
 
     // ── 多段输出方法 ─────────────────────────────────────────
@@ -3603,7 +3608,14 @@ class CodeGenerator implements ASTVisitor
             $this->varTypes[$var] = 't_array*';
             // 推导 cast 源类型作为数组元素类型
             $srcType = $this->inferType($node->expr->expr);
-            $this->arrElementTypes[$var] = ($srcType === 'null' || $srcType === 'void*') ? 't_int' : $srcType;
+            // (array) $stdClass → tphp_fn_stdclass_to_array 生成万能数组，元素为 t_var
+            if (str_contains($srcType, 'tphp_class_stdClass')) {
+                $this->arrElementTypes[$var] = 't_var';
+                // stdClass 属性名为字符串键，标记以供 foreach 键类型推导为 t_string
+                $this->arrValueTypes[$var] = ['__stdclass_props__' => 't_var'];
+            } else {
+                $this->arrElementTypes[$var] = ($srcType === 'null' || $srcType === 'void*') ? 't_int' : $srcType;
+            }
             if (!$isDeclared) {
                 if ($this->scopeDepth > 0) {
                     $this->funcScopeDecls[$var] = 't_array*';
@@ -4274,6 +4286,14 @@ class CodeGenerator implements ASTVisitor
                 && $this->inferredTypeToCType($expr->inferredType) === 't_var') {
                 $skipInferred = true;
             }
+            // CastExpr (object) 转换：TypeChecker 推导 Type::$object → void*，
+            //   但 castToObject 生成 tphp_fn_stdclass_from_array 返回 tphp_class_stdClass*
+            //   场景：$obj = (object) $arr; — 需推导为 tphp_class_stdClass* 而非 void*
+            if ($expr instanceof CastExpr
+                && $expr->castType === 'object'
+                && $this->inferredTypeToCType($expr->inferredType) === 'void*') {
+                $skipInferred = true;
+            }
         }
         // t_var 变量持有数组的元素访问：C 代码（万能数组 getter）始终返回 t_var，
         // 即使 TypeChecker 推导为 t_int/t_string 等标量类型（PHP 语义正确但 C 实现不同）
@@ -4438,6 +4458,10 @@ class CodeGenerator implements ASTVisitor
             }
             // 尝试从 SymbolTable 查找（沿父类链查找继承属性）
             if ($objType !== '' && $this->symbols->hasClass($objType)) {
+                // stdClass 动态属性访问 → t_var（运行时 tphp_fn_stdclass_get 返回 t_var）
+                if ($objType === 'tphp_class_stdClass') {
+                    return 't_var';
+                }
                 $propName = ltrim($expr->property, '$');
                 $pt = $this->symbols->getClassPropType($objType, $propName);
                 if ($pt !== null) return $pt;
@@ -4539,6 +4563,10 @@ class CodeGenerator implements ASTVisitor
             return self::classRefName($expr->className) . '*';
         }
         if ($expr instanceof CastExpr) {
+            // (object) 转换 → castToObject 生成 tphp_fn_stdclass_from_array，返回 stdClass
+            if ($expr->castType === 'object') {
+                return 'tphp_class_stdClass*';
+            }
             // C.XXX cast → 值类型映射为 PHP 类型，指针类型保留 C 类型
             if (str_starts_with($expr->castType, 'C.')) {
                 $ct = substr($expr->castType, 2);
@@ -4849,8 +4877,45 @@ class CodeGenerator implements ASTVisitor
         return 't_int';
     }
 
+    /** 将任意类型值包装为 t_var（用于 stdClass 属性赋值） */
+    private function wrapTVar(string $val, string $srcType): string
+    {
+        return match ($srcType) {
+            't_int'      => "VAR_INT({$val})",
+            't_float'    => "VAR_FLOAT({$val})",
+            't_bool'     => "VAR_BOOL({$val})",
+            't_string'   => "VAR_STRING({$val})",
+            't_array*'   => "VAR_ARRAY({$val})",
+            'null'       => "VAR_NULL()",
+            't_var'      => $val,
+            default      => (str_contains($srcType, 'tphp_class_') || str_contains($srcType, 'tphp_enum_')
+                            ? "VAR_OBJ((void*)({$val}))"
+                            : "VAR_INT({$val})"),
+        };
+    }
+
     public function visitAssignPropStmt(AssignPropStmtNode $node): string
     {
+        // stdClass 动态属性赋值：$obj->prop = $val → tphp_fn_stdclass_set(obj, STR_LIT("prop"), VAR_XXX(val))
+        $pa = $node->target;
+        $prop = ltrim($pa->property, '$');
+        $assignObjCN = '';
+        if ($pa->object instanceof VariableExpr) {
+            if ($pa->object->name === 'self' || $pa->object->name === '$this') {
+                $assignObjCN = $this->className;
+            } elseif (str_starts_with($pa->object->name, '$')) {
+                $objType = $this->varTypes[self::varName($pa->object->name)] ?? '';
+                $assignObjCN = rtrim($objType, '*');
+            }
+        }
+        if ($assignObjCN === 'tphp_class_stdClass') {
+            $obj = $pa->object->accept($this);
+            $val = $node->value->accept($this);
+            $srcType = $this->inferType($node->value);
+            // 按 srcType 包装为 t_var
+            $wrapped = $this->wrapTVar($val, $srcType);
+            return "tphp_fn_stdclass_set({$obj}, STR_LIT(\"{$prop}\"), {$wrapped});";
+        }
         // Property Hook: set 拦截 — 不在 hook 体内时调用 setter
         if (!$this->inHookBody) {
             $pa = $node->target;
@@ -5536,6 +5601,10 @@ class CodeGenerator implements ASTVisitor
             }
         }
         if ($objType !== '' && $this->symbols->hasClass($objType)) {
+            // stdClass 动态属性 → t_var（运行时类型）
+            if ($objType === 'tphp_class_stdClass') {
+                return 't_var';
+            }
             $propName = ltrim($pa->property, '$');
             $pt = $this->symbols->getClassPropType($objType, $propName);
             if ($pt !== null) return $pt;
@@ -8513,6 +8582,21 @@ class CodeGenerator implements ASTVisitor
                     return "(tphp_fn_arr_get_int({$arrCode}, (t_int)({$idxCode})) != NULL)";
                 }
             }
+            // isset($obj->prop) — stdClass 动态属性存在性检查
+            if (!empty($node->args) && $node->args[0] instanceof PropertyAccessExpr) {
+                $pa = $node->args[0];
+                $objCN = '';
+                if ($pa->object instanceof VariableExpr) {
+                    $vn = self::varName($pa->object->name);
+                    $objType = $this->varTypes[$vn] ?? '';
+                    $objCN = rtrim($objType, '*');
+                }
+                if ($objCN === 'tphp_class_stdClass') {
+                    $obj = $pa->object->accept($this);
+                    $prop = ltrim($pa->property, '$');
+                    return "(tphp_fn_stdclass_isset({$obj}, STR_LIT(\"{$prop}\")))";
+                }
+            }
             $args = array_map(fn($a) => $a->accept($this), $node->args);
             $code = !empty($args) ? $args[0] : 'null';
             $type = !empty($node->args) ? $this->inferType($node->args[0]) : 'null';
@@ -8540,6 +8624,21 @@ class CodeGenerator implements ASTVisitor
         if ($node->callee === null && $node->name === 'unset') {
             $lines = [];
             foreach ($node->args as $arg) {
+                // unset($obj->prop) — stdClass 动态属性删除
+                if ($arg instanceof PropertyAccessExpr) {
+                    $objCN = '';
+                    if ($arg->object instanceof VariableExpr) {
+                        $vn = self::varName($arg->object->name);
+                        $objType = $this->varTypes[$vn] ?? '';
+                        $objCN = rtrim($objType, '*');
+                    }
+                    if ($objCN === 'tphp_class_stdClass') {
+                        $obj = $arg->object->accept($this);
+                        $prop = ltrim($arg->property, '$');
+                        $lines[] = "tphp_fn_stdclass_unset({$obj}, STR_LIT(\"{$prop}\"))";
+                        continue;
+                    }
+                }
                 // 数组元素 unset: unset($arr[$key]) → 调用 C 运行时删除函数
                 if ($arg instanceof ArrayAccessExpr) {
                     $arrCode = $arg->array->accept($this);
@@ -8615,6 +8714,19 @@ class CodeGenerator implements ASTVisitor
                     default => "VAR_NULL",
                 };
                 return "tphp_fn_gettype({$w})";
+            }
+            if ($n === 'get_object_vars') {
+                $argType = $this->inferType($node->args[0]);
+                $argCode = $node->args[0]->accept($this);
+                // stdClass → 直接提取属性表
+                if (str_contains($argType, 'tphp_class_stdClass')) {
+                    return "tphp_fn_stdclass_to_array({$argCode})";
+                }
+                // 其他对象类型：暂不支持（需遍历 public 属性，复杂度高）
+                throw new \RuntimeException(
+                    sprintf("[%d:%d] get_object_vars() currently only supports stdClass, got %s",
+                        $node->line, $node->column, $argType)
+                );
             }
             if ($n === 'number_format') {
                 if (count($a) >= 2) return "tphp_fn_number_format2((t_float)({$a[0]}), {$a[1]})";
@@ -9709,6 +9821,9 @@ class CodeGenerator implements ASTVisitor
         if ($node->castType === 'array') {
             return $this->castToArray($node->expr);
         }
+        if ($node->castType === 'object') {
+            return $this->castToObject($node->expr);
+        }
         return '((' . self::mapType($node->castType) . ')(' . $node->expr->accept($this) . '))';
     }
 
@@ -9718,6 +9833,14 @@ class CodeGenerator implements ASTVisitor
         $this->reorderNewArgs($node);
 
         $cn = self::classRefName($node->className);
+        if ($cn === 'tphp_class_stdClass') {
+            if (!empty($node->args)) {
+                throw new \RuntimeException(
+                    sprintf("[%d:%d] stdClass does not accept constructor arguments", $node->line, $node->column)
+                );
+            }
+            return 'new_stdClass()';
+        }
         $args = array_map(fn($a) => $a->accept($this), $node->args);
         // 默认参数重载：构造函数有默认值参数且实参数量 < 总参数时，使用 new_cn_<missing> 重载
         $ctorInfo = $this->symbols->getClassMethod($cn, '__construct');
@@ -9825,6 +9948,14 @@ class CodeGenerator implements ASTVisitor
                 // tphp_class_Dog* → tphp_class_Dog
                 $objCN = rtrim($objType, '*');
             }
+        }
+        // stdClass 动态属性访问：$obj->prop → tphp_fn_stdclass_get(obj, c_str("prop"))
+        if ($objCN === 'tphp_class_stdClass' && !ctype_upper($prop[0] ?? '')) {
+            $access = "tphp_fn_stdclass_get({$obj}, STR_LIT(\"{$prop}\"))";
+            if ($node->isNullsafe) {
+                return $this->wrapNullsafeAccess($obj, $access, 't_var');
+            }
+            return $access;
         }
         // Property Hook: get 拦截 — 不在 hook 体内时调用 getter
         if (!$this->inHookBody && $objCN !== '' && !ctype_upper($prop[0] ?? '')) {
@@ -11148,6 +11279,11 @@ class CodeGenerator implements ASTVisitor
             return $this->emitGeneratorForeach($node);
         }
 
+        // stdClass foreach: 遍历内部 t_array 的动态属性
+        if (str_contains($iterType, 'tphp_class_stdClass')) {
+            return $this->emitStdClassForeach($node);
+        }
+
         // 泛型数组分支：t_arr_int*/t_arr_str*/t_arr_float*/t_arr_bool*/t_arr_ptr*
         //   直接访问 entries[i].val，无需 t_var 包装和类型检查
         $genElemCType = self::genericArrayElemCType($iterType);
@@ -11356,6 +11492,62 @@ class CodeGenerator implements ASTVisitor
         $lines[] = $this->ind("{$contLabel}:;");
         $lines[] = '}';
         $lines[] = "{$endLabel}:;";
+        array_pop($this->loopEndLabelStack);
+        array_pop($this->loopStartLabelStack);
+        array_pop($this->loopContLabelStack);
+        return implode("\n", $lines);
+    }
+
+    /** 生成 stdClass foreach 代码：遍历内部 t_array 的动态属性 */
+    private function emitStdClassForeach(ForeachStmtNode $node): string
+    {
+        $objCode = $node->array->accept($this);
+        // 提取 props 指针（stdClass 结构体的动态属性表）
+        $propsCode = "((tphp_class_stdClass*)({$objCode}))->props";
+
+        $valVar = ltrim($node->valueVar, '$');
+        $keyVar = $node->keyVar ? ltrim($node->keyVar, '$') : '';
+
+        $needValDecl = !isset($this->declaredVars[$valVar]);
+        $needKeyDecl = ($keyVar && !isset($this->declaredVars[$keyVar]));
+
+        $this->declaredVars[$valVar] = true;
+        $this->varTypes[$valVar] = 't_var';
+        if ($keyVar) {
+            $this->declaredVars[$keyVar] = true;
+            $this->varTypes[$keyVar] = 't_string';
+        }
+
+        $idx = '_fi_' . (++$this->tmpVarCounter);
+        $endLabel = '_lp_end_' . (++$this->tmpVarCounter);
+        $startLabel = '_lp_start_' . $this->tmpVarCounter;
+        $contLabel = '_lp_cont_' . $this->tmpVarCounter;
+        $this->loopEndLabelStack[] = $endLabel;
+        $this->loopStartLabelStack[] = $startLabel;
+        $this->loopContLabelStack[] = $contLabel;
+
+        $lines = [];
+        if ($needKeyDecl) {
+            $lines[] = "t_string {$keyVar};";
+        }
+        if ($needValDecl) {
+            $lines[] = "t_var {$valVar};";
+        }
+        $lines[] = "{$startLabel}:;";
+        $lines[] = "for (int {$idx} = 0; {$idx} < tphp_fn_arr_count({$propsCode}); {$idx}++) {";
+        $lines[] = $this->ind("if ({$propsCode} == NULL) break;");
+        $lines[] = $this->ind("const t_arr_entry* _se = &{$propsCode}->entries[{$idx}];");
+        if ($keyVar) {
+            $lines[] = $this->ind("{$keyVar} = (_se->key.type == TYPE_STRING) ? _se->key.value._string : ((t_string){NULL, 0});");
+        }
+        $lines[] = $this->ind("{$valVar} = _se->val;");
+        $this->scopeDepth++;
+        foreach ($node->body as $s) $lines[] = $this->ind($s->accept($this));
+        $this->scopeDepth--;
+        $lines[] = $this->ind("{$contLabel}:;");
+        $lines[] = '}';
+        $lines[] = "{$endLabel}:;";
+
         array_pop($this->loopEndLabelStack);
         array_pop($this->loopStartLabelStack);
         array_pop($this->loopContLabelStack);
@@ -12346,7 +12538,35 @@ class CodeGenerator implements ASTVisitor
     private function castToArray(ExprNode $expr): string
     {
         if ($expr instanceof NullLiteralExpr) return 'tphp_fn_arr_create(0)';
+        // (array) $stdClass → 提取属性表为关联数组
+        $srcType = $this->inferType($expr);
+        if (str_contains($srcType, 'tphp_class_stdClass')) {
+            $code = $expr->accept($this);
+            return "tphp_fn_stdclass_to_array({$code})";
+        }
         return 'tphp_fn_arr_from_val(' . $this->wrapVar($expr) . ')';
+    }
+
+    /** (object) $expr 转换：数组 → stdClass，其他 → stdClass（空或包装） */
+    private function castToObject(ExprNode $expr): string
+    {
+        // (object) $array → stdClass from array
+        $srcType = $this->inferType($expr);
+        if ($srcType === 't_array*' || $srcType === 't_var') {
+            $code = $expr->accept($this);
+            if ($srcType === 't_var') {
+                // t_var 持有数组时，先提取 .value._array
+                $code = "(({$code}).value._array)";
+            }
+            return "tphp_fn_stdclass_from_array({$code})";
+        }
+        // (object) null → 空 stdClass
+        if ($expr instanceof NullLiteralExpr) {
+            return 'new_stdClass()';
+        }
+        // 其他标量转 stdClass：PHP 中 (object)42 会创建 stdClass{"scalar": 42}
+        //   此场景较少见，简化处理为空 stdClass
+        return 'new_stdClass()';
     }
 
     public function visitArrayAppend(ArrayAppendExpr $node): string
@@ -12816,6 +13036,7 @@ class CodeGenerator implements ASTVisitor
             $pt = $this->getPropType($expr);
             if ($pt === 't_string') return $code;
             if ($pt === 't_float') return "tphp_rt_str_from_float({$code})";
+            if ($pt === 't_var') return "tphp_fn_strval({$code})";
         }
 
         // CallExpr：查找返回类型（内置函数 + 方法调用 + 枚举方法）

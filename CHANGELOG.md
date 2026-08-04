@@ -4,6 +4,20 @@
 
 ---
 
+## [0.2.0-beta.10] — 2026-08-04
+
+### 新增
+
+- **stdClass 动态属性对象支持**（`include/object/stdclass.h` + 编译器集成）：兼容 PHP 原生 `new stdClass()`，支持字面量属性名的动态属性读写、isset/unset、foreach 遍历、`(object)`/`(array)` 类型转换、`get_object_vars()` 内置函数。
+  - **AOT 兼容性**：仅支持字面量属性名（编译期已知），不支持 `$obj->$var` 动态属性名（与 `$$var` 同理，AOT 约束）。`json_decode` 保持返回 array（不改为 stdClass，因 JSON 键运行时才知道）
+  - **运行时实现**：`tphp_class_stdClass` 结构体（t_object header + t_array* props 动态属性表），基于 array.h 的哈希索引实现 O(1) 属性查找。提供 `new_stdClass`/`tphp_fn_stdclass_get/set/isset/unset/clone/count/from_array/to_array` 10 个运行时函数
+  - **编译器特判**：visitNew/visitPropertyAccess/visitAssignPropStmt/isset/unset/foreach 在对象类型为 `tphp_class_stdClass*` 时生成运行时函数调用；新增 `wrapTVar` 辅助方法将任意类型包装为 t_var，`emitStdClassForeach` 生成属性遍历代码
+  - **类型转换**：`(object) $array` 通过 `tphp_fn_stdclass_from_array` 复制键值对创建 stdClass；`(array) $stdClass` 通过 `tphp_fn_stdclass_to_array` 提取属性表为关联数组
+  - **var_dump 适配**：stdClass 输出 PHP 兼容格式 `object(stdClass)#N (count) { ["k"]=> val ... }`，递归显示所有动态属性
+  - **isset 语义**：与 PHP 一致，null 值属性返回 false（不仅检查键存在性，还检查值非 null）
+  - **Parser 支持**：新增 `(object)` cast 类型识别（Lexer 中 `object` 非类型关键字，需 Parser 特判）
+  - **测试覆盖**：6 个测试文件（basic/cast/isset_unset/foreach/functions/edge），TCC/GCC/Clang 三编译器全部通过
+
 ## [0.2.0-beta.9] — 2026-08-02
 
 ### 新增

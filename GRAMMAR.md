@@ -73,6 +73,7 @@ class C {
 | `never` | `void` | 永不返回（exit/throw） |
 | `mixed` | `t_var` | 标签联合体，有运行时开销 |
 | `Generator` | `tphp_class_Generator*` | 协程对象（minicoro 实现，stackless） |
+| `stdClass` | `tphp_class_stdClass*` | 动态属性容器（基于 t_array 哈希索引） |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | `tphp_class_X*` | 多线程 COS 类（tinycthread 封装，Thread-Local 运行时） |
 | `Channel`/`Future` | `tphp_class_X*` | 异步与协程通信 COS 类（参考 vlang CSP 模型，自旋 750 次 + 环形缓冲区零 malloc） |
 | 类类型 | `tphp_class_X*` 或 `tphp_na_Ns_tphp_class_X*` | COS 对象指针（命名空间类带 `tphp_na_` 前缀） |
@@ -777,6 +778,7 @@ primary:
 | `(int)` | INT_CAST | `(t_int)` | ✅ |
 | `(float)` | FLOAT_CAST | `(t_float)` | ✅ |
 | `(string)` | STRING_CAST | 按类型转换 | ✅ |
+| `(object)` | OBJECT_CAST | 数组 → stdClass | ✅ |
 | `(bool)` | BOOL_CAST | 按假值规则 | ✅ |
 
 ---
