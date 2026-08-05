@@ -1,6 +1,8 @@
 name: Test
 
 on:
+  push:
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -424,3 +426,53 @@ jobs:
           # 验证 .so 生成
           test -f build/android/jniLibs/x86_64/libtphp.so || { echo "ERROR: libtphp.so not found"; exit 1; }
           file build/android/jniLibs/x86_64/libtphp.so
+
+  # ============================================================
+  # tools/ 单测 — AST / MIR / SSA 单元测试脚本（纯 PHP）
+  #   逐个执行 tools/ 下的 *_test.php，收集通过/失败结果
+  # ============================================================
+  tools-tests:
+    runs-on: ubuntu-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download PHP
+        run: |
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: Run tools/ unit tests
+        shell: bash
+        run: |
+          set +e
+          fail=0
+          # 收集 tools/ 下所有 *_test.php 脚本，逐个执行
+          scripts=$(find tools -name '*_test.php' -type f | sort)
+          if [ -z "$scripts" ]; then
+            echo "ERROR: no *_test.php found under tools/"
+            exit 1
+          fi
+          echo "Found $(echo "$scripts" | wc -l) test script(s):"
+          echo "$scripts" | sed 's/^/  - /'
+          echo ""
+          while IFS= read -r script; do
+            echo "::group::Running $script"
+            if ./php "$script"; then
+              echo "PASS: $script"
+            else
+              echo "FAIL: $script"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done <<< "$scripts"
+          echo ""
+          echo "===== Summary ====="
+          if [ "$fail" -eq 0 ]; then
+            echo "All tools/ unit tests passed"
+          else
+            echo "One or more tools/ unit tests failed"
+          fi
+          exit $fail

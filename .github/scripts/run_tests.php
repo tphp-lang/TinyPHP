@@ -70,11 +70,74 @@ foreach ($testFiles as $i => $f) {
         }
     }
 
+    // 构造命令（输出改由 proc_open 的 pipes 写入 log，便于超时控制）
     $cmd = escapeshellarg($phpExe) . ' ' . escapeshellarg($tphp) . ' '
          . $fileArgs . ' --debug ' . $ccFlag
-         . ' -o ' . escapeshellarg($out)
-         . ' >' . escapeshellarg($log) . ' 2>&1';
-    system($cmd, $ret);
+         . ' -o ' . escapeshellarg($out);
+
+    // proc_open + 超时机制（默认 60 秒），避免被测程序死循环无限期阻塞 CI
+    $timeout   = 60;
+    $startTime = microtime(true);
+    $logHandle = @fopen($log, 'wb');
+    $pipes     = [];
+    $proc      = proc_open($cmd, [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ], $pipes);
+    $timedOut = false;
+    if (is_resource($proc)) {
+        fclose($pipes[0]);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        while (true) {
+            // stream_select 带超时等待管道可读，避免忙等浪费 CPU
+            $read = [$pipes[1], $pipes[2]];
+            $write = null;
+            $except = null;
+            $remaining = $timeout - (microtime(true) - $startTime);
+            if ($remaining <= 0) {
+                $timedOut = true;
+                $status = proc_get_status($proc);
+                $pid = (int)$status['pid'];
+                if (PHP_OS_FAMILY === 'Windows') {
+                    exec('taskkill /F /T /PID ' . $pid . ' 2>NUL');
+                } else {
+                    proc_terminate($proc, 9);
+                }
+                break;
+            }
+            $tvSec = (int)$remaining;
+            $tvUsec = (int)(($remaining - $tvSec) * 1000000);
+            $n = @stream_select($read, $write, $except, $tvSec, $tvUsec);
+            if ($n > 0) {
+                foreach ($read as $p) {
+                    $chunk = fread($p, 65536);
+                    if ($chunk !== false && $chunk !== '' && $logHandle) {
+                        fwrite($logHandle, $chunk);
+                    }
+                }
+            }
+            $status = proc_get_status($proc);
+            if (!$status['running']) break;
+        }
+        // 子进程结束后排空剩余管道数据
+        stream_set_blocking($pipes[1], true);
+        stream_set_blocking($pipes[2], true);
+        foreach ([$pipes[1], $pipes[2]] as $p) {
+            while (($chunk = fread($p, 8192)) !== '' && $chunk !== false) {
+                if ($logHandle) fwrite($logHandle, $chunk);
+            }
+        }
+        $ret = proc_close($proc);
+        if ($timedOut) {
+            $ret = 124;
+            if ($logHandle) fwrite($logHandle, "\n[TIMEOUT] test exceeded {$timeout}s limit and was killed\n");
+        }
+    } else {
+        $ret = 1;
+    }
+    if ($logHandle) fclose($logHandle);
 
     if ($ret === 0) {
         $passed[] = $rel;

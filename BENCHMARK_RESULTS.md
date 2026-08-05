@@ -1,7 +1,7 @@
 # TinyPHP vs Native PHP 8.5 — 性能对比报告
 
 测试环境: Windows x64, PHP 8.5.1 NTS, TinyPHP + TCC/GCC 16.1/Clang 22.1  
-*更新: 2026-07-21 — 新增 String/Hash/SQLite PDO 基准；扩展栈覆盖 stream/openssl/zlib/zip/pdo/pdo_mysql；内置函数数 288+ → 389+*
+*更新: 2026-07-21 — 新增 String/Hash/SQLite PDO 基准；扩展栈覆盖 stream/openssl/zlib/zip/pdo/pdo_mysql；内置函数数 288+ → 450+*
 
 > **图例**：`🏆` = 该编译器下 TinyPHP 胜出 PHP 8.5.1（数值越低越快）｜`⚡Nx` = 胜出 PHP N 倍｜`🔥` = 数量级领先（接近零开销）｜`**粗体**` = 该行最优结果
 
@@ -348,7 +348,7 @@ N=10K, SQLite `:memory:` 数据库
 | ext/stream (跨平台 socket/TLS 入口) | 15 | ✅ |
 | ext/openssl (内置 mbedTLS 3.6.6 静态编译) | 21 | ✅ |
 | ext/pdo (SQLite + MySQL 双驱动) | 0 (类 API) | ✅ |
-| **合计** | **409+** | ✅ |
+| **合计** | **450+** | ✅ |
 
 ### include/ 重构
 

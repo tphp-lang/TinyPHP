@@ -1648,6 +1648,7 @@ class CodeGenerator implements ASTVisitor
         $this->capTypeCounter = 0;
         $this->thunkCounter = 0;
         $this->methodClassCache = [];
+        $this->inferTypeCache = [];
         $this->currentFuncName = '';
         $this->currentFuncCName = '';
         $this->fnReturnArrKeyTypes = [];
@@ -4213,8 +4214,20 @@ class CodeGenerator implements ASTVisitor
         }
     }
 
-    /** 从 AST 表达式推导 C 类型 */
+    /** 从 AST 表达式推导 C 类型（带记忆化缓存） */
     private function inferType(ExprNode $expr): string
+    {
+        $key = spl_object_id($expr);
+        if (isset($this->inferTypeCache[$key])) {
+            return $this->inferTypeCache[$key];
+        }
+        $result = $this->inferTypeUncached($expr);
+        $this->inferTypeCache[$key] = $result;
+        return $result;
+    }
+
+    /** 从 AST 表达式推导 C 类型（实际实现） */
+    private function inferTypeUncached(ExprNode $expr): string
     {
         // === VariableExpr 优先：已声明 C 变量的类型固定，优先于 TypeChecker inferredType ===
         //   场景：foreach 键 $i 声明为 t_int，但 TypeChecker 标记 inferredType 为 mixed

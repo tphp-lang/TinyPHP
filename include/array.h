@@ -1684,15 +1684,17 @@ static inline void tphp_fn_asort(t_array* a) {
     if (a == NULL || a->length < 2) return;
     arr_stridx_free(a);  // sorting changes entry positions
     arr_intidx_free(a);  // sorting changes entry positions
-    t_arr_entry **ptrs = (t_arr_entry**)malloc((size_t)a->length * sizeof(t_arr_entry*));
-    if (!ptrs) { tp_throw("asort: out of memory"); return; }
+    size_t ptrs_size = (size_t)a->length * sizeof(t_arr_entry*);
+    size_t tmp_size = (size_t)a->length * sizeof(t_arr_entry);
+    char *mem = (char*)malloc(ptrs_size + tmp_size);
+    if (!mem) { tp_throw("asort: out of memory"); return; }
+    t_arr_entry **ptrs = (t_arr_entry**)mem;
+    t_arr_entry *tmp = (t_arr_entry*)(mem + ptrs_size);
     for (int i = 0; i < a->length; i++) ptrs[i] = &a->entries[i];
     qsort(ptrs, (size_t)a->length, sizeof(t_arr_entry*), _cmp_val);
-    t_arr_entry *tmp = (t_arr_entry*)malloc((size_t)a->length * sizeof(t_arr_entry));
-    if (!tmp) { free(ptrs); tp_throw("asort: out of memory"); return; }
     for (int i = 0; i < a->length; i++) tmp[i] = *ptrs[i];
     for (int i = 0; i < a->length; i++) a->entries[i] = tmp[i];
-    free(tmp); free(ptrs);
+    free(mem);
 }
 static inline void tphp_fn_arsort(t_array* a) {
     if (a == NULL || a->length < 2) return;

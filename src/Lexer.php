@@ -184,7 +184,11 @@ class Lexer
                 $this->advance(2);
                 return;
             }
-            $rest = substr($this->source, $this->pos);
+            // 只 substr 到行尾，避免拷贝整个剩余源码（O(行数×文件大小) → O(行长度)）
+            // 安全性：所有 # 指令正则均不使用 s 修饰符（. 不匹配 \n），且显式以 \n|$ 为边界
+            $lineEnd = strpos($this->source, "\n", $this->pos);
+            if ($lineEnd === false) $lineEnd = strlen($this->source);
+            $rest = substr($this->source, $this->pos, $lineEnd - $this->pos);
             // #include [OS/CC] "path" or <path> — optional platform/compiler filter
             if (preg_match('/^#include\s+(?:(\w+)\s+)?(")(.+?)\2/', $rest, $m)) {
                 $ctx = $m[1] ?: '';

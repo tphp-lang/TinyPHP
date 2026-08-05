@@ -460,9 +460,22 @@ static inline t_int tphp_fn_strpos(t_string haystack, t_string needle) {
     if (STR_PTR(haystack) == NULL) { tp_throw("strpos(): haystack is not initialized"); return -1; }
     if (STR_PTR(needle) == NULL)   { tp_throw("strpos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
-    for (int i = 0; i <= haystack.length - needle.length; i++) {
-        if (memcmp(STR_PTR(haystack) + i, STR_PTR(needle), (size_t)needle.length) == 0)
-            return (t_int)i;
+
+    const char *hs = STR_PTR(haystack);
+    const char *nd = STR_PTR(needle);
+    int n = haystack.length;
+    int m = needle.length;
+    int limit = n - m;
+
+    // memchr 首字节快速跳过：定位 needle[0] 后再 memcmp 整个 needle
+    const char *p = hs;
+    const char *end = hs + limit + 1;
+    while (p < end) {
+        p = memchr(p, nd[0], (size_t)(end - p));
+        if (p == NULL) break;
+        if (memcmp(p, nd, (size_t)m) == 0)
+            return (t_int)(p - hs);
+        p++;
     }
     return -1;
 }
@@ -476,9 +489,18 @@ static inline t_int tphp_fn_strrpos(t_string haystack, t_string needle) {
     if (STR_PTR(haystack) == NULL) { tp_throw("strrpos(): haystack is not initialized"); return -1; }
     if (STR_PTR(needle) == NULL)   { tp_throw("strrpos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
-    for (int i = haystack.length - needle.length; i >= 0; i--) {
-        if (memcmp(STR_PTR(haystack) + i, STR_PTR(needle), (size_t)needle.length) == 0)
-            return (t_int)i;
+
+    const char *hs = STR_PTR(haystack);
+    const char *nd = STR_PTR(needle);
+    int n = haystack.length;
+    int m = needle.length;
+    char first = nd[0];
+    // memrchr 非标准 C：手写从右往左扫描首字节，命中后再 memcmp 整个 needle
+    for (int i = n - m; i >= 0; i--) {
+        if (hs[i] == first) {
+            if (memcmp(hs + i, nd, (size_t)m) == 0)
+                return (t_int)i;
+        }
     }
     return -1;
 }
@@ -502,9 +524,33 @@ static inline t_int tphp_fn_stripos(t_string haystack, t_string needle) {
     if (STR_PTR(haystack) == NULL) { tp_throw("stripos(): haystack is not initialized"); return -1; }
     if (STR_PTR(needle) == NULL)   { tp_throw("stripos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
-    for (int i = 0; i <= haystack.length - needle.length; i++) {
-        if (_tp_strcasecmp_at(STR_PTR(haystack) + i, STR_PTR(needle), needle.length) == 0)
-            return (t_int)i;
+
+    const char *hs = STR_PTR(haystack);
+    const char *nd = STR_PTR(needle);
+    int n = haystack.length;
+    int m = needle.length;
+    int limit = n - m;
+
+    // 首字节大小写两种形态（ASCII）：字母时 flo/fhi 为大小写对，非字母时两者相等
+    unsigned char f = (unsigned char)nd[0];
+    unsigned char flo = (f >= 'A' && f <= 'Z') ? (unsigned char)(f + 32) : f;
+    unsigned char fhi = (f >= 'a' && f <= 'z') ? (unsigned char)(f - 32) : f;
+    int is_alpha = (flo != fhi);
+
+    // memchr 定位首字节任一形态，取较早者，再 _tp_strcasecmp_at 验证整串
+    const char *p = hs;
+    const char *end = hs + limit + 1;
+    while (p < end) {
+        const char *pl = memchr(p, flo, (size_t)(end - p));
+        const char *ph = is_alpha ? memchr(p, fhi, (size_t)(end - p)) : NULL;
+        const char *cand;
+        if (pl == NULL)      cand = ph;
+        else if (ph == NULL) cand = pl;
+        else                 cand = (pl < ph) ? pl : ph;
+        if (cand == NULL) break;
+        if (_tp_strcasecmp_at(cand, nd, m) == 0)
+            return (t_int)(cand - hs);
+        p = cand + 1;
     }
     return -1;
 }
@@ -516,9 +562,22 @@ static inline t_int tphp_fn_strripos(t_string haystack, t_string needle) {
     if (STR_PTR(haystack) == NULL) { tp_throw("strripos(): haystack is not initialized"); return -1; }
     if (STR_PTR(needle) == NULL)   { tp_throw("strripos(): needle is not initialized");   return -1; }
     if (needle.length > haystack.length) return -1;
-    for (int i = haystack.length - needle.length; i >= 0; i--) {
-        if (_tp_strcasecmp_at(STR_PTR(haystack) + i, STR_PTR(needle), needle.length) == 0)
-            return (t_int)i;
+
+    const char *hs = STR_PTR(haystack);
+    const char *nd = STR_PTR(needle);
+    int n = haystack.length;
+    int m = needle.length;
+    // 首字节小写形态（ASCII），用于从右往左过滤候选位置
+    unsigned char f = (unsigned char)nd[0];
+    unsigned char flo = (f >= 'A' && f <= 'Z') ? (unsigned char)(f + 32) : f;
+    // memrchr 非标准 C：手写从右往左扫描，tolower(hs[i]) == flo 时再验证整串
+    for (int i = n - m; i >= 0; i--) {
+        unsigned char c = (unsigned char)hs[i];
+        unsigned char clo = (c >= 'A' && c <= 'Z') ? (unsigned char)(c + 32) : c;
+        if (clo == flo) {
+            if (_tp_strcasecmp_at(hs + i, nd, m) == 0)
+                return (t_int)i;
+        }
     }
     return -1;
 }
