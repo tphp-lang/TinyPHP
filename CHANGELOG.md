@@ -4,17 +4,64 @@
 
 ---
 
-## [Unreleased]
+## [0.2.0-beta.10] — 2026-08-04
 
 ### 新增
 
+- **stdClass 动态属性对象支持**（`include/object/stdclass.h` + 编译器集成）：兼容 PHP 原生 `new stdClass()`，支持字面量属性名的动态属性读写、isset/unset、foreach 遍历、`(object)`/`(array)` 类型转换、`get_object_vars()` 内置函数。
+  - **AOT 兼容性**：仅支持字面量属性名（编译期已知），不支持 `$obj->$var` 动态属性名（与 `$$var` 同理，AOT 约束）。`json_decode` 保持返回 array（不改为 stdClass，因 JSON 键运行时才知道）
+  - **运行时实现**：`tphp_class_stdClass` 结构体（t_object header + t_array* props 动态属性表），基于 array.h 的哈希索引实现 O(1) 属性查找。提供 `new_stdClass`/`tphp_fn_stdclass_get/set/isset/unset/clone/count/from_array/to_array` 10 个运行时函数
+  - **编译器特判**：visitNew/visitPropertyAccess/visitAssignPropStmt/isset/unset/foreach 在对象类型为 `tphp_class_stdClass*` 时生成运行时函数调用；新增 `wrapTVar` 辅助方法将任意类型包装为 t_var，`emitStdClassForeach` 生成属性遍历代码
+  - **类型转换**：`(object) $array` 通过 `tphp_fn_stdclass_from_array` 复制键值对创建 stdClass；`(array) $stdClass` 通过 `tphp_fn_stdclass_to_array` 提取属性表为关联数组
+  - **var_dump 适配**：stdClass 输出 PHP 兼容格式 `object(stdClass)#N (count) { ["k"]=> val ... }`，递归显示所有动态属性
+  - **isset 语义**：与 PHP 一致，null 值属性返回 false（不仅检查键存在性，还检查值非 null）
+  - **Parser 支持**：新增 `(object)` cast 类型识别（Lexer 中 `object` 非类型关键字，需 Parser 特判）
+  - **测试覆盖**：6 个测试文件（basic/cast/isset_unset/foreach/functions/edge），TCC/GCC/Clang 三编译器全部通过
+
+### 修复
+
+- **macOS Metal shader 缺失**（`ext/ui/src/ui.h`）：shader 源码只有 `SOKOL_GLCORE` 和 `SOKOL_GLES3` 两个条件编译分支，macOS 使用 `SOKOL_METAL` 后端时 `_sr_vs_src`/`_sr_fs_src` 未声明导致编译失败。添加 `SOKOL_METAL` 分支提供 MSL（Metal Shading Language）源码，通过 `_SR_VS_ENTRY`/`_SR_FS_ENTRY` 宏为 Metal 后端设置显式 entry 函数名（`vs_main`/`fs_main`）
+- **Android NDK CI 报错 "built-in TCC not found"**（`tphp.php`）：`-os android` 时默认尝试找 TCC，但 Linux CI 环境未安装 TCC。Android 目标使用 NDK clang，跳过 TCC 存在性检查；`$ccClass` 在条件编译求值阶段（Phase 1）提前设为 'Clang'（而非等到 NDK 探测逻辑 Phase 2）
+
+## [0.2.0-beta.9] — 2026-08-02
+
+### 新增
+
+- **Android NDK 交叉编译支持**（`tphp.php` + `ext/ui/`）：新增 `-os android` 编译目标，使用 NDK Clang 工具链将 PHP 编译为 Android 共享库（`libtphp.so`）并打包为 APK。
+  - **环境变量**：`ANDROID_NDK`（必需，NDK 根目录）、`JAVA_HOME`（JDK 17/21，APK 打包必需，Java 24+ 不兼容 Gradle 8.9）、`ANDROID_HOME`（Android SDK 路径）、`TPHP_ANDROID_API`（默认 24 = Android 7.0）
+  - **多 ABI 编译**：默认编译全部 4 种 ABI（arm64-v8a / x86_64 / armeabi-v7a / x86），覆盖真机与模拟器；可通过 `-arch` 指定单 ABI（`aarch64`/`x86_64`/`armv7a`/`i686`）
+  - **APK 输出机制**：通过子进程递归调用编译所有 ABI 的 `libtphp.so`（输出到 `build/android/jniLibs/<abi>/`），随后调用 Gradle 打包并复制 APK 到当前工作目录（`<baseName>-debug.apk`，遵循 `-o` 机制，如 `-o myapp` → `myapp-debug.apk`）；`ext/ui/android/` 仅作为工程模板，不写入任何产物
+  - **NDK 工具链**：自动检测 NDK 路径，添加 `-D__ANDROID__` 宏定义和 NDK 内置 sysroot；链接 `-landroid -lEGL -lGLESv3 -llog`
+  - **条件编译**：新增 `#if Android` 标识符（Lexer/Parser 支持 `android` 平台前缀识别）
+  - **Java 版本兼容**：tphp.php 自动检测 Java 版本，Java 24+ 与 Gradle 8.9/AGP 8.7.0 不兼容时搜索 Java 17/21 LTS 并通过 `putenv('JAVA_HOME=...')` 切换
+  - **SDK 许可自动补写**：检测 `android-sdk-license` 文件缺失哈希时自动追加 `d56f5187479451eabf01fb78af698cb`（SDK 34 许可）
+  - **SDK source.properties 临时重命名**：构建前临时将 SDK 根目录的 `source.properties` 重命名为 `.tphp_bak`，避免 AGP LegacyLocalRepoLoader 误判根目录为 package 而无法发现 `platforms/` 下的平台包；构建后恢复
+  - **国内镜像加速**：Gradle 配置腾讯云 Gradle 镜像和国内 Maven 镜像，解决 SSL 证书和下载速度问题
+  - **Android 工程模板**：`ext/ui/android/` 包含 Gradle Wrapper、`build.gradle`、`settings.gradle`、`AndroidManifest.xml`、`MainActivity.kt` 等 8 个文件，`compileSdk/targetSdk/buildToolsVersion` 统一为 35/35/35.0.0
+  - **.gitignore**：排除 `local.properties`（包含开发者个人 SDK 路径）
+
+- **Android 平台适配**（`ext/ui/src/ui.h`）：移动端 UI 适配，包括 JNI 软键盘、触摸事件转换、原生按键事件拦截、stdout 重定向等。
+  - **JNI 软键盘桥接**：通过 JNI 调用 Android `InputMethodManager` 显示/隐藏软键盘。`_ui_android_show_softinput`/`_ui_android_hide_softinput` 通过 `AttachCurrentThread` 安全附加线程，`_ui_jni_check` 检查异常并释放局部引用，避免引用表溢出
+  - **触摸事件 → 鼠标事件转换**：sokol 在 Android 上生成 `TOUCHES_BEGAN/ENDED/MOVED` 事件，`_ui_sokol_event_cb` 中将首个触摸点转换为 `MOUSE_DOWN/UP/MOVE` 事件，使桌面端 PHP 代码无需修改即可在 Android 上响应触摸
+  - **原生按键事件拦截**：sokol 的 `_sapp_android_key_event` 只处理 BACK 键，其他按键直接丢弃导致 TextBox 无法输入。通过 `native_event_cb` 钩子拦截 `AInputEvent`，`_ui_android_map_keycode` 将 `AKEYCODE_*` 映射为 PHP Key 枚举的 ASCII 值，构造 `sapp_event` 并调用 `_ui_sokol_event_cb` 分发；对可打印字符（ASCII 32-126）额外生成 `CHAR` 事件驱动文本输入
+  - **GLES3 后端**：Android 使用 `SOKOL_GLES3` 后端和 `SOKOL_NO_ENTRY`，通过 `sokol_main()` 作为入口（而非 `main()`）。GL 版本必须为 GLES 3.0（不能用桌面 GL 3.3，否则 `eglCreateContext` 失败秒退）
+  - **NativeActivity 生命周期**：Android 入口为 `ANativeActivity_onCreate`（sokol 提供），此时 PHP 的 `Main::main()` 未执行。`sokol_main()` 首次调用时执行 `tphp_android_main()` 填充 desc；CodeGenerator 在 Android 模式下生成 `tphp_android_main()` 替代 `main()`，且不释放 Main 对象和 `_argv`（避免闭包悬垂指针）
+  - **stdout/stderr 重定向**：Android NativeActivity 的 stdout 默认不输出到 logcat。用 pipe + 后台线程将 stdout/stderr 重定向到 `__android_log_write`，便于调试
+  - **默认竖屏**：`AndroidManifest.xml` 中 `android:screenOrientation` 设置为 `portrait`（非 `landscape`）
+  - **字体渲染**：使用内置 font8x8 点阵字体表，跨平台通用（替代 Win32 GDI 字体生成，Android 上不可用）
+
+- **ext/ui GPU 即时模式形状渲染器**（`ext/ui/src/ui.h`）：实现基于 sokol_gfx 的即时模式形状渲染，补全 GPU 后端的 `fill_rect`/`draw_line`/`draw_rect`/`draw_circle`（此前 GPU 后端仅实现 `begin_pass`/`end_pass`，形状绘制抛异常提示）。
+  - **GPU 后端实现**：内存顶点缓冲区收集形状数据，每帧 `sg_apply_pipeline` + `sg_update_buffer` 上传 GPU 绘制。着色器使用 sokol shader 生成（顶点位置 + 颜色）。`usage.stream_update=true` 适配新版 sokol_gfx API
+  - **sokol_gfx 新版 API 适配**：`_sr_init()` 适配新版 sokol_gfx API，使用结构体字段（`.usage.stream_update`、`.vertex_func`/`.fragment_func`）替代旧版枚举值
+  - **DrawDevice 抽象**见下方「变更」部分「ext/ui GPU → CPU 软件渲染自动回退」条目
+
 - **ext/ui**（`ext/ui/`）：基于 sokol C 库的跨平台图形界面扩展（纯 phpc 模式）。9 个 PHP 类 + 9 个枚举，覆盖窗口管理、2D 绘图、控件体系、布局系统和事件处理。
   - **底层依赖**：内置 sokol C 库源码（sokol_app/sokol_gfx/sokol_glue/sokol_log/sokol_time），位于 `ext/ui/sokol/`，零运行时依赖
-  - **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)。TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11
+  - **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)，Android = GLES3 (SOKOL_GLES3)。TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11
   - **核心类**：`App`（窗口生命周期 + onInit/onFrame/onEvent 回调）、`Window`（静态：width/height/dpiScale/setCursor）、`Event`（fromPtr 解析 sapp_event 指针）、`Color`（RGBA + toUint 0xAABBGGRR）、`Rect`（contains 命中测试）、`Graphics`（静态：clear/fillRect/drawText/drawLine/drawRect/drawCircle）
   - **控件体系**：`Widget` 抽象基类（init/draw/setPos/proposeSize/pointInside + 事件方法）、`WidgetContainer`（addChild/drawAll/hitTestIndex/dispatch*）、`Button`（press/release/click + onClick）、`Label`、`TextBox`（focus/blur/handleKeyDown/handleChar）、`CheckBox`（toggle/setChecked + onChange）、`Slider`（beginDrag/drag/endDrag/setValue + 值夹紧）
   - **布局系统**：`Layout` 抽象基类（addWidget/updateLayout/asWidget）、`Stack`（flex 风格，row/column 静态方法，Compact/Stretch/Fixed 尺寸模式）、`CanvasLayout`（绝对定位）
-  - **软键盘桥接**：`SoftInput` 静态类（show/hide/isVisible/onInput/dispatch/clear），桌面端 show/hide 为 no-op，移动端未来支持
+  - **软键盘桥接**：`SoftInput` 静态类（show/hide/isVisible/onInput/dispatch/clear），桌面端 show/hide 为 no-op，Android 端通过 JNI 调用 `InputMethodManager` 实现（详见上方「Android 平台适配」）
   - **枚举**：EventType（22 值）/ Key（ASCII+VK_*）/ MouseButton / KeyMod / Cursor / Direction / WidgetState / LayoutAlign / ChildSize
   - **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`
   - **事件契约**：sokol `sapp_event*` 指针以 `t_int` 流转（intptr_t 转换），PHP 侧通过 `Event::fromPtr($evPtr)` 解析

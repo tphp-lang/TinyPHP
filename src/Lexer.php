@@ -242,7 +242,7 @@ class Lexer
             // 最多两个前缀：编译器 + 平台，顺序不限
             // 注意：无前缀时 \s* 而非 \s+ — 允许 #flag -DNDEBUG 形式
             // i 修饰符：平台/编译器前缀大小写不敏感（windows == Windows）
-            if (preg_match('/^#flag\s+(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(.+?)(?=\n|$)/i', $rest, $m)) {
+            if (preg_match('/^#flag\s+(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin|Android)?\s*(GCC|Clang|TCC|Windows|Linux|MacOS|Darwin|Android)?\s*(.+?)(?=\n|$)/i', $rest, $m)) {
                 $pf1 = $m[1] ?: '';
                 $pf2 = $m[2] ?: '';
                 $flags = trim($m[3]);
@@ -250,12 +250,13 @@ class Lexer
                 // 规范化为标准大小写（下游 $platformMap 用精确匹配键）
                 $caseMap = [
                     'windows' => 'Windows', 'linux' => 'Linux', 'macos' => 'MacOS',
-                    'darwin' => 'Darwin', 'gcc' => 'GCC', 'clang' => 'Clang', 'tcc' => 'TCC',
+                    'darwin' => 'Darwin', 'android' => 'Android',
+                    'gcc' => 'GCC', 'clang' => 'Clang', 'tcc' => 'TCC',
                 ];
                 $allPf = array_filter([$pf1, $pf2]);
                 foreach ($allPf as $p) {
                     $p = $caseMap[strtolower($p)] ?? $p;
-                    if (in_array($p, ['Windows','Linux','MacOS','Darwin'], true)) $platform = $p;
+                    if (in_array($p, ['Windows','Linux','MacOS','Darwin','Android'], true)) $platform = $p;
                     else $compiler = $p;
                 }
                 $this->addToken(TokenType::CC_FLAG, $compiler . ':' . $platform . ':' . $flags, [

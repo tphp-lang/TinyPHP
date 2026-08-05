@@ -138,10 +138,10 @@ calc(100, 20, 30); // 150 (100 + 20 + 30)
 | php函数 | tphp函数 | 性能说明 | 差异说明 |
 |------|--------|------|------|
 | `echo $expr` | `echo $expr` | `fwrite(stdout)` + 每次调用 `fflush`，二进制安全，不解析 `%` 格式化符；O(n) 零堆分配 | PHP 支持 `echo $a, $b` 多参数语法，tphp 单参数（多参数由编译器展开为多次调用） |
-| `var_dump(mixed $value, mixed ...$rest): void` | `var_dump(mixed $value): void` | type switch → `fprintf`/`fwrite` 递归输出，O(节点数)，零中间缓冲 | 单参数；浮点 `%g`（6 位有效数字）非 PHP `%.14G`（14 位）；对象输出 `object(ClassName)#<id>`（id 为全局递增唯一标识，符合标准 PHP 行为），无属性列表 |
+| `var_dump(mixed $value, mixed ...$rest): void` | `var_dump(mixed $value): void` | type switch → `fprintf`/`fwrite` 递归输出，O(节点数)，零中间缓冲 | 单参数；浮点 `%g`（6 位有效数字）非 PHP `%.14G`（14 位）；普通对象输出 `object(ClassName)#<id>`（无属性列表）；stdClass 输出完整属性列表 `object(stdClass)#<id> (count) { ["k"]=> val ... }` |
 | `print_r(mixed $value, bool $return = false): string\|true` | `print_r(mixed $value): void` | 递归格式化，O(节点数)，流式写入 stdout | **无 `$return` 参数**，始终返回 void；对象仅输出 `ClassName Object` 无属性；无循环引用检测（递归数组会栈溢出） |
 | `exit(int\|string $status): void` | `exit(int $code): void` | `exit(code)` 单次 libc 调用，O(1) | 仅接受 int（PHP 还接受 string 消息）；无 shutdown 回调 |
-| `isset(mixed $var, mixed ...$rest): bool` | `isset(mixed $var): bool` | 指针类型 → `ptr != NULL`；值类型 → 编译期 `true`；O(1) | 单参数；语义为指针 NULL 检查（值类型如 int/string 永远返回 true） |
+| `isset(mixed $var, mixed ...$rest): bool` | `isset(mixed $var): bool` | 指针类型 → `ptr != NULL`；值类型 → 编译期 `true`；O(1) | 单参数；语义为指针 NULL 检查（值类型如 int/string 永远返回 true）；`isset($obj->prop)` 对 stdClass 检查属性存在且值非 null（与 PHP 一致） |
 | `empty(mixed $var): bool` | `empty(mixed $var): bool` | 按类型分发内联：int→`==0`、string→`is_falsy`、float/bool/null 同；O(1) | — |
 
 ---
@@ -2700,8 +2700,17 @@ try {
 > 纯 phpc 模式：C 包装函数在 `ui.h`，PHP 类在 `ui*.php`。所有 UI 类使用 `namespace UI`，
 > 用户通过 `use UI\App;` 引入。`#import ui` 自动加载全部 PHP 源文件。
 >
-> **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)。
-> TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11。GL 版本固定为 3.3 Core（覆盖绝大多数桌面 GPU，比 sokol 默认 4.3 兼容性更好）。
+> **平台后端**：Windows/Linux = OpenGL (SOKOL_GLCORE)，macOS = Metal (SOKOL_METAL)，Android = GLES3 (SOKOL_GLES3 + SOKOL_NO_ENTRY)。
+> TCC 缺失 `windowsx.h`，故 Windows 使用 OpenGL 而非 D3D11。GL 版本固定为 3.3 Core（覆盖绝大多数桌面 GPU，比 sokol 默认 4.3 兼容性更好）。Android GLES 版本为 3.0（不能用桌面 GL 3.3，否则 `eglCreateContext` 失败秒退）。
+>
+> **Android 平台适配**（`-os android`）：
+> - **入口机制**：Android NativeActivity 模式下入口为 `ANativeActivity_onCreate`（sokol 提供），而非 `main()`。sokol 在其中调用 `sokol_main()` 获取 desc，此时 PHP 的 `Main::main()` 未执行。`sokol_main()` 首次调用时执行 `tphp_android_main()` 填充全局 desc；CodeGenerator 在 Android 模式下生成 `tphp_android_main()` 替代 `main()`，且不释放 Main 对象和 `_argv`（避免闭包悬垂指针）
+> - **JNI 软键盘**：`SoftInput::show()`/`hide()` 通过 JNI 调用 Android `InputMethodManager`。`_ui_android_show_softinput`/`_ui_android_hide_softinput` 使用 `AttachCurrentThread` 安全附加线程，`_ui_jni_check` 检查异常并释放局部引用
+> - **触摸事件转换**：sokol 在 Android 上生成 `TOUCHES_BEGAN/ENDED/MOVED` 事件，`_ui_sokol_event_cb` 中将首个触摸点转换为 `MOUSE_DOWN/UP/MOVE` 事件，桌面端 PHP 代码无需修改即可在 Android 上响应触摸
+> - **原生按键事件拦截**：sokol 的 `_sapp_android_key_event` 只处理 BACK 键，其他按键直接丢弃。通过 `native_event_cb` 钩子拦截 `AInputEvent`，`_ui_android_map_keycode` 将 `AKEYCODE_*` 映射为 PHP Key 枚举的 ASCII 值（A-Z/0-9/空格/回车/退格/方向键等），构造 `sapp_event` 并调用 `_ui_sokol_event_cb` 分发；对可打印字符（ASCII 32-126）额外生成 `CHAR` 事件驱动 TextBox 输入
+> - **stdout 重定向**：Android NativeActivity 的 stdout 默认不输出到 logcat。用 pipe + 后台线程将 stdout/stderr 重定向到 `__android_log_write`（tag: `tphp`），便于调试
+> - **默认竖屏**：`AndroidManifest.xml` 中 `android:screenOrientation` 设置为 `portrait`
+> - **字体渲染**：使用内置 font8x8 点阵字体表，跨平台通用（替代 Win32 GDI 字体生成，Android 上不可用）
 >
 > **后端自动选择（GPU → CPU 软件渲染回退）**：
 > `ui_app_run` 先尝试 sokol（GPU）后端，若初始化失败（如无硬件 GPU、RDP/虚拟机环境下 WGL 像素格式选择失败 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`），sokol panic 经 `_ui_slog_func` 转为 `tp_throw`，`ui_app_run` 捕获后自动回退到 CPU 软件渲染后端（`_cpu_app_run`，输出 `[ui] GPU backend unavailable, falling back to CPU software renderer`）。整个过程对 PHP 侧透明，用户代码无需任何改动。
@@ -2716,7 +2725,7 @@ try {
 > - **`sapp_run` 异常包裹 + 自动回退**：`ui_app_run` 用 `TP_TRY`/`TP_CATCH_ANY` 包裹 `sapp_run`，sokol 初始化 panic（如 `WIN32_WGL_FIND_PIXELFORMAT_FAILED`）被捕获后自动回退到 CPU 软件渲染后端，而非直接返回错误或 `exit(1)`。
 > - **pass 自动收尾**：`ui_state_t.pass_active` 跟踪 `begin_pass` 状态，frame 回调末尾自动调用 `end_pass`，即使 PHP 回调中途抛异常也不会漏掉，防止后端状态不一致导致下一帧渲染崩溃。
 >
-> **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`；无绘图设备时抛 `Exception("no draw device initialized")`。`ui_clear` 调用 `device->begin_pass` 并设置 `pass_active=true`；`ui_end_frame` 调用 `device->end_pass` 手动结束 pass（可选，frame 回调会自动调用）；无 active pass 时调 `ui_end_frame` 抛 `Exception("end_frame called without active pass")`。GPU 后端的形状绘制（`fill_rect` 等）尚未实现时抛异常提示（无 GPU 环境会自动回退到 CPU 后端，CPU 后端全部已实现）。
+> **绘图契约**：所有 `Graphics::*` 方法必须在 `onFrame` 回调内调用，否则抛 `Exception("drawing outside frame callback")`；无绘图设备时抛 `Exception("no draw device initialized")`。`ui_clear` 调用 `device->begin_pass` 并设置 `pass_active=true`；`ui_end_frame` 调用 `device->end_pass` 手动结束 pass（可选，frame 回调会自动调用）；无 active pass 时调 `ui_end_frame` 抛 `Exception("end_frame called without active pass")`。GPU 后端（sokol_gfx）和 CPU 后端（ui_cpu.h）均实现全部形状绘制函数（`fill_rect`/`draw_line`/`draw_rect`/`draw_circle`），无 GPU 环境自动回退到 CPU 后端。
 >
 > **参数校验**（不静默处理）：
 > - `App::__construct` / `ui_app_run`：width/height 必须 > 0，否则抛 `Exception("app_run: invalid window dimensions")`
@@ -2732,6 +2741,7 @@ try {
 > - Windows：`-lgdi32 -luser32 -lopengl32 -lshell32`
 > - Linux：`-lX11 -lGL -lXi -lXcursor -ldl -lpthread`
 > - macOS：`-framework Cocoa -framework MetalKit -framework Metal`
+> - Android：`-landroid -lEGL -lGLESv3 -llog`（NDK Clang 工具链，`-os android` 时）
 >
 > **命名空间**：所有 UI 类位于 `UI` 命名空间下，通过 `use UI\App;` 等引入。C 包装函数使用 `tphp_fn__ui_*` 双下划线前缀（内部使用，不暴露给用户空间）；PHP 侧通过 `_ui_*()` 函数调用（带前导下划线，约定为内部使用）。用户通过 OOP 类使用 UI 功能，不直接调用 `_ui_*` 函数。
 
@@ -2979,12 +2989,13 @@ try {
 ### SoftInput 类 — 软键盘管理（静态）
 
 > 桌面端 `show`/`hide` 为 no-op（有物理键盘），`isVisible` 始终返回 false。
-> 移动端未来调用平台原生 API。回调存储在 C 层 `_ui_softinput_cb`。
+> Android 端通过 JNI 调用 `InputMethodManager` 实现（`_ui_android_show_softinput`/`_ui_android_hide_softinput`）。
+> 回调存储在 C 层 `_ui_softinput_cb`。
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `show` (静态) | `(): void` | 显示软键盘（桌面端 no-op） |
-| `hide` (静态) | `(): void` | 隐藏软键盘（桌面端 no-op） |
+| `show` (静态) | `(): void` | 显示软键盘（桌面端 no-op，Android 端 JNI 调用 InputMethodManager） |
+| `hide` (静态) | `(): void` | 隐藏软键盘（桌面端 no-op，Android 端 JNI 调用 InputMethodManager） |
 | `isVisible` (静态) | `(): bool` | 软键盘是否可见 |
 | `onInput` (静态) | `(callable $cb): void` | 注册字符输入回调（`function(int $codepoint): void`） |
 | `dispatch` (静态) | `(int $codepoint): void` | 分发字符输入（由 `Char` 事件触发） |
@@ -3094,6 +3105,28 @@ class Main {
 | `tphp_rt_free_all_resources()` | 异常路径释放所有资源 | 防内存泄漏 |
 
 ---
+
+### stdClass 动态属性对象
+
+> 文件: `object/stdclass.h`
+
+PHP 原生 `stdClass` 兼容实现，作为动态属性容器。基于 `t_array` 哈希索引存储字符串键到 `t_var` 的映射。
+
+| 特性 | 实现 | 说明 |
+|------|------|------|
+| `new stdClass()` | `new_stdClass()` | 分配 `tphp_class_stdClass`（t_object header + t_array* props），初始化空属性表 |
+| `$obj->prop = $v` | `tphp_fn_stdclass_set(obj, STR_LIT("prop"), VAR_XXX(v))` | 字面量属性名赋值，`wrapTVar` 按源类型包装为 t_var |
+| `$obj->prop` | `tphp_fn_stdclass_get(obj, STR_LIT("prop"))` | 字面量属性名读取，返回 t_var；未定义返回 VAR_NULL |
+| `isset($obj->prop)` | `tphp_fn_stdclass_isset(obj, STR_LIT("prop"))` | PHP 语义：键存在且值非 null 才返回 true |
+| `unset($obj->prop)` | `tphp_fn_stdclass_unset(obj, STR_LIT("prop"))` | 从属性表移除指定键 |
+| `foreach ($obj as $k => $v)` | `emitStdClassForeach` | 遍历内部 t_array，$k 为 t_string，$v 为 t_var |
+| `(object) $array` | `tphp_fn_stdclass_from_array(arr)` | 复制数组键值对为 stdClass 属性 |
+| `(array) $stdClass` | `tphp_fn_stdclass_to_array(obj)` | 提取属性表为关联数组 |
+| `get_object_vars($obj)` | `tphp_fn_stdclass_to_array(obj)` | 返回属性关联数组（仅支持 stdClass） |
+| `clone $obj` | `tphp_fn_stdclass_clone(obj)` | 深拷贝属性表（运行时已就绪，待 clone 语法接入） |
+| `var_dump($obj)` | 递归输出属性 | `object(stdClass)#N (count) { ["k"]=> val ... }` |
+
+> **AOT 约束**：仅支持字面量属性名（编译期已知）。不支持 `$obj->$var` 动态属性名（与 `$$var` 同理）。`json_decode` 保持返回 array（JSON 键运行时才知道，返回 stdClass 后无法用字面量属性名访问）。
 
 ## Generator / yield
 

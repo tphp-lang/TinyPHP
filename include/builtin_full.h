@@ -62,8 +62,31 @@ static void tphp_fn_var_dump_rec(t_var v, int depth) {
         const t_object* obj = (const t_object*)v.value._object;
         if (obj == NULL || obj->cls == NULL) {
             fputs("NULL", stdout);
+        } else if (strcmp(obj->cls->name, "stdClass") == 0) {
+            tphp_class_stdClass* s = (tphp_class_stdClass*)obj;
+            int cnt = tphp_fn_stdclass_count(s);
+            fprintf(stdout, "object(stdClass)#%d (%d) {\n", obj->id, cnt);
+            if (s->props != NULL) {
+                for (int i = 0; i < cnt; i++) {
+                    t_var* key = &s->props->entries[i].key;
+                    t_var* val = &s->props->entries[i].val;
+                    tphp_fn_var_dump_indent(depth + 1);
+                    if (key->type == TYPE_STRING) {
+                        int klen = key->value._string.length;
+                        fprintf(stdout, "[\"%.*s\"]=>\n", klen,
+                            (STR_PTR_V(key->value._string) != NULL) ? STR_PTR_V(key->value._string) : "");
+                    } else {
+                        fprintf(stdout, "[%lld]=>\n", (long long)key->value._int);
+                    }
+                    tphp_fn_var_dump_indent(depth + 1);
+                    tphp_fn_var_dump_rec(*val, depth + 1);
+                    fputc('\n', stdout);
+                }
+            }
+            tphp_fn_var_dump_indent(depth);
+            fputc('}', stdout);
         } else {
-            fprintf(stdout, "object(%s)", obj->cls->name ? obj->cls->name : "?");
+            fprintf(stdout, "object(%s)#%d", obj->cls->name ? obj->cls->name : "?", obj->id);
         }
         break;
     }

@@ -73,6 +73,7 @@ class C {
 | `never` | `void` | 永不返回（exit/throw） |
 | `mixed` | `t_var` | 标签联合体，有运行时开销 |
 | `Generator` | `tphp_class_Generator*` | 协程对象（minicoro 实现，stackless） |
+| `stdClass` | `tphp_class_stdClass*` | 动态属性容器（基于 t_array 哈希索引） |
 | `Thread`/`Mutex`/`CondVar`/`WaitGroup` | `tphp_class_X*` | 多线程 COS 类（tinycthread 封装，Thread-Local 运行时） |
 | `Channel`/`Future` | `tphp_class_X*` | 异步与协程通信 COS 类（参考 vlang CSP 模型，自旋 750 次 + 环形缓冲区零 malloc） |
 | 类类型 | `tphp_class_X*` 或 `tphp_na_Ns_tphp_class_X*` | COS 对象指针（命名空间类带 `tphp_na_` 前缀） |
@@ -777,6 +778,7 @@ primary:
 | `(int)` | INT_CAST | `(t_int)` | ✅ |
 | `(float)` | FLOAT_CAST | `(t_float)` | ✅ |
 | `(string)` | STRING_CAST | 按类型转换 | ✅ |
+| `(object)` | OBJECT_CAST | 数组 → stdClass | ✅ |
 | `(bool)` | BOOL_CAST | 按假值规则 | ✅ |
 
 ---
@@ -827,11 +829,15 @@ __TRAIT__             ❌
 | OS | `Windows` / `Win` | 目标 OS = Windows |
 | | `Linux` | 目标 OS = Linux |
 | | `MacOS` / `Darwin` / `Mac` | 目标 OS = Darwin |
+| | `Android` | 目标 OS = Android（`-os android`） |
 | 编译器 | `TCC` / `TinyC` | 当前编译器类 = TCC |
 | | `GCC` | 当前编译器类 = GCC |
 | | `Clang` | 当前编译器类 = Clang |
+| | `NDK` / `NDKClang` | 当前编译器类 = NDK Clang（`-os android` 时） |
 | 架构 | `x86_64` / `amd64` / `x64` | 目标架构 = x86_64 |
 | | `aarch64` / `arm64` | 目标架构 = aarch64 |
+| | `armv7a` / `armeabi-v7a` | 目标架构 = armeabi-v7a（仅 Android） |
+| | `i686` / `x86` | 目标架构 = x86（仅 Android） |
 | 模式 | `debug` | `--debug` 模式 |
 | | `prod` | 非 `--debug` 模式 |
 
@@ -998,7 +1004,7 @@ phpc_ptr_bridge:
 | `#cstruct Name { C.type field; ... }` | 声明 C 结构体字段布局,`$p->field` 原生访问 |
 | `#debug expected` | 测试预期输出（`--debug` 模式） |
 | `#import name` | 按需引入扩展（自动加载 ext/name/src/） |
-| `#if`/`#elseif`/`#else`/`#endif` | 条件编译：解析期求值，非命中分支跳过不生成代码。支持顶层和函数体内，条件表达式含 `Windows`/`Linux`/`Darwin`/`TCC`/`GCC`/`Clang`/`x86_64`/`aarch64`/`debug`/`prod` 标识符 + `!`/`&&`/`\|\|`/`()` 组合（详见 §11.1） |
+| `#if`/`#elseif`/`#else`/`#endif` | 条件编译：解析期求值，非命中分支跳过不生成代码。支持顶层和函数体内，条件表达式含 `Windows`/`Linux`/`Darwin`/`Android`/`TCC`/`GCC`/`Clang`/`NDK`/`x86_64`/`aarch64`/`armv7a`/`i686`/`debug`/`prod` 标识符 + `!`/`&&`/`\|\|`/`()` 组合（详见 §11.1） |
 | `C->func(args)` | 直接 C 函数调用 |
 | `C->CONST` | 直接 C 常量/枚举/宏访问（无括号时按 `t_int` 推断） |
 | `C.Type` | C 类型注解（函数参数/返回值。值类型 `C.int`→`int`/`C.double`→`double`/`C.char`→`char`；定宽 `C.int32`→`int32_t`/`C.uint64`→`uint64_t`；指针 `C.void*`→`void*`/`C.Point*`→`Point*`，用 `*` 后缀） |

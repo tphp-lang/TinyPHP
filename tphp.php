@@ -46,24 +46,36 @@ $isShared  = false; // -shared: 生成动态库
 
 // Normalize arch name
 $archMap = ['x86_64' => 'x86_64', 'amd64' => 'x86_64', 'x64' => 'x86_64',
-            'aarch64' => 'aarch64', 'arm64' => 'aarch64', 'arm' => 'arm'];
+            'aarch64' => 'aarch64', 'arm64' => 'aarch64',
+            'armv7a' => 'armv7a', 'armeabi-v7a' => 'armv7a',
+            'i686' => 'i686', 'x86' => 'i686', 'arm' => 'arm'];
 
 // Manual parse -cc xxx, -os xxx, -arch xxx and -o xxx (PHP getopt not fully compatible)
 $posArgs = [];
+$archExplicit = false;  // 用户是否显式指定 -arch（Android 多 ABI 模式判断用）
+$skipAndroidApk = false; // 内部标志：多 ABI 子进程跳过 Gradle 打包
 for ($i = 1, $n = count($argv); $i < $n; $i++) {
     if ($argv[$i] === '-cc' && isset($argv[$i + 1])) {
         $cc = $argv[++$i];
     } elseif ($argv[$i] === '-arch' && isset($argv[$i + 1])) {
         $targetArch = $archMap[strtolower($argv[++$i])] ?? null;
-        if ($targetArch === null) die("Error: unknown arch '{$argv[$i-1]}'. Use: x86_64, aarch64\n");
+        if ($targetArch === null) die("Error: unknown arch '{$argv[$i]}'. Use: x86_64, aarch64, armv7a, i686\n");
+        $archExplicit = true;
     } elseif ($argv[$i] === '-os' && isset($argv[$i + 1])) {
         $targetOS = strtolower($argv[++$i]);
         // Normalize: macos → darwin
         if ($targetOS === 'macos' || $targetOS === 'mac') $targetOS = 'darwin';
+        // Validate: reject unknown OS early to avoid confusing cross-compile errors
+        if (!in_array($targetOS, ['windows', 'linux', 'darwin', 'android'], true)) {
+            die("Error: unknown target OS '{$targetOS}'. Use: windows, linux, macos, android\n");
+        }
     } elseif ($argv[$i] === '-o' && isset($argv[$i + 1])) {
         $outExe = $argv[++$i]; // 覆盖 getopt 解析
     } elseif ($argv[$i] === '-shared') {
         $isShared = true;
+    } elseif ($argv[$i] === '--no-android-apk') {
+        // 内部标志：多 ABI 子进程编译 .so 时跳过 Gradle APK 构建（主进程统一打包）
+        $skipAndroidApk = true;
     } elseif (!str_starts_with($argv[$i], '-')) {
         $posArgs[] = $argv[$i];
     }
@@ -73,14 +85,18 @@ $args = $posArgs;
 if (isset($options['os'])) {
     $targetOS = strtolower($options['os']);
     if ($targetOS === 'macos' || $targetOS === 'mac') $targetOS = 'darwin';
+    if (!in_array($targetOS, ['windows', 'linux', 'darwin', 'android'], true)) {
+        die("Error: unknown target OS '{$targetOS}'. Use: windows, linux, macos, android\n");
+    }
 }
 if (isset($options['arch']) && $targetArch === null) {
     $targetArch = $archMap[strtolower($options['arch'])] ?? null;
-    if ($targetArch === null) die("Error: unknown arch '{$options['arch']}'. Use: x86_64, aarch64\n");
+    if ($targetArch === null) die("Error: unknown arch '{$options['arch']}'. Use: x86_64, aarch64, armv7a, i686\n");
+    $archExplicit = true;
 }
-// Default arch per target OS: Windows/Linux → x86_64, macOS → aarch64
+// Default arch per target OS: Windows/Linux → x86_64, macOS/Android → aarch64
 if ($targetOS !== null && $targetArch === null) {
-    $targetArch = ($targetOS === 'darwin') ? 'aarch64' : 'x86_64';
+    $targetArch = ($targetOS === 'darwin' || $targetOS === 'android') ? 'aarch64' : 'x86_64';
 }
 
 if (isset($options['f'])) {
@@ -191,7 +207,8 @@ if ($cc !== null) {
         . (PHP_OS_FAMILY === 'Windows'
             ? DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe'
             : DIRECTORY_SEPARATOR . 'tcc');
-    if (!file_exists($ccExe)) die("Error: built-in TCC not found: {$ccExe}\nBuild TCC first or use -cc to specify another compiler\n");
+    // Android 目标使用 NDK clang（在后续 Android NDK 探测逻辑中设置），跳过 TCC 检查
+    if ($targetOS !== 'android' && !file_exists($ccExe)) die("Error: built-in TCC not found: {$ccExe}\nBuild TCC first or use -cc to specify another compiler\n");
 }
 
 if (!is_dir($includeDir))    die("Error: include directory not found: {$includeDir}\n");
@@ -203,12 +220,19 @@ if ($cc !== null) {
     $ccLower = strtolower($cc);
     if (str_contains($ccLower, 'gcc')) $ccClass = 'GCC';
     elseif (str_contains($ccLower, 'clang')) $ccClass = 'Clang';
+} elseif ($targetOS === 'android') {
+    // Android 目标使用 NDK clang（Phase 2 才设置 $cc），条件编译求值阶段就需要知道是 Clang
+    $ccClass = 'Clang';
 } elseif (PHP_OS_FAMILY === 'Darwin') {
     $ccClass = 'Clang';
 }
 // 目标 OS/Arch（条件编译求值用）：未指定时回退到宿主环境
 $ctTargetOS   = $targetOS ?? strtolower(PHP_OS_FAMILY);
 $ctTargetArch = $targetArch ?? strtolower(php_uname('m'));
+// #flag/#include 平台过滤用：交叉编译时用目标 OS（大写形式，与 PHP_OS_FAMILY 一致）
+$_effectiveOS = $targetOS !== null
+    ? match($targetOS) { 'windows' => 'Windows', 'linux' => 'Linux', 'darwin' => 'Darwin', 'android' => 'Android', default => PHP_OS_FAMILY }
+    : PHP_OS_FAMILY;
 
 // --- Phase 1: Transpile all PHP → C ---
 $allFilesStr = implode(', ', array_map(fn($f) => basename($f), $files));
@@ -473,9 +497,9 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         if (is_array($inc) && !empty($inc['ctx'])) {
             $ctx = $inc['ctx'];
             // Case-insensitive platform matching (accept windows/linux/macos/darwin lowercase)
-            $platformMap = ['windows' => 'Windows', 'linux' => 'Linux', 'darwin' => 'Darwin', 'macos' => 'Darwin'];
+            $platformMap = ['windows' => 'Windows', 'linux' => 'Linux', 'darwin' => 'Darwin', 'macos' => 'Darwin', 'android' => 'Android'];
             $ctxLower = strtolower($ctx);
-            $currentOS = PHP_OS_FAMILY;
+            $currentOS = $_effectiveOS;
             // OS filter
             if (isset($platformMap[$ctxLower]) && $platformMap[$ctxLower] !== $currentOS) return false;
             // Compiler filter (TCC/GCC/Clang)
@@ -515,8 +539,8 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         // Extract -I paths from #flag directives (for #include search + security check)
         // __DIR__/__EXT__/__INC__/__CMD__ already expanded in prescan/parsing phase
         $flagIncludeDirs = [];
-        $_platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin'];
-        $_currentOS = PHP_OS_FAMILY;
+        $_platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin', 'Android' => 'Android'];
+        $_currentOS = $_effectiveOS;
         $_ccClass = 'TCC';
         if ($cc !== null) {
             $_ccLower = strtolower($cc);
@@ -667,8 +691,8 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
 
     // Process #flag directives (filter by platform + compiler)
     if (!empty($allFlags)) {
-        $platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin'];
-        $currentOS = PHP_OS_FAMILY;
+        $platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin', 'Android' => 'Android'];
+        $currentOS = $_effectiveOS;
         // $ccClass 已在编译器选择阶段计算（条件编译共用）
         // Allowed #flag prefixes (whitelist — blocks arbitrary flag injection)
         $allowedFlagPrefixes = [
@@ -841,6 +865,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     } else {
         $gen   = new CodeGenerator();
         $gen->isShared = $isShared;
+        $gen->targetOS = $targetOS;
         $cFile = $gen->generate($merged, $entryFile, $outDir);
     }
 
@@ -870,9 +895,79 @@ if ($targetOS !== null) {
             'windows' => '-D_WIN32 -DWIN32',
             'linux'   => '-D__linux__ -D__linux',
             'darwin'  => '-D__APPLE__ -D__MACH__',
+            'android' => '-D__ANDROID__',
         ];
         if (isset($platformDefines[$targetOS])) {
             $extraFlags .= ' ' . $platformDefines[$targetOS];
+        }
+        // Android NDK 探测（在通用跨编译器探测之前，Android 使用专用 NDK 工具链）
+        if ($targetOS === 'android' && $cc === null) {
+            $ndkPath = getenv('ANDROID_NDK') ?: getenv('ANDROID_NDK_HOME') ?: getenv('ANDROID_NDK_ROOT');
+            if (!$ndkPath || !is_dir($ndkPath)) {
+                // 尝试从 ANDROID_HOME 推断
+                $androidHome = getenv('ANDROID_HOME');
+                if ($androidHome && is_dir($androidHome . '/ndk')) {
+                    $ndkDirs = glob($androidHome . '/ndk/*', GLOB_ONLYDIR);
+                    if (!empty($ndkDirs)) {
+                        sort($ndkDirs);
+                        $ndkPath = end($ndkDirs);
+                    }
+                }
+            }
+            if (!$ndkPath || !is_dir($ndkPath)) {
+                $ndkExample = match(PHP_OS_FAMILY) {
+                    'Windows' => "    Example: setx ANDROID_NDK \"C:\\Android\\ndk\\25.2.9519653\"\n",
+                    default   => "    Example: export ANDROID_NDK=/opt/android-ndk\n",
+                };
+                die("[!] Android NDK not found.\n"
+                  . "    Android NDK is required for cross-compiling to Android.\n"
+                  . "    Install via Android Studio SDK Manager (SDK Tools → NDK Side by side)\n"
+                  . "    or download from: https://developer.android.com/ndk/downloads\n"
+                  . "    Then set ANDROID_NDK (or ANDROID_NDK_HOME / ANDROID_NDK_ROOT) env var.\n"
+                  . $ndkExample);
+            }
+            $ndkPath = str_replace('\\', '/', $ndkPath);
+            // 主机平台标识
+            $hostTag = match(PHP_OS_FAMILY) {
+                'Windows' => 'windows-x86_64',
+                'Linux'   => 'linux-x86_64',
+                'Darwin'  => 'darwin-x86_64',
+                default   => 'windows-x86_64',
+            };
+            // API level
+            $apiLevel = getenv('TPHP_ANDROID_API') ?: '24';
+            // NDK clang 路径
+            $ndkTriple = match($targetArch) {
+                'aarch64' => 'aarch64-linux-android',
+                'x86_64'  => 'x86_64-linux-android',
+                'armv7a'  => 'armv7a-linux-androideabi',
+                'i686'    => 'i686-linux-android',
+                default   => 'aarch64-linux-android',
+            };
+            $ndkBinDir = "{$ndkPath}/toolchains/llvm/prebuilt/{$hostTag}/bin";
+            $ndkClang = "{$ndkBinDir}/{$ndkTriple}{$apiLevel}-clang";
+            // Windows 下用 .cmd 后缀
+            if (PHP_OS_FAMILY === 'Windows') {
+                $ndkClangCmd = $ndkClang . '.cmd';
+                if (!file_exists($ndkClangCmd)) {
+                    // 某些 NDK 版本用 .bat
+                    $ndkClangCmd = $ndkClang . '.bat';
+                }
+                $ndkClang = file_exists($ndkClangCmd) ? $ndkClangCmd : $ndkClang;
+            }
+            if (!file_exists($ndkClang)) {
+                die("[!] NDK clang not found: {$ndkClang}\n"
+                  . "    Check ANDROID_NDK path and TPHP_ANDROID_API level.\n");
+            }
+            $cc = $ndkClang;
+            $ccExe = $ndkClang;
+            $ccClass = 'Clang';  // NDK clang
+            // sysroot
+            $sysroot = "{$ndkPath}/toolchains/llvm/prebuilt/{$hostTag}/sysroot";
+            $extraFlags = '--sysroot=' . escapeshellarg($sysroot) . ' ' . $extraFlags;
+            echo "[*] Using NDK: {$ndkPath} (API {$apiLevel})\n";
+            echo "[*] NDK clang: {$ndkClang}\n";
+            // Android 强制 -shared，产物为 .so（在后续编译命令中处理）
         }
         // Cross-compiler auto-detection
         // Priority: 1. clang -target (native cross-compile)  2. GCC triplet
@@ -881,6 +976,13 @@ if ($targetOS !== null) {
                 'windows' . $targetArch => "{$targetArch}-windows-gnu",
                 'linux'   . $targetArch => "{$targetArch}-linux-gnu",
                 'darwin'  . $targetArch => "{$targetArch}-apple-darwin",
+                'android' . $targetArch => match($targetArch) {
+                    'aarch64' => 'aarch64-linux-android',
+                    'x86_64'  => 'x86_64-linux-android',
+                    'armv7a'  => 'armv7a-linux-androideabi',
+                    'i686'    => 'i686-linux-android',
+                    default   => 'aarch64-linux-android',
+                },
             ];
             $targetTriple = $triplets[$targetOS . $targetArch] ?? '';
             $found = null;
@@ -891,6 +993,25 @@ if ($targetOS !== null) {
                 if ($vRet === 0) {
                     $found = "{$clangBin} -target {$targetTriple}";
                     break;
+                }
+            }
+            // clang -target 跨编译需要目标平台的 sysroot（glibc 头文件 + crt objects）。
+            // Windows 上的 clang 默认只有 MSVC/MinGW 头文件，没有 Linux glibc。
+            // 用户可通过 TPHP_SYSROOT 环境变量指定 sysroot 路径（如 WSL rootfs）。
+            if ($found !== null && $targetOS !== $currentOS) {
+                $sysroot = getenv('TPHP_SYSROOT');
+                if ($sysroot && is_dir($sysroot)) {
+                    $sysroot = str_replace('\\', '/', $sysroot);
+                    $extraFlags = '--sysroot=' . escapeshellarg($sysroot) . ' ' . $extraFlags;
+                    echo "[*] Using sysroot: {$sysroot}\n";
+                } elseif ($targetOS === 'linux' && PHP_OS_FAMILY === 'Windows') {
+                    die("[!] Cross-compile to Linux requires a Linux sysroot (glibc headers + crt).\n"
+                      . "    clang -target cannot find glibc headers without --sysroot.\n\n"
+                      . "    Option 1: Install WSL and set TPHP_SYSROOT\n"
+                      . "      set TPHP_SYSROOT=\\\\wsl$\\Ubuntu\n"
+                      . "    Option 2: Install a GCC cross-compiler and specify it\n"
+                      . "      -cc x86_64-linux-gnu-gcc -os linux\n"
+                      . "    Option 3: Compile natively on the target platform.\n");
                 }
             }
             // 2nd: try GCC cross-compiler triplets
@@ -953,7 +1074,33 @@ if ($targetOS !== null) {
         }
     }
     // Platform-specific output extension
-    if ($isShared) {
+    if ($targetOS === 'android') {
+        // Android 产物强制为 libtphp.so（共享库，需 -shared）
+        // NativeActivity 加载的 .so 必须以 lib 前缀开头
+        // 所有 Android 产物统一放到 cwd/build/android/ 下，避免污染 ext/ui/android 源码模板：
+        //   - libtphp.so → cwd/build/android/jniLibs/<abi>/libtphp.so
+        //   - app-debug.apk → cwd/build/android/app-debug.apk（gradle 打包时通过 -PtphpApkOut 重定向）
+        $abiMap = [
+            'aarch64' => 'arm64-v8a',
+            'x86_64'  => 'x86_64',
+            'armv7a'  => 'armeabi-v7a',
+            'i686'    => 'x86',
+        ];
+        $abiName = $abiMap[$targetArch] ?? 'arm64-v8a';
+        // 查找 Android 工程模板目录（优先用项目根的 ext/ui/android，否则用 cwd 下 android/）
+        $tphpRoot = dirname(__FILE__);
+        $androidProj = is_dir($tphpRoot . DIRECTORY_SEPARATOR . 'ext' . DIRECTORY_SEPARATOR . 'ui' . DIRECTORY_SEPARATOR . 'android')
+            ? $tphpRoot . DIRECTORY_SEPARATOR . 'ext' . DIRECTORY_SEPARATOR . 'ui' . DIRECTORY_SEPARATOR . 'android'
+            : $cwd . DIRECTORY_SEPARATOR . 'android';
+        // .so 输出到 cwd/build/android/jniLibs/<abi>/，gradle 通过 -PtphpJniLibs 读取
+        $androidBuildDir = $cwd . DIRECTORY_SEPARATOR . 'build' . DIRECTORY_SEPARATOR . 'android';
+        $jniLibsDir = $androidBuildDir . DIRECTORY_SEPARATOR . 'jniLibs' . DIRECTORY_SEPARATOR . $abiName;
+        if (!is_dir($jniLibsDir)) mkdir($jniLibsDir, 0777, true);
+        // 保存用户期望的输出基础名（遵循 -o 机制），用于 APK 命名
+        // 必须在 outExe 被 .so 路径覆盖前提取
+        $apkBaseName = pathinfo($outExe, PATHINFO_FILENAME);
+        $outExe = $jniLibsDir . DIRECTORY_SEPARATOR . 'libtphp.so';
+    } elseif ($isShared) {
         // -shared 模式：动态库扩展名
         $shExt = ($targetOS === 'windows' || ($targetOS === null && PHP_OS_FAMILY === 'Windows')) ? '.dll'
                : (($targetOS === 'darwin' || ($targetOS === null && PHP_OS_FAMILY === 'Darwin')) ? '.dylib' : '.so');
@@ -1270,8 +1417,16 @@ if (PHP_OS_FAMILY === 'Darwin' && !$isTCC
     && strpos($extraFlags, 'ui/sokol') !== false) {
     $extraFlags .= ' -x objective-c';
 }
-// -shared 模式：生成动态库
-$sharedFlag = $isShared ? ' -shared' : '';
+// -shared 模式：生成动态库（Android 产物强制为 .so 共享库，也需 -shared）
+$sharedFlag = ($isShared || $targetOS === 'android') ? ' -shared' : '';
+// 共享库在非 Windows 目标上需要 -fPIC（位置无关代码）
+// Windows DLL 不需要 PIC；Linux/macOS/Android 的 .so 必须用 PIC
+if ($sharedFlag !== '') {
+    $isWindowsTarget = ($targetOS === 'windows') || ($targetOS === null && PHP_OS_FAMILY === 'Windows');
+    if (!$isWindowsTarget) {
+        $extraFlags .= ' -fPIC';
+    }
+}
 // 项目根目录作为额外 -I 路径，让 ext/ 下的扩展头文件（如 ext/stream/src/stream.h）可被 #include 查找到
 $projectRoot = dirname($includeDir);
 // 注意 -I 顺序：TinyPHP 的 include/ 必须在 $extraFlags（含 mbedtls 的 -I 路径）之前，
@@ -1460,6 +1615,315 @@ if ($retval !== 0 || !file_exists($outExe) || filesize($outExe) < 64) {
 
 echo "       [YES] {$outExe}\n";
 
+// Android: 编译成功后自动调用 gradle 打包 APK
+if ($targetOS === 'android') {
+    // ── 多 ABI 编译（用户未显式指定 -arch 时，编译所有 4 个 ABI）──
+    // 模拟器多为 x86_64，真机多为 arm64。只编译 aarch64 会导致 x86_64 模拟器
+    // 无匹配 .so 而 NativeActivity 加载失败秒退。默认编译全部 ABI 覆盖所有设备。
+    // 用户显式 -arch xxx 时只编译指定单一 ABI（减小包体或特定设备）。
+    if (!$archExplicit) {
+        $allAndroidAbis = ['aarch64', 'x86_64', 'armv7a', 'i686'];
+        $extraAbis = array_diff($allAndroidAbis, [$targetArch]);
+        if (!empty($extraAbis)) {
+            echo "[*] Multi-ABI build: compiling " . implode(', ', $allAndroidAbis) . " (default; use -arch <abi> for single)\n";
+            // 递归调用自身编译额外 ABI，复用已转译的 .c 文件
+            // 子进程会重新转译（幂等，覆盖同名 .c），但编译产物输出到对应 jniLibs/<abi>/
+            $selfScript = __FILE__;
+            $phpExe = PHP_BINARY;
+            foreach ($extraAbis as $extraAbi) {
+                // 构建子进程命令：原参数 + -arch <abi> + --no-android-apk（子进程只编译 .so）
+                // 跳过 $argv[0]（脚本自身路径，已用 $selfScript 绝对路径替代）
+                $subArgs = [$phpExe, $selfScript];
+                $skipNextArch = false;
+                foreach (array_slice($argv, 1) as $a) {
+                    if ($a === $phpExe || $a === $selfScript) continue;
+                    // 跳过已有的 -arch 参数及其值（避免覆盖新的 -arch）
+                    if ($skipNextArch) { $skipNextArch = false; continue; }
+                    if ($a === '-arch') { $skipNextArch = true; continue; }
+                    $subArgs[] = $a;
+                }
+                $subArgs[] = '-arch';
+                $subArgs[] = $extraAbi;
+                $subArgs[] = '--no-android-apk';
+                $subCmd = escapeshellarg($phpExe);
+                foreach (array_slice($subArgs, 1) as $a) $subCmd .= ' ' . escapeshellarg($a);
+                echo "       [ABI {$extraAbi}] compiling...\n";
+                $subOutput = [];
+                $subRet = 0;
+                exec($subCmd . ' 2>&1', $subOutput, $subRet);
+                // 输出子进程最后几行（关键信息），完整输出太长
+                $tail = array_slice($subOutput, -5);
+                foreach ($tail as $line) echo "       " . $line . "\n";
+                if ($subRet !== 0) {
+                    echo "[WARN] ABI {$extraAbi} compile failed (skipped). Single-ABI APK may not run on mismatched devices.\n";
+                }
+            }
+        }
+    }
+    // 子进程（--no-android-apk）只编译 .so，跳过 Gradle 打包（主进程统一打包）
+    if ($skipAndroidApk) {
+        echo "       [YES] {$outExe} (skipped APK, --no-android-apk)\n";
+    } else {
+    echo "[3/3] Building APK via Gradle...\n";
+    $gradleDir = $androidProj;
+    // .so 在 cwd/build/android/jniLibs/<abi>/（gradle 通过 -PtphpJniLibs 读取）
+    // APK 输出到 cwd（与其他二进制产物一致），命名遵循 -o 机制，debug 加 -debug 后缀
+    $jniLibsRoot = $androidBuildDir . DIRECTORY_SEPARATOR . 'jniLibs';  // cwd/build/android/jniLibs
+    if (!is_dir($jniLibsRoot)) mkdir($jniLibsRoot, 0777, true);
+    // 通过 -PtphpJniLibs 让 build.gradle 从 cwd/build/android/jniLibs 读取 libtphp.so
+    // （不污染 ext/ui/android 模板）
+    // APK 输出由 Gradle 默认路径生成，构建后由 tphp.php 复制到 cwd/
+    // （在 Gradle 中重定向 outputDirectory 会触发 AGP ListingFileRedirectTask bug）
+    $propArg = '-PtphpJniLibs=' . escapeshellarg($jniLibsRoot);
+
+    if (!is_dir($gradleDir)) {
+        echo "[WARN] Android project template not found, skip APK packaging.\n";
+        echo "       .so is ready at: {$outExe}\n";
+    } else {
+        // ── 0. 检测 Java 版本，不兼容时自动搜索并切换到 Java 17/21 LTS ──
+        // Gradle 8.9 + AGP 8.7.0 官方支持 Java 8~23，Java 24+ 会导致 AGP 内部
+        // XML 解析器（用于扫描 SDK platforms）静默失败，报 "Failed to find target"。
+        $javaHome = getenv('JAVA_HOME');
+        $javaExe = $javaHome ? $javaHome . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'java' : 'java';
+        if ($javaHome && PHP_OS_FAMILY === 'Windows') $javaExe .= '.exe';
+        $javaMajor = 0;
+        if (file_exists($javaExe) || $javaExe === 'java') {
+            exec('"' . $javaExe . '" -version 2>&1', $jOut, $jRet);
+            $jLine = implode("\n", $jOut);
+            if (preg_match('/version "(\d+)(?:\.(\d+))?(?:\.\d+)?"/', $jLine, $jm)) {
+                $javaMajor = (int)$jm[1] === 1 ? (int)($jm[2] ?? 0) : (int)$jm[1];
+            }
+        }
+        // Java 24+ 或未知版本 → 搜索兼容 JDK（17 或 21 LTS）
+        if ($javaMajor > 23 || $javaMajor < 8) {
+            if ($javaMajor > 0) {
+                echo "       [!] Java {$javaMajor} incompatible with Gradle 8.9 (supports 8~23).\n";
+            }
+            // 搜索 JDK 21 和 17（优先 21 LTS）
+            $jdkDirs = [];
+            if (PHP_OS_FAMILY === 'Windows') {
+                foreach (['C:\\env', 'C:\\Program Files\\Java', 'C:\\Program Files\\Eclipse Adoptium'] as $base) {
+                    if (is_dir($base)) {
+                        foreach (glob($base . '\\jdk-21*', GLOB_ONLYDIR) ?: [] as $d) $jdkDirs[] = $d;
+                        foreach (glob($base . '\\jdk-17*', GLOB_ONLYDIR) ?: [] as $d) $jdkDirs[] = $d;
+                    }
+                }
+            } elseif (PHP_OS_FAMILY === 'Darwin') {
+                foreach (glob('/Library/Java/JavaVirtualMachines/*/Contents/Home', GLOB_ONLYDIR) ?: [] as $d) {
+                    if (str_contains($d, '-21.') || str_contains($d, '-17.')) $jdkDirs[] = $d;
+                }
+            } else {
+                foreach (glob('/usr/lib/jvm/java-2{1,7}*', GLOB_ONLYDIR | GLOB_BRACE) ?: [] as $d) $jdkDirs[] = $d;
+            }
+            if (!empty($jdkDirs)) {
+                // 优先选 21，其次 17
+                usort($jdkDirs, fn($a, $b) => (str_contains($b, '21') ? 1 : 0) - (str_contains($a, '21') ? 1 : 0));
+                $javaHome = $jdkDirs[0];
+                putenv('JAVA_HOME=' . $javaHome);
+                echo "       [YES] Switched to Java: {$javaHome}\n";
+            } else {
+                echo "           No compatible JDK (17/21) found. Install Java 21 LTS.\n";
+                if (PHP_OS_FAMILY === 'Windows') {
+                    echo "           Example: setx JAVA_HOME \"C:\\env\\jdk-21\"\n";
+                } else {
+                    echo "           Example: export JAVA_HOME=/usr/lib/jvm/java-21\n";
+                }
+            }
+        }
+        // ── 1. 检测 Android SDK，生成 local.properties ──
+        $sdkRoot = getenv('ANDROID_HOME') ?: getenv('ANDROID_SDK_ROOT');
+        if (!$sdkRoot) {
+            $defaultSdk = match(PHP_OS_FAMILY) {
+                'Windows' => getenv('LOCALAPPDATA') . '\\Android\\Sdk',
+                'Darwin'  => getenv('HOME') . '/Library/Android/sdk',
+                default   => getenv('HOME') . '/Android/Sdk',
+            };
+            if (is_dir($defaultSdk)) $sdkRoot = $defaultSdk;
+        }
+        if ($sdkRoot && is_dir($sdkRoot)) {
+            $localProps = $gradleDir . DIRECTORY_SEPARATOR . 'local.properties';
+            $sdkPath = str_replace('\\', '/', $sdkRoot);
+            file_put_contents($localProps, "sdk.dir={$sdkPath}\n");
+            echo "       [YES] SDK: {$sdkRoot}\n";
+            // 自动接受所有 SDK 许可（避免 Gradle 构建时报 "licenses not accepted"）
+            // Android SDK 许可哈希是 Google 公开的固定值，写入 licenses 目录即表示接受
+            // 参考：https://developer.android.com/studio/intro/update.html#download-with-gradle
+            $licensesDir = $sdkRoot . DIRECTORY_SEPARATOR . 'licenses';
+            if (!is_dir($licensesDir)) mkdir($licensesDir, 0777, true);
+            // Google 公开的许可哈希（写入这些文件等于接受所有 SDK 许可）
+            // 注意：每个哈希前必须有 \n，末尾也必须有 \n，否则 Gradle 解析失败
+            // 参考：https://developer.android.com/studio/intro/update.html#download-with-gradle
+            //   - 8933...  API < 28 旧许可
+            //   - 2433...  API 28~33 许可
+            //   - d56f...  API 34+ 新增许可（AGP 8.x 内部依赖 android-34 / build-tools 34.0.0）
+            $licenseHashes = [
+                'android-sdk-license'          => "\n8933bad161af4178b1185d1a37fbf41ea5269c55\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af698cb\n",
+                'android-sdk-preview-license'  => "\n84831b9409646a918e30573bab4c9c91346d8abd\n",
+                'android-sdk-arm-dbt-license'  => "\n859f317696f67ef3d7f30a50a5560e7834e282e0\n",
+                'android-googletv-license'     => "\n601085b94cd77f0b54ff86406907032723ea9580\n",
+                'mips-android-sysimage-license' => "\ne9acab5b5fbb560a72cfaecf8947a6ab\n",
+                'google-gdk-license'           => "\n33b6a2b6a071c3892a5825047dd9a31d\n",
+                'intel-android-extra-license'  => "\nd975f751698a77b662f1254ddbeed3901e7634aa\n",
+            ];
+            $needWrite = false;
+            foreach ($licenseHashes as $name => $hash) {
+                $licFile = $licensesDir . DIRECTORY_SEPARATOR . $name;
+                // 若文件不存在或内容不包含所有需要的哈希，则重写
+                // （旧版本可能缺少 d56f... 哈希，需要补写）
+                if (!file_exists($licFile) || strpos((string)file_get_contents($licFile), 'd56f5187479451eabf01fb78af698cb') === false && $name === 'android-sdk-license') {
+                    file_put_contents($licFile, $hash);
+                    $needWrite = true;
+                }
+            }
+            // 清理 Gradle 下载中断残留的 -N 后缀目录（如 android-35-3 → android-35）
+            // 问题：Gradle 下载时若目标目录已存在（不完整），会装到 android-35-N，
+            //   但 -N 目录的 package.xml 中 path 仍是 "platforms;android-35"，
+            //   导致多个目录声称是同一个包，AGP 扫描时冲突并拒绝识别 android-35。
+            //   另一类残留：目录只有 .installer/.installData（无 package.xml），
+            //   是 Gradle 下载中断的空壳，AGP 扫描到会污染 SDK 仓库状态。
+            foreach (['platforms', 'build-tools'] as $subDir) {
+                $base = $sdkRoot . DIRECTORY_SEPARATOR . $subDir;
+                if (!is_dir($base)) continue;
+                $items = glob($base . DIRECTORY_SEPARATOR . '*', GLOB_ONLYDIR);
+                if ($items === false) continue;
+                // 完整性判断：platforms 需 android.jar + source.properties；build-tools 需 aapt2 + source.properties
+                $isComplete = function (string $dir) use ($subDir): bool {
+                    if (!file_exists($dir . DIRECTORY_SEPARATOR . 'source.properties')) return false;
+                    if ($subDir === 'platforms') {
+                        return file_exists($dir . DIRECTORY_SEPARATOR . 'android.jar');
+                    }
+                    return file_exists($dir . DIRECTORY_SEPARATOR . 'aapt2.exe')
+                        || file_exists($dir . DIRECTORY_SEPARATOR . 'aapt2');
+                };
+                foreach ($items as $item) {
+                    $name = basename($item);
+                    $pkgXml = $item . DIRECTORY_SEPARATOR . 'package.xml';
+                    if (!file_exists($pkgXml)) {
+                        // 无 package.xml 但有 .installer/ → 下载中断的空壳目录，直接删除
+                        if (is_dir($item . DIRECTORY_SEPARATOR . '.installer')) {
+                            if (deleteDirectory($item)) {
+                                echo "       [YES] Deleted incomplete {$subDir}/{$name} (no package.xml)\n";
+                            }
+                        }
+                        continue;
+                    }
+                    $content = (string)file_get_contents($pkgXml);
+                    // 解析 path="platforms;android-35" 或 path="build-tools;35.0.0"
+                    if (!preg_match('/path="[^;]+;([^"]+)"/', $content, $pm)) continue;
+                    $expectedName = $pm[1];
+                    if ($expectedName === $name) continue;  // 目录名与 path 一致，正常目录
+                    // 目录名与 path 不一致 → 是 -N 重复目录
+                    $targetPath = $base . DIRECTORY_SEPARATOR . $expectedName;
+                    if (is_dir($targetPath) && $isComplete($targetPath)) {
+                        // 目标完整 → 删除 -N 重复目录（消除 path 冲突）
+                        if (deleteDirectory($item)) {
+                            echo "       [YES] Deleted duplicate {$name} ({$expectedName} is complete)\n";
+                        }
+                    } elseif ($isComplete($item)) {
+                        // 目标不存在/不完整，-N 完整 → 用 -N 替换目标
+                        if (is_dir($targetPath)) deleteDirectory($targetPath);
+                        if (@rename($item, $targetPath)) {
+                            echo "       [YES] Replaced {$expectedName} with {$name}\n";
+                        }
+                    }
+                }
+            }
+            // 清理 SDK 根下的 .temp 目录（Gradle 下载临时目录，中断后残留）
+            $sdkTemp = $sdkRoot . DIRECTORY_SEPARATOR . '.temp';
+            if (is_dir($sdkTemp)) {
+                if (deleteDirectory($sdkTemp)) {
+                    echo "       [YES] Cleaned .temp directory\n";
+                }
+            }
+        } else {
+            $sdkExample = match(PHP_OS_FAMILY) {
+                'Windows' => "           setx ANDROID_HOME \"%LOCALAPPDATA%\\Android\\Sdk\"\n",
+                'Darwin'  => "           export ANDROID_HOME=~/Library/Android/sdk\n",
+                default   => "           export ANDROID_HOME=~/Android/Sdk\n",
+            };
+            echo "       [!] Android SDK not found. APK packaging skipped.\n";
+            echo "           Android SDK is required for Gradle to build APK.\n";
+            echo "           Install via Android Studio SDK Manager, then set ANDROID_HOME env var.\n";
+            echo $sdkExample;
+            echo "           .so is ready at: {$outExe}\n";
+            $sdkRoot = false;
+        }
+
+        // ── 2. 执行 gradle 打包 ──
+        if (!empty($sdkRoot)) {
+            // 清理项目下的 .gradle/ 配置缓存（不影响 ~/.gradle/caches/ 中的依赖缓存）
+            // AGP 会缓存 SDK 状态到此处，若 SDK 曾有不完整/重复目录，缓存会导致
+            // "Failed to find target" 持续报错，即使 SDK 已修复
+            $configCache = $gradleDir . DIRECTORY_SEPARATOR . '.gradle';
+            if (is_dir($configCache)) {
+                deleteDirectory($configCache);
+            }
+
+            // SDK 根的 source.properties（platform-tools 元数据）会干扰 AGP 的
+            // LegacyLocalRepoLoader，导致 SDK 扫描器将根目录当作一个 package，
+            // 无法发现 platforms/ 下的平台包，报 "Failed to find target"。
+            // 临时重命名，Gradle 构建结束后恢复。
+            $rootProps = $sdkRoot . DIRECTORY_SEPARATOR . 'source.properties';
+            $rootPropsBak = $rootProps . '.tphp_bak';
+            $rootPropsRenamed = false;
+            if (file_exists($rootProps) && !file_exists($rootPropsBak)) {
+                @rename($rootProps, $rootPropsBak);
+                $rootPropsRenamed = true;
+            }
+
+            $gradlew = PHP_OS_FAMILY === 'Windows' ? 'gradlew.bat' : './gradlew';
+            $useWrapper = file_exists($gradleDir . DIRECTORY_SEPARATOR . $gradlew);
+            $apkCmd = '';
+            if ($useWrapper) {
+                // --no-daemon: 避免 Daemon 缓存旧的 SDK 状态（首次构建时 SDK 可能刚下载完）
+                $apkCmd = escapeshellarg($gradlew) . ' assembleDebug --no-daemon ' . $propArg;
+            } else {
+                exec('gradle --version 2>&1', $gOut, $gRet);
+                if ($gRet === 0) {
+                    $apkCmd = 'gradle assembleDebug --no-daemon ' . $propArg;
+                }
+            }
+            if ($apkCmd === '') {
+                echo "       [WARN] No gradle found. .so is at: {$outExe}\n";
+                echo "       Install gradle or run: cd \"{$gradleDir}\" && gradlew assembleDebug {$propArg}\n";
+                // 恢复 source.properties
+                if ($rootPropsRenamed && file_exists($rootPropsBak)) {
+                    @rename($rootPropsBak, $rootProps);
+                }
+            } else {
+                if (PHP_OS_FAMILY === 'Windows') $apkCmd = 'cd /d ' . escapeshellarg($gradleDir) . ' && ' . $apkCmd;
+                else $apkCmd = 'cd ' . escapeshellarg($gradleDir) . ' && ' . $apkCmd;
+                system($apkCmd, $apkRet);
+                // 恢复 source.properties（无论构建成功与否）
+                if ($rootPropsRenamed && file_exists($rootPropsBak)) {
+                    @rename($rootPropsBak, $rootProps);
+                }
+                if ($apkRet === 0) {
+                    // Gradle 默认输出到 <gradleDir>/app/build/outputs/apk/debug/app-debug.apk
+                    $defaultApk = $gradleDir . DIRECTORY_SEPARATOR . 'app' . DIRECTORY_SEPARATOR . 'build'
+                        . DIRECTORY_SEPARATOR . 'outputs' . DIRECTORY_SEPARATOR . 'apk' . DIRECTORY_SEPARATOR
+                        . 'debug' . DIRECTORY_SEPARATOR . 'app-debug.apk';
+                    // APK 放到 cwd，命名遵循 -o 机制：debug 加 -debug 后缀
+                    $targetApk = $cwd . DIRECTORY_SEPARATOR . $apkBaseName . '-debug.apk';
+                    if (file_exists($defaultApk)) {
+                        // 复制 APK 到 cwd/（不移动，保留 Gradle 默认产物供增量构建）
+                        copy($defaultApk, $targetApk);
+                        echo "       [YES] {$targetApk}\n";
+                        echo "       Install: adb install \"{$targetApk}\"\n";
+                    } else {
+                        echo "       [YES] APK built (see {$defaultApk})\n";
+                    }
+                } else {
+                    echo "       [NO] Gradle build failed (exit {$apkRet}).\n";
+                    echo "       .so is ready at: {$outExe}\n";
+                    exit(1);
+                }
+            }
+        }
+    }
+    } // end else (not $skipAndroidApk)
+}
+
 // --debug: run binary and compare expected vs actual output
 if ($debugMode) {
     $debugLines = !empty($allDebugs) ? $allDebugs : $merged->debugs;
@@ -1572,6 +2036,32 @@ function extractArMembers(string $aFile, string $outDir): array
 }
 
 // ============================================================
+/** 递归删除目录（用于清理 SDK 中重复的 -N 后缀目录和 Gradle 缓存） */
+function deleteDirectory(string $dir): bool
+{
+    if (!is_dir($dir)) return false;
+    // Windows 上某些文件可能有只读属性，用 cmd rmdir /s /q 最可靠
+    if (PHP_OS_FAMILY === 'Windows') {
+        $cmd = 'rmdir /s /q "' . $dir . '" 2>nul';
+        exec($cmd, $out, $ret);
+        return !is_dir($dir);
+    }
+    $files = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($files as $fileinfo) {
+        $path = $fileinfo->getPathname();
+        if ($fileinfo->isDir()) {
+            @rmdir($path);
+        } else {
+            @unlink($path);
+        }
+    }
+    return @rmdir($dir);
+}
+
+// ============================================================
 /** @param string[] $args
  *  @return array{0: string[], 1: string[]} */
 function collectFiles(array $args): array
@@ -1663,8 +2153,9 @@ Usage:
 Options:
   -o <output>       output file path (default: named after entry file)
   -cc <compiler>    specify C compiler (default: built-in TCC)
-  -os <target>      cross-compile target: windows, linux, macos
+  -os <target>      cross-compile target: windows, linux, macos, android
   -arch <arch>      target architecture: x86_64, aarch64 (default: host)
+  TPHP_SYSROOT      env: sysroot path for clang -target cross-compile (e.g. \\wsl$\Ubuntu)
   -shared           compile as shared library (.dll/.so/.dylib)
   --debug           print full compile command
   --ssa             enable SSA IR pipeline (FlatAst → SSA → optimize → C)
@@ -1681,6 +2172,7 @@ Examples:
   tphp main.php -os linux -arch aarch64             (ARM64 Linux)
   tphp main.php -os windows -cc gcc                 (x86_64 Windows via mingw)
   tphp lib.php -shared -o mylib.dll                 (shared library with #[Export])
+  tphp . -os android                               (Android APK, auto gradle build)
 
 HELP;
     exit(0);

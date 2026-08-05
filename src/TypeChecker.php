@@ -146,6 +146,7 @@ class TypeChecker implements ASTVisitor
         'spl_autoload_unregister' => 'bool', 'spl_autoload_functions' => 'array',
         'iterator_to_array' => 'array', 'iterator_count' => 'int',
         'iterator_apply' => 'int',
+        'get_object_vars' => 't_array*',
         // ── ext 扩展函数返回类型（与 CodeGenerator::$builtinRetTypes 保持同步）──
         //   避免扩展函数返回具体类型（如 Resource*）被推导为 mixed（t_var），
         //   导致变量声明类型不匹配（如 t_var zip = tphp_fn_zip_open() → 编译错误）
@@ -560,6 +561,10 @@ class TypeChecker implements ASTVisitor
         $this->symbols->addClassProp('tphp_class_AnnotationEntry', 'name', 't_string');
         $this->symbols->addClassMethod('tphp_class_AnnotationEntry', '__construct', new MethodInfo('void', ['t_array*', 't_string', 't_string']));
         $this->symbols->addClassMethod('tphp_class_AnnotationEntry', '__destruct',  new MethodInfo('void'));
+
+        // 内置 stdClass 类（动态属性容器）
+        $this->symbols->addClass('tphp_class_stdClass');
+        $this->symbols->addClassName('stdClass', 'tphp_class_stdClass');
     }
 
     /** 注册内置常量 */
@@ -2967,6 +2972,11 @@ class TypeChecker implements ASTVisitor
 
             $cName = $this->typeToCName($objType);
             if ($cName !== null) {
+                // stdClass 动态属性访问：返回 mixed（t_var），属性类型运行时确定
+                if ($cName === 'tphp_class_stdClass') {
+                    $node->inferredType = Type::$mixed;
+                    return;
+                }
                 // 枚举属性访问：name → string, value → backing type
                 $enumCName = $this->symbols->resolveEnumCName($cName);
                 if ($enumCName !== null) {

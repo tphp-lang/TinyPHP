@@ -427,6 +427,30 @@ static inline void _cpu_window_set_cursor(t_int cursor) {
     }
 }
 
+#elif defined(__ANDROID__)
+// ── Android CPU 后端（stub：实际渲染由 sokol GLES3 处理）──
+static int _cpu_app_run(t_int width, t_int height, t_string title) {
+    // Android 上事件循环由 ANativeActivity 驱动，此函数不应被调用
+    // 参数仅为保持签名与其他平台一致，避免调用点类型不匹配
+    (void)width; (void)height; (void)title;
+    return 0;
+}
+static int _cpu_window_width(void) {
+    // 从 ANativeWindow 获取宽度（如果可用）
+    return 0;
+}
+static int _cpu_window_height(void) {
+    return 0;
+}
+static float _cpu_window_dpi_scale(void) {
+    return 1.0f;
+}
+static void _cpu_window_set_cursor(int cursor) {
+    // Android 无硬件鼠标光标
+    (void)cursor;
+}
+static ui_draw_device_t _ui_cpu_device = {0};
+
 #elif defined(__linux__)
 // ── Linux X11 CPU 后端（后续实现）──
 //   当前 Linux 环境（桌面）通常有 GPU 或 llvmpipe 软件渲染，

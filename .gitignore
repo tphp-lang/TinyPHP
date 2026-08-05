@@ -8,7 +8,11 @@
 *.lib
 *.log
 *.tmp
+*.apk
+local.properties
+.gradle/
 build/
+
 tcc
 tcc-src/
 *.phar
