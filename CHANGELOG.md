@@ -18,6 +18,11 @@
   - **Parser 支持**：新增 `(object)` cast 类型识别（Lexer 中 `object` 非类型关键字，需 Parser 特判）
   - **测试覆盖**：6 个测试文件（basic/cast/isset_unset/foreach/functions/edge），TCC/GCC/Clang 三编译器全部通过
 
+### 修复
+
+- **macOS Metal shader 缺失**（`ext/ui/src/ui.h`）：shader 源码只有 `SOKOL_GLCORE` 和 `SOKOL_GLES3` 两个条件编译分支，macOS 使用 `SOKOL_METAL` 后端时 `_sr_vs_src`/`_sr_fs_src` 未声明导致编译失败。添加 `SOKOL_METAL` 分支提供 MSL（Metal Shading Language）源码，通过 `_SR_VS_ENTRY`/`_SR_FS_ENTRY` 宏为 Metal 后端设置显式 entry 函数名（`vs_main`/`fs_main`）
+- **Android NDK CI 报错 "built-in TCC not found"**（`tphp.php`）：`-os android` 时默认尝试找 TCC，但 Linux CI 环境未安装 TCC。Android 目标使用 NDK clang，跳过 TCC 存在性检查；`$ccClass` 在条件编译求值阶段（Phase 1）提前设为 'Clang'（而非等到 NDK 探测逻辑 Phase 2）
+
 ## [0.2.0-beta.9] — 2026-08-02
 
 ### 新增
