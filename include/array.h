@@ -839,7 +839,10 @@ static inline t_array* tphp_fn_arr_pad(t_array *a, t_int size, t_var val) {
         // 原样返回拷贝
         t_array* out = tphp_fn_arr_create(len);
         if (out == NULL) { tp_throw("arr_pad: out of memory"); return NULL; }
-        for (int i = 0; i < len; i++) out->entries[i] = a->entries[i];
+        for (int i = 0; i < len; i++) {
+            out->entries[i] = a->entries[i];
+            _arr_val_retain(out->entries[i].val);
+        }
         out->length = len;
         return out;
     }
@@ -852,20 +855,22 @@ static inline t_array* tphp_fn_arr_pad(t_array *a, t_int size, t_var val) {
         for (int i = 0; i < pad; i++) {
             out->entries[i].key.type = TYPE_INT;
             out->entries[i].key.value._int = i;
-            out->entries[i].val = val;
+            out->entries[i].val = _arr_val_retain(val);
         }
         for (int i = 0; i < len; i++) {
             out->entries[pad + i] = a->entries[i];
+            _arr_val_retain(out->entries[pad + i].val);
         }
     } else {
         // 右侧填充
         for (int i = 0; i < len; i++) {
             out->entries[i] = a->entries[i];
+            _arr_val_retain(out->entries[i].val);
         }
         for (int i = len; i < total; i++) {
             out->entries[i].key.type = TYPE_INT;
             out->entries[i].key.value._int = i;
-            out->entries[i].val = val;
+            out->entries[i].val = _arr_val_retain(val);
         }
     }
     out->length = total;
@@ -1009,9 +1014,12 @@ static inline void tphp_fn_arr_free(t_array *a) {
         // 释放 string key（堆分配的）
         if (a->entries[i].key.type == TYPE_STRING)
             tphp_rt_str_free(&a->entries[i].key.value._string);
-        // 递归释放嵌套数组
+        // 释放值（引用计数类型：数组/对象）
+        //   string 值不由引用计数管理（走 str_pool/arena），与 _arr_val_release 一致
         if (a->entries[i].val.type == TYPE_ARRAY && a->entries[i].val.value._array != NULL)
             tphp_fn_arr_free(a->entries[i].val.value._array);
+        else if (a->entries[i].val.type == TYPE_OBJECT && a->entries[i].val.value._ptr != NULL)
+            tp_obj_release(a->entries[i].val.value._ptr);
     }
     // 回收到复用池（而非 free），减少后续 malloc
     // arr_pool_put 内部会判断 is_shared 决定入池还是直接 free
@@ -1139,6 +1147,7 @@ static inline t_array* tphp_fn_arr_reverse(t_array *a, bool preserve_keys) {
     if (unlikely(r == NULL)) { tp_throw("arr_reverse: out of memory"); return NULL; }
     for (int i = a->length - 1, j = 0; i >= 0; i--, j++) {
         r->entries[j] = a->entries[i];
+        _arr_val_retain(r->entries[j].val);
         if (!preserve_keys) {
             r->entries[j].key.type = TYPE_INT;
             r->entries[j].key.value._int = j;
@@ -1174,6 +1183,7 @@ static inline t_array* tphp_fn_arr_slice(t_array *a, int offset, int length, boo
     if (unlikely(r == NULL)) { tp_throw("arr_slice: out of memory"); return NULL; }
     for (int i = 0; i < count; i++) {
         r->entries[i] = a->entries[offset + i];
+        _arr_val_retain(r->entries[i].val);
         if (!preserve_keys) {
             r->entries[i].key.type = TYPE_INT;
             r->entries[i].key.value._int = i;

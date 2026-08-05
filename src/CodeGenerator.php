@@ -1301,8 +1301,13 @@ class CodeGenerator implements ASTVisitor
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_OS STR_LIT("' . $phpOs . '")');
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_OS_FAMILY STR_LIT("' . $phpOsFamily . '")');
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_SAPI STR_LIT("cli")');
-        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_VERSION STR_LIT("' . (defined('TPHP_VERSION') ? TPHP_VERSION : '0.0.0') . '")');
-        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_EXTRA_VERSION STR_LIT("-beta.9")');
+        // 从 TPHP_VERSION 拆分主版本和后缀：0.2.0-beta.10 → PHP_VERSION=0.2.0, PHP_EXTRA_VERSION=-beta.10
+        $fullVer = defined('TPHP_VERSION') ? TPHP_VERSION : '0.0.0';
+        $dashPos = strpos($fullVer, '-');
+        $phpVer = $dashPos !== false ? substr($fullVer, 0, $dashPos) : $fullVer;
+        $phpExtraVer = $dashPos !== false ? substr($fullVer, $dashPos) : '';
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_VERSION STR_LIT("' . $phpVer . '")');
+        $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_EXTRA_VERSION STR_LIT("' . $phpExtraVer . '")');
         // 整数常量
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_INT_MAX INT64_MAX');
         $this->sectionLine(self::SEC_CONSTS, '#define TPHP_CONST_PHP_INT_MIN INT64_MIN');

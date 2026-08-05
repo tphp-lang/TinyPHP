@@ -12,8 +12,8 @@ declare(strict_types=1);
 //   tphp -f <file.php> [-o <output.exe>]
 // ============================================================
 
-/** TinyPHP 版本号 */
-const TPHP_VERSION = '0.2.0-beta.9';
+/** TinyPHP 版本号（唯一手动维护处，CodeGenerator/编译产物均从此派生） */
+const TPHP_VERSION = '0.2.0-beta.11';
 
 spl_autoload_register(function (string $class): void {
     $baseDir = __DIR__ . '/src';

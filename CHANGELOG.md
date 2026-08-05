@@ -20,6 +20,20 @@
 
 ### 修复
 
+- **运行时正确性 bug 修复**（10 个 P0 级修复）：
+  - **数组浅拷贝不 retain**（`include/array.h`）：`arr_pad`/`arr_reverse`/`arr_slice` 复制 entry 时未调用 `_arr_val_retain`，嵌套数组/对象会被 double-free。5 处修复，复制后 retain 引用计数
+  - **arr_free 不释放对象值**（`include/array.h`）：`arr_free` 只处理 TYPE_ARRAY 值，TYPE_OBJECT 值未 `tp_obj_release`，导致内存泄漏
+  - **json_itoa int64 截断**（`include/os/json.h`）：`json_itoa` 将 int64 截断为 `uint32_t`（`json_write_u32((uint32_t)val)`），大于 2^32 的整数输出错误；`val = -val` 对 INT64_MIN 是 UB。重写为 uint64_t 全程处理，INT64_MIN 用 `(uint64_t)(-(val+1)) + 1` 安全取绝对值
+  - **json_ilen INT64_MIN 边界**（`include/os/json.h`）：同步修复，扩展查表到 19 位，用 uint64 比较避免 `-val` UB
+  - **Future::race 只等 futures[0]**（`include/object/channel.h`）：自旋失败后只阻塞等第 0 个 Future，其他 Future 先完成时死锁。改为轮询所有 Future + `thrd_yield` 让出 CPU
+  - **运行时登记表 type 5 泄漏**（`include/runtime.h`）：`tphp_rt_free_all` 的 switch 只处理 type 0/1/2/3，type 5（闭包 env）被静默跳过导致泄漏。添加 `case 5: free(n->ptr)`
+  - **zip store 方式越界读**（`include/os/zip.h`）：store 方式用 `comp_size` 校验边界但用 `uncomp_size`（`read_len`）读取，畸形 zip（comp_size < uncomp_size）导致越界。store 方式改用 `read_len` 校验
+  - **parse_int 无溢出检查**（`include/runtime.h`）：`val*10+digit` 无溢出检查，超大整数回绕。添加 `val > (INT64_MAX - digit) / 10` 检查，溢出返回 INT64_MAX/MIN
+  - **str_replace 无溢出检查**（`include/std/core.h`）：`new_len = subject.length + count * (replace.length - search.length)` 用 int 计算可能溢出。改用 int64_t 计算并检查 INT32_MAX
+  - **pgsql SCRAM nonce 非 CSPRNG**（`ext/pgsql/pgsql_protocol.h`）：使用 `rand()+time()` 生成 SCRAM nonce，安全性不足。Windows 动态加载 `RtlGenRandom`（advapi32.dll，兼容 TCC），Linux 用 `/dev/urandom`
+  - **pgsql 服务器 nonce 未校验前缀**（`ext/pgsql/pgsql_protocol.h`）：未验证服务器返回的 nonce 是否以客户端 nonce 为前缀，违反 RFC 5802 §5.1。添加 `memcmp` 前缀校验
+  - **pgsql 接收消息无长度上限**（`ext/pgsql/pgsql_protocol.h`）：`payload_len` 无上限，恶意服务器可迫使 malloc 近 2GB。设置 256MB 上限
+
 - **macOS Metal shader 缺失**（`ext/ui/src/ui.h`）：shader 源码只有 `SOKOL_GLCORE` 和 `SOKOL_GLES3` 两个条件编译分支，macOS 使用 `SOKOL_METAL` 后端时 `_sr_vs_src`/`_sr_fs_src` 未声明导致编译失败。添加 `SOKOL_METAL` 分支提供 MSL（Metal Shading Language）源码，通过 `_SR_VS_ENTRY`/`_SR_FS_ENTRY` 宏为 Metal 后端设置显式 entry 函数名（`vs_main`/`fs_main`）
 - **Android NDK CI 报错 "built-in TCC not found"**（`tphp.php`）：`-os android` 时默认尝试找 TCC，但 Linux CI 环境未安装 TCC。Android 目标使用 NDK clang，跳过 TCC 存在性检查；`$ccClass` 在条件编译求值阶段（Phase 1）提前设为 'Clang'（而非等到 NDK 探测逻辑 Phase 2）
 

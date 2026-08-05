@@ -126,9 +126,18 @@ static inline t_int tphp_rt_parse_int(t_string s) {
     if (i < s.length && d[i] == '-') { sign = -1; i++; }
     else if (i < s.length && d[i] == '+') { i++; }
     t_int val = 0;
+    int overflow = 0;
     while (i < s.length && d[i] >= '0' && d[i] <= '9') {
-        val = val * 10 + (t_int)(d[i] - '0');
+        int digit = d[i] - '0';
+        // 溢出检查：val * 10 + digit > INT64_MAX
+        if (val > (INT64_MAX - digit) / 10) {
+            overflow = 1;
+        }
+        val = val * 10 + (t_int)digit;
         i++;
+    }
+    if (overflow) {
+        return (sign > 0) ? INT64_MAX : INT64_MIN;
     }
     return val * sign;
 }
@@ -432,6 +441,7 @@ static inline void tphp_rt_free_all(void) {
                 case 1: tphp_fn_arr_free((t_array *)n->ptr);    break;
                 case 2: { t_string *s = (t_string *)n->ptr; free(STR_MUT_P(s)); free(s); } break;
                 case 3: free(n->ptr); break; /* closure capture env / generic heap */
+                case 5: free(n->ptr); break; /* closure env (cross-thread) */
             }
         }
         free(n);

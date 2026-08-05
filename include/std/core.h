@@ -548,9 +548,12 @@ static inline t_string tphp_fn_str_replace(t_string search, t_string replace, t_
         }
     }
     if (count == 0) return tphp_rt_str_dup(subject);
-    // Calculate new length and build result
-    int new_len = subject.length + count * (replace.length - search.length);
-    if (new_len <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    // Calculate new length and build result (用 int64_t 防溢出)
+    int64_t delta = (int64_t)replace.length - (int64_t)search.length;
+    int64_t new_len_big = (int64_t)subject.length + (int64_t)count * delta;
+    if (new_len_big <= 0) return (t_string){.data = NULL, .length = 0, .is_local = false};
+    if (new_len_big > INT32_MAX) { tp_throw("str_replace(): result too large"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
+    int new_len = (int)new_len_big;
     char *buf = str_pool_alloc(new_len);
     if (buf == NULL) { tp_throw("str_replace(): out of memory"); return (t_string){.data = NULL, .length = 0, .is_local = false}; }
     int pos = 0, si = 0;

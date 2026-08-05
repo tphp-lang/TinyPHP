@@ -499,24 +499,21 @@ static inline tphp_class_Future* tphp_class_Future_race(t_array *futures) {
             return result;
         }
     }
-    /* 没有提前完成的 — 非抛出式等待第一个 */
-    if (n > 0) {
-        tphp_class_Future *f = (tphp_class_Future*)futures->entries[0].val.value._object;
-        for (int s = 0; s < TPHP_CHAN_SPIN; s++) {
-            if (f->state != _TP_FUTURE_PENDING) break;
-        }
-        if (f->state == _TP_FUTURE_PENDING) {
-            mtx_lock(&f->mtx);
-            while (f->state == _TP_FUTURE_PENDING) {
-                cnd_wait(&f->done, &f->mtx);
+    /* 没有提前完成的 — 轮询所有 Future，等待任意一个完成 */
+    while (n > 0) {
+        for (int i = 0; i < n; i++) {
+            tphp_class_Future *f = (tphp_class_Future*)futures->entries[i].val.value._object;
+            if (f->state != _TP_FUTURE_PENDING) {
+                if (f->state == _TP_FUTURE_REJECTED) {
+                    tphp_class_Future_reject(result, f->error);
+                } else {
+                    tphp_class_Future_resolve(result, f->result);
+                }
+                return result;
             }
-            mtx_unlock(&f->mtx);
         }
-        if (f->state == _TP_FUTURE_REJECTED) {
-            tphp_class_Future_reject(result, f->error);
-        } else {
-            tphp_class_Future_resolve(result, f->result);
-        }
+        /* 所有 Future 仍 pending — 让出 CPU 避免忙等浪费 */
+        thrd_yield();
     }
     return result;
 }
