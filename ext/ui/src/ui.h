@@ -349,6 +349,36 @@ static const char* _sr_fs_src =
     "in vec4 v_color;\n"
     "out vec4 frag_color;\n"
     "void main() { frag_color = v_color; }\n";
+#elif defined(SOKOL_METAL)
+// Metal 后端需要 MSL（Metal Shading Language）源码，entry 函数名必须显式提供
+static const char* _sr_vs_src =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct v_in { float2 pos [[attribute(0)]]; float4 color [[attribute(1)]]; };\n"
+    "struct v_out { float4 position [[position]]; float4 v_color; };\n"
+    "vertex v_out vs_main(v_in in [[stage_in]], constant float2& u_resolution [[buffer(0)]]) {\n"
+    "    v_out out;\n"
+    "    float2 ndc = (in.pos / u_resolution) * 2.0 - 1.0;\n"
+    "    out.position = float4(ndc.x, -ndc.y, 0.0, 1.0);\n"
+    "    out.v_color = in.color;\n"
+    "    return out;\n"
+    "}\n";
+static const char* _sr_fs_src =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct v_out { float4 position [[position]]; float4 v_color; };\n"
+    "fragment float4 fs_main(v_out in [[stage_in]]) {\n"
+    "    return in.v_color;\n"
+    "}\n";
+#endif
+
+// Metal 后端需要显式 entry 函数名；GL 后端 entry 为 NULL（按 GLSL main 约定）
+#if defined(SOKOL_METAL)
+    #define _SR_VS_ENTRY "vs_main"
+    #define _SR_FS_ENTRY "fs_main"
+#else
+    #define _SR_VS_ENTRY NULL
+    #define _SR_FS_ENTRY NULL
 #endif
 
 static void _sr_init(void) {
@@ -358,8 +388,8 @@ static void _sr_init(void) {
         .usage = { .stream_update = true },
     });
     sg_shader shd = sg_make_shader(&(sg_shader_desc){
-        .vertex_func = { .source = _sr_vs_src },
-        .fragment_func = { .source = _sr_fs_src },
+        .vertex_func = { .source = _sr_vs_src, .entry = _SR_VS_ENTRY },
+        .fragment_func = { .source = _sr_fs_src, .entry = _SR_FS_ENTRY },
         .attrs = {
             [0] = { .glsl_name = "pos", .hlsl_sem_name = "POS" },
             [1] = { .glsl_name = "color", .hlsl_sem_name = "COLOR" },

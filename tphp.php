@@ -207,7 +207,8 @@ if ($cc !== null) {
         . (PHP_OS_FAMILY === 'Windows'
             ? DIRECTORY_SEPARATOR . 'win32' . DIRECTORY_SEPARATOR . 'tcc.exe'
             : DIRECTORY_SEPARATOR . 'tcc');
-    if (!file_exists($ccExe)) die("Error: built-in TCC not found: {$ccExe}\nBuild TCC first or use -cc to specify another compiler\n");
+    // Android 目标使用 NDK clang（在后续 Android NDK 探测逻辑中设置），跳过 TCC 检查
+    if ($targetOS !== 'android' && !file_exists($ccExe)) die("Error: built-in TCC not found: {$ccExe}\nBuild TCC first or use -cc to specify another compiler\n");
 }
 
 if (!is_dir($includeDir))    die("Error: include directory not found: {$includeDir}\n");
@@ -219,6 +220,9 @@ if ($cc !== null) {
     $ccLower = strtolower($cc);
     if (str_contains($ccLower, 'gcc')) $ccClass = 'GCC';
     elseif (str_contains($ccLower, 'clang')) $ccClass = 'Clang';
+} elseif ($targetOS === 'android') {
+    // Android 目标使用 NDK clang（Phase 2 才设置 $cc），条件编译求值阶段就需要知道是 Clang
+    $ccClass = 'Clang';
 } elseif (PHP_OS_FAMILY === 'Darwin') {
     $ccClass = 'Clang';
 }
@@ -957,6 +961,7 @@ if ($targetOS !== null) {
             }
             $cc = $ndkClang;
             $ccExe = $ndkClang;
+            $ccClass = 'Clang';  // NDK clang
             // sysroot
             $sysroot = "{$ndkPath}/toolchains/llvm/prebuilt/{$hostTag}/sysroot";
             $extraFlags = '--sysroot=' . escapeshellarg($sysroot) . ' ' . $extraFlags;
