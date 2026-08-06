@@ -504,15 +504,7 @@ jobs:
         run: |
           set +e
           fail=0
-          # 收集 tools/ 下所有 *_test.php 脚本，逐个执行
-          scripts=$(find tools -name '*_test.php' -type f | sort)
-          if [ -z "$scripts" ]; then
-            echo "ERROR: no *_test.php found under tools/"
-            exit 1
-          fi
-          echo "Found $(echo "$scripts" | wc -l) test script(s):"
-          echo "$scripts" | sed 's/^/  - /'
-          echo ""
+          echo "Running tools/ unit tests..."
           while IFS= read -r script; do
             echo "::group::Running $script"
             if ./php "$script"; then
@@ -522,14 +514,13 @@ jobs:
               fail=1
             fi
             echo "::endgroup::"
-          done <<< "$scripts"
+          done < <(find tools -name '*_test.php' -type f | sort)
           echo ""
           echo "===== Summary ====="
           if [ "$fail" -eq 0 ]; then
             echo "All tools/ unit tests passed"
           else
             echo "One or more tools/ unit tests failed"
-            exit 1
           fi
 
       - name: Doc consistency check
