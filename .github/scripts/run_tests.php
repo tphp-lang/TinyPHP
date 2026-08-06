@@ -97,61 +97,49 @@ $runOneTest = function(string $f, int $index) use ($testDir, $phpExe, $tphp, $cc
 
     $cmd = escapeshellarg($phpExe) . ' ' . escapeshellarg($tphp) . ' '
          . $fileArgs . ' --debug ' . $ccFlag
-         . ' -o ' . escapeshellarg($out);
+         . ' -o ' . escapeshellarg($out)
+         . ' >' . escapeshellarg($log) . ' 2>&1';
 
-    $timeout   = 60;
     $startTime = microtime(true);
-    $logHandle = @fopen($log, 'wb');
-    $pipes     = [];
-    $proc      = proc_open($cmd, [
-        0 => ['pipe', 'r'],
-        1 => ['pipe', 'w'],
-        2 => ['pipe', 'w'],
-    ], $pipes);
+    $ret = 0;
     $timedOut = false;
 
-    if (is_resource($proc)) {
-        fclose($pipes[0]);
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
-        while (true) {
-            $read = [$pipes[1], $pipes[2]];
-            $remaining = $timeout - (microtime(true) - $startTime);
-            if ($remaining <= 0) {
-                $timedOut = true;
-                $status = proc_get_status($proc);
-                if (PHP_OS_FAMILY === 'Windows') {
+    // Windows: proc_open 超时机制（system() 不支持超时）
+    if (PHP_OS_FAMILY === 'Windows') {
+        $proc = proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (is_resource($proc)) {
+            fclose($pipes[0]);
+            stream_set_blocking($pipes[1], false);
+            stream_set_blocking($pipes[2], false);
+            $timeout = 60;
+            while (true) {
+                $remaining = $timeout - (microtime(true) - $startTime);
+                if ($remaining <= 0) {
+                    $timedOut = true;
+                    $status = proc_get_status($proc);
                     exec('taskkill /F /T /PID ' . (int)$status['pid'] . ' 2>NUL');
-                } else {
-                    proc_terminate($proc, 9);
+                    break;
                 }
-                break;
-            }
-            $tvSec = (int)$remaining;
-            $tvUsec = (int)(($remaining - $tvSec) * 1000000);
-            $n = @stream_select($read, $write, $except, $tvSec, $tvUsec);
-            if ($n > 0) {
-                foreach ($read as $p) {
-                    $chunk = @fread($p, 65536);
-                    if ($chunk !== false && $chunk !== '' && $logHandle) fwrite($logHandle, $chunk);
+                $tvSec = (int)$remaining;
+                $tvUsec = (int)(($remaining - $tvSec) * 1000000);
+                $n = @stream_select($read = [$pipes[1], $pipes[2]], $w = null, $e = null, $tvSec, $tvUsec);
+                if ($n > 0) {
+                    foreach ($read as $p) {
+                        $chunk = @fread($p, 65536);
+                    }
                 }
+                $status = proc_get_status($proc);
+                if (!$status['running']) break;
             }
-            $status = proc_get_status($proc);
-            if (!$status['running']) break;
+            $ret = proc_close($proc);
+            if ($timedOut) $ret = 124;
+        } else {
+            $ret = 1;
         }
-        stream_set_blocking($pipes[1], true);
-        stream_set_blocking($pipes[2], true);
-        foreach ([$pipes[1], $pipes[2]] as $p) {
-            while (($chunk = @fread($p, 8192)) !== '' && $chunk !== false) {
-                if ($logHandle) fwrite($logHandle, $chunk);
-            }
-        }
-        $ret = proc_close($proc);
-        if ($timedOut) { $ret = 124; if ($logHandle) fwrite($logHandle, "\n[TIMEOUT] test exceeded {$timeout}s\n"); }
     } else {
-        $ret = 1;
+        // Linux/macOS: system() 更可靠，shell 重定向不会丢数据
+        system($cmd, $ret);
     }
-    if ($logHandle) fclose($logHandle);
 
     // 解析错误信息
     $errLines = [];
@@ -177,17 +165,7 @@ $runOneTest = function(string $f, int $index) use ($testDir, $phpExe, $tphp, $cc
                 $errLines = array_reverse(array_slice($tail, 0, 8));
             }
         } else {
-            $errLines = ['(compilation failed, NO error output — possible silent crash)'];
-            // 尝试重跑捕获原始 stderr（proc_open 在某些平台上可能丢失管道数据）
-            $cmd2 = escapeshellarg($phpExe) . ' ' . escapeshellarg($tphp) . ' '
-                  . $fileArgs . ' --debug ' . $ccFlag
-                  . ' -o ' . escapeshellarg($out) . ' 2>&1';
-            $tccOut = []; exec($cmd2, $tccOut, $ret2);
-            if (!empty($tccOut)) {
-                $errLines = array_slice($tccOut, -8);
-            } elseif ($ret2 !== 0) {
-                $errLines = ["(exit code $ret2, no output from PHP/TCC)"];
-            }
+            $errLines = ['(compilation failed, NO error output)'];
         }
         @unlink($log);
     } else {
