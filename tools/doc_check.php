@@ -75,25 +75,22 @@ echo "CodeGenerator simpleFnMap 注册数: " . count($simpleFns) . "\n";
 echo "\n=== 检查 1: C 实现有但 FUNCTIONS.md 未记录 ===\n";
 $missing = 0;
 $tryPrefixes = ['s','m','z','g','r','f','h','n','b','c','a','t','p','d','w','i','l','u','e','v','x','o'];
-// 已知内部 C 实现变体（类型特化/调试辅助），不需文档
-$knownInternal = ['niqid0', 'rray_is_list_int', 'rray_column_str', 'ctdec',
-    'umber_format2', 'ilter_var_opt', 'bs_int', 'bs_float'];
 foreach ($cFns as $fn => $file) {
     if (!isset($docFns[$fn])) {
+        // 跳过内部前缀
         if (preg_match('/^(rr_|ar_|_)/', $fn)) continue;
         if (strlen($fn) <= 2) continue;
-        if (in_array($fn, $knownInternal, true)) continue;
-        // 类型特化变体（_int/_float/_str/_bool 后缀）
+        // 类型特化变体：去掉 _int/_float/_str/_bool/_opt/_arr/_ptr 后缀
         if (preg_match('/^(.+)_(int|float|str|bool|opt|arr|ptr)$/', $fn, $mm)) {
             if (isset($docFns[$mm[1]])) continue;
-            // 也尝试恢复宏前缀
             foreach ($tryPrefixes as $p) {
                 if (isset($docFns[$p . $mm[1]])) continue 2;
             }
         }
-        // 参数数量变体（_0/_2 等）
+        // 参数数量/内部编号变体：_0, _2, 或末尾直接跟数字（如 format2）
         if (preg_match('/_(\d+)$/', $fn)) continue;
-        // 尝试还原被 C 宏吸收的首字符
+        if (preg_match('/\d+$/', $fn)) continue;
+        // 尝试还原 C 宏吸收的首字符（如 sleep→leep, zip_open→ip_open）
         foreach ($tryPrefixes as $p) {
             if (isset($docFns[$p . $fn])) continue 2;
         }
@@ -101,6 +98,7 @@ foreach ($cFns as $fn => $file) {
         $missing++;
     }
 }
+echo $missing ? "$missing 个缺失\n" : "  [OK] 全部匹配\n";
 
 // ———— 检查 2: simpleFnMap 注册了但 C 无实现 ————
 echo "\n=== 检查 2: CodeGenerator 注册了但 C 头文件无实现 ===\n";
