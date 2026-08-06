@@ -4,6 +4,53 @@
 
 ---
 
+## [0.2.0-beta.11] — 2026-08-06
+
+### 新增
+
+- **编译缓存机制**（`tphp.php`）：用源文件 SHA256 + TPHP_VERSION + common.h 哈希作为缓存 key，跳过未变化的重复转译。头文件变更时缓存自动失效
+- **CI 质量基础设施**（`.github/workflows/test.yml` + `.github/scripts/run_tests.php`）：
+  - ASan job（GCC + sanitizer）
+  - SHA256 下载校验框架
+  - doc_check 纳入 tools-tests（文档完整性检查）
+  - `@expect-error` 负面测试注解（期望编译失败）
+  - `-j N` 并行测试执行
+- **THIRD-PARTY-NOTICES.md**：TCC LGPL 合规声明
+
+### 变更
+
+- **CodeGenerator 拆分**（`src/CodeGenerator.php` + 6 个 trait）：主文件 14,212 → 4,102 行（-71.1%），提取 CodeGenData/TypeCast/VarWrap/Array/Call/Enum trait + CodeGenTypes 统一 C 类型常量
+- **消除重复代码**：NameResolver 统一 6 处重复、tphp.php `preprocessFlags()`/`resolvePlatform()` 合并、Helpers.php 提取 7 个辅助函数
+- **Channel 自旋优化**（`include/object/channel.h`）：自旋次数 750→64，每轮 `thrd_yield()` 让出 CPU，减少高竞争下无效锁竞争
+- **字符串搜索优化**（`include/std/core.h`）：`strpos`/`strrpos`/`stripos`/`strripos` 用 `memchr` 快速跳过首字节，替代逐字节线性扫描
+- **测试素材管理规范化**：25 张测试图片迁移至 `test/fixtures/images/`，.gitignore 用通配符规则区分输入素材和输出产物
+
+### 修复
+
+- **Windows GCC 测试超时**（`.github/scripts/run_tests.php`）：超时 60s→300s，GCC `-O2` 编译大型 C 文件（如 gd font_test 含 15 个 zlib 源文件）耗时接近 60s，CI 更慢导致超时
+- **缓存命中时变量未定义**（`tphp.php`）：`$debugMode`/`$extraFlags`/`$lateLinkFlags` 在缓存检查前预初始化，修复缓存命中时 Undefined variable
+- **unlink 文件锁 warning**（`tphp.php`）：`unlink`→`@unlink` 抑制 Windows 文件锁 "Resource temporarily unavailable" warning
+- **run_tests.php Windows stream_select 引用参数错误**：`stream_select()` 要求引用参数，不能内联赋值
+- **run_tests.php macOS 管道丢数据**：Linux/macOS 恢复 `system()`+shell 重定向替代 `proc_open`
+- **CI exif/gd 测试静默崩溃**：测试素材图片纳入 git 跟踪 + `t_be.jpg` 路径修复
+- **doc_check 误报**：过滤内部 C 宏/实现函数，消除 257 个误报；移除硬编码白名单改用模式匹配
+- **CI tools-tests shell 语法错误**：移除 here-string，简化 shell 语法
+
+### 清理
+
+- 删除 5 个死代码文件（`builtin_full.h`/`std/builtins.h`/`klib/`/`Compiler.php`）
+- 根目录残留 .exe/临时文件清理
+- PHP 8.2+ 动态属性 Deprecated 警告修复
+- `Compiler.php` 残留引用移除
+- 并行测试 .c 文件同名冲突修复
+
+### 文档
+
+- [README.md](README.md)：性能声称从 "300-500x" 修正为 "up to 36x"
+- [FUNCTIONS.md](FUNCTIONS.md) / [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md)：函数数统一为 450+
+- `ext/openssl/src/openssl.h`：SSL_VERIFY_NONE 警告增强
+- [CONTRIBUTING.md](CONTRIBUTING.md)：更新
+
 ## [0.2.0-beta.10] — 2026-08-04
 
 ### 新增
