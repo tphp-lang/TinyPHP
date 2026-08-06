@@ -110,8 +110,8 @@ class Main {
 
         // ── read_data JPEG BE ──
         echo "\n-- read_data JPEG BE --\n";
-        exif_make_test_jpeg_ex("t_be.jpg", 0);
-        $d2 = exif_read_data("t_be.jpg");
+        exif_make_test_jpeg_ex("test/fixtures/images/t_be.jpg", 0);
+        $d2 = exif_read_data("test/fixtures/images/t_be.jpg");
         echo "21. Make: " . $d2["Make"] . "\n";
         echo "22. ExposureTime: " . $d2["ExposureTime"] . "\n";
         echo "23. ISOSpeedRatings: " . $d2["ISOSpeedRatings"] . "\n";
