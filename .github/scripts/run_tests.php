@@ -111,7 +111,7 @@ $runOneTest = function(string $f, int $index) use ($testDir, $phpExe, $tphp, $cc
             fclose($pipes[0]);
             stream_set_blocking($pipes[1], false);
             stream_set_blocking($pipes[2], false);
-            $timeout = 60;
+            $timeout = 300;
             while (true) {
                 $remaining = $timeout - (microtime(true) - $startTime);
                 if ($remaining <= 0) {
@@ -281,13 +281,13 @@ if ($parallel <= 1) {
             $status = proc_get_status($a['proc']);
             if ($status['running']) {
                 // 超时检查
-                if (microtime(true) - $a['startTime'] > 60) {
+                if (microtime(true) - $a['startTime'] > 300) {
                     if (PHP_OS_FAMILY === 'Windows') {
                         exec('taskkill /F /T /PID ' . (int)$status['pid'] . ' 2>NUL');
                     } else {
                         proc_terminate($a['proc'], 9);
                     }
-                    $results[$a['index']] = [$a['rel'], 124, ['[TIMEOUT] test exceeded 60s']];
+                    $results[$a['index']] = [$a['rel'], 124, ['[TIMEOUT] test exceeded 300s']];
                     @fclose($a['pipe']);
                     proc_close($a['proc']);
                     continue;

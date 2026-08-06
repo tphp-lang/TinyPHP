@@ -253,6 +253,11 @@ $cachedCFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.c';
 $cFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '.c';
 $cacheHit = false;
 
+// 预初始化：缓存命中时跳过转译阶段，这些变量需在编译阶段使用前定义
+$debugMode = in_array('--debug', $argv, true);
+$extraFlags = '';
+$lateLinkFlags = '';
+
 if (is_file($cachedCFile)) {
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
     if (copy($cachedCFile, $cFile)) {
@@ -488,7 +493,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     if (is_dir($outDir)) {
         $contents = glob($outDir . DIRECTORY_SEPARATOR . '*');
         if ($contents !== false) {
-            foreach ($contents as $f) { if (is_file($f)) unlink($f); }
+            foreach ($contents as $f) { if (is_file($f)) @unlink($f); }
         }
         @rmdir($outDir);
     }

@@ -1,4 +1,0 @@
-#define test_xbm_7x3_width 7
-#define test_xbm_7x3_height 3
-static unsigned char test_xbm_7x3_bits[] = {
-  0x7E, 0x77, 0x3F};

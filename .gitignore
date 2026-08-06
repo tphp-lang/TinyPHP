@@ -19,3 +19,10 @@ tcc-src/
 tmp/
 _test_fio.txt
 /font_test_custom.gdf
+
+# 测试输出文件（运行时生成，非输入素材）
+# test/gd/ 下仅保留 .php 源码，忽略所有编解码产物（PNG/GIF/GD/GD2 等）
+test/gd/*
+!test/gd/*.php
+# test/fixtures/images/ 下 test_* 为测试产物；t_*.jpg/tif 和 tga_test*.tga 为真实输入素材
+test/fixtures/images/test_*
