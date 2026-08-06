@@ -18,12 +18,12 @@ tcc-src/
 *.phar
 tmp/
 _test_fio.txt
-# 测试运行时生成的临时文件
-/t_*.jpg
-/t_*.tif
-/test_exif.jpg
-/test_*.bmp
-/test_*.wbmp
-/test_*.xbm
-/tga_test*.tga
+# 测试素材（test/fixtures/images/）
+/test/fixtures/images/t_*.jpg
+/test/fixtures/images/t_*.tif
+/test/fixtures/images/test_exif.jpg
+/test/fixtures/images/test_*.bmp
+/test/fixtures/images/test_*.wbmp
+/test/fixtures/images/test_*.xbm
+/test/fixtures/images/tga_test*.tga
 /font_test_custom.gdf

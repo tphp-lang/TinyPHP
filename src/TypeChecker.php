@@ -587,13 +587,10 @@ class TypeChecker implements ASTVisitor
         }
     }
 
-    /** 类名 → C 名（与 CodeGenerator::classCName 一致） */
+    /** 类名 → C 名（委托 NameResolver，与 CodeGenerator 共享实现） */
     private function classCName(ClassNode $class): string
     {
-        if ($class->namespace === '') {
-            return 'tphp_class_' . $class->name;
-        }
-        return 'tphp_na_' . str_replace('\\', '_', $class->namespace) . '_tphp_class_' . $class->name;
+        return NameResolver::classCName($class);
     }
 
     /**
@@ -855,13 +852,10 @@ class TypeChecker implements ASTVisitor
         ));
     }
 
-    /** 函数名 → C 名（与 CodeGenerator::funcCName 一致） */
+    /** 函数名 → C 名（委托 NameResolver，与 CodeGenerator 共享实现） */
     private function funcCName(FunctionNode $fn): string
     {
-        if ($fn->namespace === '') {
-            return 'tphp_fn_' . $fn->name;
-        }
-        return 'tphp_na_' . str_replace('\\', '_', $fn->namespace) . '_tphp_fn_' . $fn->name;
+        return NameResolver::funcCName($fn);
     }
 
     /** 注册 C 函数签名声明（vlang 风格 function C.foo(...): C.ret;）
@@ -1732,22 +1726,11 @@ class TypeChecker implements ASTVisitor
     }
 
     /**
-     * 从 CallExpr 推导 C 函数名（与 CodeGenerator.funcCNameFromCall 格式一致）
-     * 全局函数: tphp_fn_functionName
-     * 命名空间函数: tphp_na_Namespace_tphp_fn_functionName
+     * 从 CallExpr 推导 C 函数名（委托 NameResolver，与 CodeGenerator 共享实现）
      */
     private function funcCNameFromCall(CallExpr $node): string
     {
-        if ($node->callee !== null) {
-            return ''; // 方法调用不在此
-        }
-        $pos = strrpos($node->name, '\\');
-        if ($pos !== false) {
-            $ns = substr($node->name, 0, $pos);
-            $fn = substr($node->name, $pos + 1);
-            return 'tphp_na_' . str_replace('\\', '_', $ns) . '_tphp_fn_' . $fn;
-        }
-        return 'tphp_fn_' . $node->name;
+        return NameResolver::funcCNameFromCall($node);
     }
 
     /**

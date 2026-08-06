@@ -15,6 +15,9 @@ jobs:
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-8.5.7-cli-win.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-win-x86_64.zip
+      # SHA256 校验（留空跳过；更新依赖后运行 sha256sum 填入）:
+      PHP_SHA256: ""
+      TCC_SHA256: ""
       PG_URL: https://get.enterprisedb.com/postgresql/postgresql-17.2-3-windows-x64-binaries.zip
     strategy:
       matrix:
@@ -105,6 +108,7 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri $env:TCC_URL -OutFile tcc.zip
+          if ($env:TCC_SHA256) { $h = (Get-FileHash -Algorithm SHA256 tcc.zip).Hash; if ($h -ne $env:TCC_SHA256) { throw "TCC SHA256 mismatch: $h" } }
           Expand-Archive -Path tcc.zip -DestinationPath .
           .\tcc\win32\tcc.exe -v
 
@@ -139,6 +143,8 @@ jobs:
     env:
       PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
       TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-x86_64.zip
+      PHP_SHA256: ""
+      TCC_SHA256: ""
     strategy:
       matrix:
         compiler: [tcc, gcc, clang]
@@ -178,6 +184,7 @@ jobs:
       - name: Add TCC
         run: |
           curl -fsSL -o tcc.zip "$TCC_URL"
+          if [ -n "$TCC_SHA256" ]; then echo "$TCC_SHA256 tcc.zip" | sha256sum -c -; fi
           unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
@@ -185,6 +192,7 @@ jobs:
       - name: Download PHP
         run: |
           curl -fsSL -o php.zip "$PHP_URL"
+          if [ -n "$PHP_SHA256" ]; then echo "$PHP_SHA256 php.zip" | sha256sum -c -; fi
           unzip -q php.zip
           chmod +x php
 
@@ -267,6 +275,7 @@ jobs:
       - name: Add TCC
         run: |
           curl -fsSL -o tcc.zip "$TCC_URL"
+          if [ -n "$TCC_SHA256" ]; then echo "$TCC_SHA256 tcc.zip" | sha256sum -c -; fi
           unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
@@ -274,6 +283,7 @@ jobs:
       - name: Download PHP
         run: |
           curl -fsSL -o php.zip "$PHP_URL"
+          if [ -n "$PHP_SHA256" ]; then echo "$PHP_SHA256 php.zip" | sha256sum -c -; fi
           unzip -q php.zip
           chmod +x php
 
@@ -374,6 +384,7 @@ jobs:
       - name: Add TCC
         run: |
           curl -fsSL -o tcc.zip "$TCC_URL"
+          if [ -n "$TCC_SHA256" ]; then echo "$TCC_SHA256 tcc.zip" | sha256sum -c -; fi
           unzip -q tcc.zip
           chmod +x tcc/tcc
           ./tcc/tcc -v
@@ -381,6 +392,7 @@ jobs:
       - name: Download PHP
         run: |
           curl -fsSL -o php.zip "$PHP_URL"
+          if [ -n "$PHP_SHA256" ]; then echo "$PHP_SHA256 php.zip" | sha256sum -c -; fi
           unzip -q php.zip
           chmod +x php
 
@@ -416,6 +428,7 @@ jobs:
       - name: Download PHP
         run: |
           curl -fsSL -o php.zip "$PHP_URL"
+          if [ -n "$PHP_SHA256" ]; then echo "$PHP_SHA256 php.zip" | sha256sum -c -; fi
           unzip -q php.zip
           chmod +x php
 
@@ -426,6 +439,47 @@ jobs:
           # 验证 .so 生成
           test -f build/android/jniLibs/x86_64/libtphp.so || { echo "ERROR: libtphp.so not found"; exit 1; }
           file build/android/jniLibs/x86_64/libtphp.so
+
+  # ============================================================
+  # ASan — AddressSanitizer + UBSan（GCC + Linux）
+  #   -fsanitize=address,undefined 检查内存错误和未定义行为
+  #   halt_on_error=1: 首个错误即终止，快速定位根因
+  # ============================================================
+  asan:
+    runs-on: ubuntu-latest
+    env:
+      PHP_URL: https://github.com/KingBes/TinyPHP/releases/download/PHP/php-cli-8.4-linux-x86_64-glibc.zip
+      TCC_URL: https://github.com/tphp-lang/tccbin/releases/download/v0.0.1/tcc-linux-x86_64.zip
+      TPHP_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC
+        run: sudo apt update && sudo apt install -y gcc make
+
+      - name: Add TCC
+        run: curl -fsSL -o tcc.zip "$TCC_URL" && unzip -q tcc.zip
+
+      - name: Download PHP
+        run: |
+          sudo apt install -y libicu-dev
+          curl -fsSL -o php.zip "$PHP_URL"
+          unzip -q php.zip
+          chmod +x php
+
+      - name: ASan smoke test (var)
+        run: ./php tphp.php -cc gcc test/var/var.php --debug
+
+      - name: ASan core tests — 内存密集型场景
+        run: |
+          # 挑选内存操作密集的测试，用 sanitizer 发现越界/泄漏/use-after-free
+          TESTS="test/array/array_full.php test/object/resource_test.php test/object/stdclass_basic.php"
+          for f in $TESTS; do
+            echo "=== $f ==="
+            ./php tphp.php -cc gcc "$f" --debug || exit 1
+          done
 
   # ============================================================
   # tools/ 单测 — AST / MIR / SSA 单元测试脚本（纯 PHP）
@@ -441,6 +495,7 @@ jobs:
       - name: Download PHP
         run: |
           curl -fsSL -o php.zip "$PHP_URL"
+          if [ -n "$PHP_SHA256" ]; then echo "$PHP_SHA256 php.zip" | sha256sum -c -; fi
           unzip -q php.zip
           chmod +x php
 
@@ -474,5 +529,18 @@ jobs:
             echo "All tools/ unit tests passed"
           else
             echo "One or more tools/ unit tests failed"
+            exit 1
+          fi
+
+      - name: Doc consistency check
+        shell: bash
+        run: |
+          echo "Running tools/doc_check.php..."
+          if ./php tools/doc_check.php; then
+            echo "PASS: doc_check.php — FUNCTIONS.md consistent with code"
+          else
+            echo "WARN: doc_check.php found inconsistencies (see output above)"
+            echo "      This is advisory only; run tools/doc_check.php locally to review"
+          fi
           fi
           exit $fail

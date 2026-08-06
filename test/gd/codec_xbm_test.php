@@ -61,10 +61,10 @@ class Main
         imagesetpixel($im, 3, 7, $white);
 
         // 无扩展名 → imagexbm 自动追加 .xbm
-        $ok = imagexbm($im, "test_xbm_10x10");
+        $ok = imagexbm($im, "test/fixtures/images/test_xbm_10x10");
         echo "1. write: " . ($ok ? "1" : "0") . "\n";
 
-        $im2 = imagecreatefromxbm("test_xbm_10x10.xbm");
+        $im2 = imagecreatefromxbm("test/fixtures/images/test_xbm_10x10.xbm");
         echo "2. read w/h: " . imagesx($im2) . "," . imagesy($im2) . "\n";
         echo "3. pixel(0,0)=" . imagecolorat($im2, 0, 0) . "\n";
         echo "4. pixel(9,9)=" . imagecolorat($im2, 9, 9) . "\n";
@@ -85,10 +85,10 @@ class Main
         imagesetpixel($im3, 6, 2, $white);
         imagesetpixel($im3, 3, 1, $white);
 
-        $ok2 = imagexbm($im3, "test_xbm_7x3.xbm");
+        $ok2 = imagexbm($im3, "test/fixtures/images/test_xbm_7x3.xbm");
         echo "8. write: " . ($ok2 ? "1" : "0") . "\n";
 
-        $im4 = imagecreatefromxbm("test_xbm_7x3.xbm");
+        $im4 = imagecreatefromxbm("test/fixtures/images/test_xbm_7x3.xbm");
         echo "9. read w/h: " . imagesx($im4) . "," . imagesy($im4) . "\n";
         echo "10. pixel(0,0)=" . imagecolorat($im4, 0, 0) . "\n";
         echo "11. pixel(6,2)=" . imagecolorat($im4, 6, 2) . "\n";

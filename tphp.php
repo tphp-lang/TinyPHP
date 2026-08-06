@@ -28,7 +28,6 @@ require_once __DIR__ . '/src/AST/Node.php';
 require_once __DIR__ . '/src/Lexer.php';
 require_once __DIR__ . '/src/Parser.php';
 require_once __DIR__ . '/src/CodeGenerator.php';
-require_once __DIR__ . '/src/Compiler.php';
 // SSA 路径相关模块（仅 --ssa 模式使用，但 require_once 开销可忽略）
 require_once __DIR__ . '/src/AST/FlatAst.php';
 require_once __DIR__ . '/src/AST/FlatAstConverter.php';
@@ -36,6 +35,7 @@ require_once __DIR__ . '/src/SSA/SSA.php';
 require_once __DIR__ . '/src/SSA/SSABuilder.php';
 require_once __DIR__ . '/src/SSA/SSAOptPass.php';
 require_once __DIR__ . '/src/SSA/SSAToCGenerator.php';
+require_once __DIR__ . '/src/Helpers.php';
 
 // --- Parse arguments ---
 $options = getopt('f:o:hv', ['help', 'os:', 'arch:', 'debug', 'version']);
@@ -231,11 +231,38 @@ $ctTargetOS   = $targetOS ?? strtolower(PHP_OS_FAMILY);
 $ctTargetArch = $targetArch ?? strtolower(php_uname('m'));
 // #flag/#include 平台过滤用：交叉编译时用目标 OS（大写形式，与 PHP_OS_FAMILY 一致）
 $_effectiveOS = $targetOS !== null
-    ? match($targetOS) { 'windows' => 'Windows', 'linux' => 'Linux', 'darwin' => 'Darwin', 'android' => 'Android', default => PHP_OS_FAMILY }
+    ? resolvePlatform($targetOS ?? PHP_OS_FAMILY)
     : PHP_OS_FAMILY;
 
 // --- Phase 1: Transpile all PHP → C ---
 $allFilesStr = implode(', ', array_map(fn($f) => basename($f), $files));
+// 编译缓存（initialize early to avoid goto skip issues）
+$extraCFiles = [];
+// 编译缓存：用源文件 SHA256 + TPHP_VERSION 作为 key，跳过未变化的重复转译
+$cwd = getcwd();
+$outDir = $cwd . DIRECTORY_SEPARATOR . 'build';
+$cacheDir = $outDir . DIRECTORY_SEPARATOR . '.tphp_cache';
+$srcHash = TPHP_VERSION;
+foreach ($files as $f) { $srcHash .= hash_file('sha256', $f); }
+foreach ($userCFiles as $f) { $srcHash .= hash_file('sha256', $f); }
+// 包含 common.h 哈希——头文件变更时缓存自动失效
+$commonH = __DIR__ . DIRECTORY_SEPARATOR . 'include' . DIRECTORY_SEPARATOR . 'common.h';
+$srcHash .= is_file($commonH) ? hash_file('sha256', $commonH) : '';
+$cacheKey = hash('sha256', $srcHash . ($cc ?? 'tcc') . ($targetOS ?? '') . ($targetArch ?? ''));
+$cachedCFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.c';
+$cFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '.c';
+$cacheHit = false;
+
+if (is_file($cachedCFile)) {
+    if (!is_dir($outDir)) mkdir($outDir, 0777, true);
+    if (copy($cachedCFile, $cFile)) {
+        echo "[1/2] Transpiling {$allFilesStr} => C... [CACHED]\n";
+        echo "       [YES] {$cFile}\n";
+        $cacheHit = true;
+    }
+}
+
+if (!$cacheHit) {
 echo "[1/2] Transpiling {$allFilesStr} => C...\n";
 
     try {
@@ -300,26 +327,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             (string)$src
         );
         // Preprocess: expand magic constants in #flag directives
-        $src = preg_replace_callback(
-            '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/mi',
-            function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
-                $prefix = $m[1];
-                $flags = $m[2];
-                // Expand magic constants
-                $flags = str_replace('__DIR__', str_replace('\\', '/', $fileDir), $flags);
-                $flags = str_replace('__EXT__', $magicExt, $flags);
-                $flags = str_replace('__INC__', $magicInc, $flags);
-                $flags = str_replace('__CMD__', $magicCmd, $flags);
-                // Handle string concatenation: -I__DIR__ . "include" → -I__DIR__/include
-                // Replace . " with / (insert path separator, not empty string)
-                $flags = preg_replace('/\s*\.\s*"/', '/', $flags);
-                $flags = preg_replace('/"\s*\.\s*/', '/', $flags);
-                $flags = str_replace('"', '', $flags);  // remove remaining quotes
-                $flags = str_replace('\\', '/', $flags);
-                return $prefix . $flags;
-            },
-            (string)$src
-        );
+        $src = preprocessFlags((string)$src, $fileDir, $magicExt, $magicInc, $magicCmd);
         if (preg_match_all('/^#import\s+(\w+)/m', (string)$src, $m)) {
             foreach ($m[1] as $extName) {
                 if (isset($importedExts[$extName])) continue;  // 已导入，跳过
@@ -473,7 +481,6 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             : (($targetOS === 'windows') ? '.exe' : '');
         $outExe = $cwd . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . $ext;
     }
-    $outDir = $cwd . DIRECTORY_SEPARATOR . 'build';
 
     // Clean build directory before compiling
     //   只清理 build/ 下的直接文件（.c/.o/.exe 等），保留子目录（如 build/bench/）
@@ -496,14 +503,13 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         // Platform/compiler filtering (#include Linux "x.h" / #include Windows "y.h")
         if (is_array($inc) && !empty($inc['ctx'])) {
             $ctx = $inc['ctx'];
-            // Case-insensitive platform matching (accept windows/linux/macos/darwin lowercase)
-            $platformMap = ['windows' => 'Windows', 'linux' => 'Linux', 'darwin' => 'Darwin', 'macos' => 'Darwin', 'android' => 'Android'];
             $ctxLower = strtolower($ctx);
             $currentOS = $_effectiveOS;
+            $resolved = resolvePlatform($ctxLower);
             // OS filter
-            if (isset($platformMap[$ctxLower]) && $platformMap[$ctxLower] !== $currentOS) return false;
+            if ($resolved !== $ctxLower && $resolved !== $currentOS) return false;
             // Compiler filter (TCC/GCC/Clang)
-            if (!isset($platformMap[$ctxLower])) {
+            if ($resolved === $ctxLower) {
                 $ccLower = strtolower($GLOBALS['cc'] ?? 'tcc');
                 $ccClass = 'TCC';
                 if (str_contains($ccLower, 'gcc')) $ccClass = 'GCC';
@@ -539,7 +545,6 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         // Extract -I paths from #flag directives (for #include search + security check)
         // __DIR__/__EXT__/__INC__/__CMD__ already expanded in prescan/parsing phase
         $flagIncludeDirs = [];
-        $_platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin', 'Android' => 'Android'];
         $_currentOS = $_effectiveOS;
         $_ccClass = 'TCC';
         if ($cc !== null) {
@@ -553,7 +558,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             $pf = $f['platform'] ?? '';
             $cf = $f['compiler'] ?? '';
             $flagsStr = $f['flags'] ?? '';
-            $platformOk = ($pf === '' || ($_platformMap[$pf] ?? '') === $_currentOS);
+            $platformOk = ($pf === '' || resolvePlatform($pf) === $_currentOS);
             $compilerOk = ($cf === '' || $cf === $_ccClass);
             if (!$platformOk || !$compilerOk) continue;
             // Extract -I paths (flagsStr already has __DIR__ expanded)
@@ -691,7 +696,6 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
 
     // Process #flag directives (filter by platform + compiler)
     if (!empty($allFlags)) {
-        $platformMap = ['Windows' => 'Windows', 'Linux' => 'Linux', 'Darwin' => 'Darwin', 'MacOS' => 'Darwin', 'Android' => 'Android'];
         $currentOS = $_effectiveOS;
         // $ccClass 已在编译器选择阶段计算（条件编译共用）
         // Allowed #flag prefixes (whitelist — blocks arbitrary flag injection)
@@ -707,7 +711,7 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
             $pf = $f['platform'] ?? '';
             $cf = $f['compiler'] ?? '';
             $flagsStr = $f['flags'] ?? '';
-            $platformOk = ($pf === '' || ($platformMap[$pf] ?? '') === $currentOS);
+            $platformOk = ($pf === '' || resolvePlatform($pf) === $currentOS);
             $compilerOk = ($cf === '' || $cf === $ccClass);
             if (!$platformOk || !$compilerOk) continue;
 
@@ -783,6 +787,11 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
     }
 
     // 默认 -O2：GCC/Clang 自动加，TCC 不加（TCC 无优化级别）
+    // 支持 TPHP_CFLAGS 环境变量注入额外编译标志（CI 用，如 ASan: -fsanitize=address,undefined）
+    $tphpCflagsEnv = getenv('TPHP_CFLAGS');
+    if ($tphpCflagsEnv !== false && $tphpCflagsEnv !== '') {
+        $extraFlags .= ' ' . $tphpCflagsEnv;
+    }
     $ccLower = $cc !== null ? strtolower($cc) : '';
     if ((str_contains($ccLower, 'gcc') || str_contains($ccLower, 'clang'))
         && !str_contains($extraFlags, '-O')) {
@@ -871,11 +880,23 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
 
     echo "       [YES] {$cFile}\n";
 
+    // 将 .c 文件同步到 -o 输出名前缀（并行测试不同目录同名.php 不冲突）
+    $altCFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($outExe, PATHINFO_FILENAME) . '.c';
+    if ($altCFile !== $cFile && is_file($cFile)) {
+        @rename($cFile, $altCFile);
+        $cFile = $altCFile;
+    }
+
+    // 保存编译缓存
+    if (!is_dir($cacheDir)) @mkdir($cacheDir, 0777, true);
+    @copy($cFile, $cachedCFile);
+
 } catch (\Throwable $e) {
     fwrite(STDERR, "[NO] Transpile failed: " . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
     exit(1);
 }
 
+} // if (!$cacheHit)
 // --- Phase 2: C compile → binary ---
 echo "[2/2] Compiling => {$outExe}...\n";
 
@@ -1958,222 +1979,34 @@ if ($debugMode) {
     }
 }
 
-// ============================================================
-/**
- * 从 ar 归档（.a 静态库）提取成员到指定目录。
- * 处理 BSD 长名表（//  成员）和 GNU 长名表（/N 索引）格式。
- * 仅提取 COFF/ELF 目标文件（.obj/.o），跳过符号表和索引成员。
- *
- * @param string $aFile  .a 文件路径
- * @param string $outDir 提取目录
- * @return string[] 提取的 .obj 文件完整路径列表
- */
-function extractArMembers(string $aFile, string $outDir): array
-{
-    if (!is_file($aFile)) return [];
-    $bytes = @file_get_contents($aFile);
-    if ($bytes === false || strlen($bytes) < 8) return [];
-    if (substr($bytes, 0, 8) !== "!<arch>\n") return [];
+// ═══════════════════════════════════════════════════════
+// 辅助函数已提取至 src/Helpers.php（require_once 在第 38 行）
+//   extractArMembers / deleteDirectory / collectFiles / scanPhpFiles
+//   isInBuildDir / extractPharDir / showHelp
+// ═══════════════════════════════════════════════════════
 
-    $len = strlen($bytes);
-    $pos = 8;
-    $longNames = null;
-    $members = []; // [name => [dataStart, size]]
-
-    // 第一遍：收集成员，识别长名表
-    while ($pos + 60 <= $len) {
-        $header = substr($bytes, $pos, 60);
-        $nameRaw = rtrim(substr($header, 0, 16));
-        $sizeStr = rtrim(substr($header, 48, 10));
-        if (!ctype_digit($sizeStr)) break;
-        $size = (int)$sizeStr;
-        $dataStart = $pos + 60;
-        if ($dataStart + $size > $len) break;
-
-        if ($nameRaw === '//') {
-            // BSD/GNU 长名表
-            $longNames = substr($bytes, $dataStart, $size);
-        } elseif ($nameRaw !== '/' && !str_starts_with($nameRaw, '/')) {
-            // 普通成员名（可能带尾部 /）
-            $members[] = [rtrim($nameRaw, '/'), $dataStart, $size];
-        } elseif (preg_match('/^\/(\d+)$/', $nameRaw, $m) && $longNames !== null) {
-            // GNU 长名引用：/N  → N 是 longNames 中的偏移
-            $offset = (int)$m[1];
-            $end = strpos($longNames, "\0", $offset);
-            if ($end === false) $end = strlen($longNames);
-            $realName = rtrim(substr($longNames, $offset, $end - $offset), '/');
-            $members[] = [$realName, $dataStart, $size];
-        }
-        // 符号表成员（nameRaw === '/'）跳过
-
-        $pos = $dataStart + $size;
-        if ($size % 2 === 1) $pos++; // 2 字节对齐
-    }
-
-    // 第二遍：提取目标文件成员
-    if (!is_dir($outDir)) @mkdir($outDir, 0777, true);
-    $extracted = [];
-    $usedNames = [];
-    foreach ($members as [$name, $dataStart, $size]) {
-        // 仅提取 .obj/.o 文件
-        if (!preg_match('/\.(obj|o)$/i', $name)) continue;
-        $base = basename($name);
-        // 避免重名
-        $outName = $base;
-        $i = 1;
-        while (isset($usedNames[$outName])) {
-            $outName = pathinfo($base, PATHINFO_FILENAME) . "_$i." . pathinfo($base, PATHINFO_EXTENSION);
-            $i++;
-        }
-        $usedNames[$outName] = true;
-        $outPath = $outDir . DIRECTORY_SEPARATOR . $outName;
-        $data = substr($bytes, $dataStart, $size);
-        if (@file_put_contents($outPath, $data) !== false) {
-            $extracted[] = $outPath;
-        }
-    }
-    return $extracted;
+/** 统一平台名映射（消除 3 份重复） */
+function resolvePlatform(string $name): string {
+    static $map = ['windows' => 'Windows', 'linux' => 'Linux', 'darwin' => 'Darwin',
+                    'macos' => 'Darwin', 'android' => 'Android'];
+    return $map[strtolower($name)] ?? $name;
 }
 
-// ============================================================
-/** 递归删除目录（用于清理 SDK 中重复的 -N 后缀目录和 Gradle 缓存） */
-function deleteDirectory(string $dir): bool
-{
-    if (!is_dir($dir)) return false;
-    // Windows 上某些文件可能有只读属性，用 cmd rmdir /s /q 最可靠
-    if (PHP_OS_FAMILY === 'Windows') {
-        $cmd = 'rmdir /s /q "' . $dir . '" 2>nul';
-        exec($cmd, $out, $ret);
-        return !is_dir($dir);
-    }
-    $files = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::CHILD_FIRST
+/** 预处理 #flag 指令：展开 __DIR__/__EXT__/__INC__/__CMD__ 并处理字符串拼接 */
+function preprocessFlags(string $src, string $fileDir, string $magicExt, string $magicInc, string $magicCmd): string {
+    return preg_replace_callback(
+        '/^(#flag\s+(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*(?:GCC|Clang|TCC|Windows|Linux|MacOS|Darwin)?\s*)(.+)$/mi',
+        function ($m) use ($fileDir, $magicExt, $magicInc, $magicCmd) {
+            $flags = $m[2];
+            $flags = str_replace('__DIR__', str_replace('\\', '/', $fileDir), $flags);
+            $flags = str_replace('__EXT__', $magicExt, $flags);
+            $flags = str_replace('__INC__', $magicInc, $flags);
+            $flags = str_replace('__CMD__', $magicCmd, $flags);
+            $flags = preg_replace('/\s*\.\s*"/', '/', $flags);
+            $flags = preg_replace('/"\s*\.\s*/', '/', $flags);
+            $flags = str_replace('"', '', $flags);
+            return $m[1] . str_replace('\\', '/', $flags);
+        },
+        $src
     );
-    foreach ($files as $fileinfo) {
-        $path = $fileinfo->getPathname();
-        if ($fileinfo->isDir()) {
-            @rmdir($path);
-        } else {
-            @unlink($path);
-        }
-    }
-    return @rmdir($dir);
-}
-
-// ============================================================
-/** @param string[] $args
- *  @return array{0: string[], 1: string[]} */
-function collectFiles(array $args): array
-{
-    $files = [];
-    $cFiles = [];
-    foreach ($args as $arg) {
-        if ($arg === '.') {
-            $baseDir = getcwd();
-            // 点指令只收集 .php 文件，.c 文件需通过 #flag 显式声明
-            $files = array_merge($files, scanPhpFiles($baseDir));
-        } elseif (is_file($arg)) {
-            $real = realpath($arg) ?: $arg;
-            if (isInBuildDir($real)) {
-                die("Error: files inside build/ are not allowed: {$arg}\n");
-            }
-            if (str_ends_with($arg, '.php')) {
-                $files[] = $real;
-            } elseif (str_ends_with($arg, '.c')) {
-                $cFiles[] = $real;
-            } else {
-                die("Error: {$arg} is not a valid .php or .c file\n");
-            }
-        } else {
-            die("Error: {$arg} is not a valid file\n");
-        }
-    }
-    return [array_unique($files), array_unique($cFiles)];
-}
-
-/** 递归扫描目录下所有 .php 文件，排除 build/ */
-function scanPhpFiles(string $dir): array
-{
-    $files = [];
-    $items = glob($dir . DIRECTORY_SEPARATOR . '*') ?: [];
-    foreach ($items as $item) {
-        $base = basename($item);
-        if ($base === 'build' && is_dir($item)) continue;
-        if ($base === 'tphp.php') continue;
-        if (is_dir($item)) {
-            $files = array_merge($files, scanPhpFiles($item));
-        } elseif (str_ends_with($base, '.php')) {
-            $files[] = $item;
-        }
-    }
-    return $files;
-}
-
-/** 路径是否在某个 build/ 目录下 */
-function isInBuildDir(string $path): bool
-{
-    $sep = DIRECTORY_SEPARATOR;
-    $norm = str_replace(['/', '\\'], $sep, $path);
-    return str_contains($norm, $sep . 'build' . $sep);
-}
-
-/** 从 phar:// 路径递归提取目录到硬盘 */
-function extractPharDir(string $pharDir, string $destDir): void
-{
-    if (!is_dir($pharDir)) return;
-    $iter = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($pharDir, FilesystemIterator::SKIP_DOTS)
-    );
-    foreach ($iter as $file) {
-        $relPath = str_replace($pharDir . DIRECTORY_SEPARATOR, '', $file->getPathname());
-        $dest = $destDir . DIRECTORY_SEPARATOR . $relPath;
-        $parent = dirname($dest);
-        if (!is_dir($parent)) mkdir($parent, 0777, true);
-        copy($file->getPathname(), $dest);
-    }
-}
-
-function showHelp(): never
-{
-    $ver = TPHP_VERSION;
-    echo <<<HELP
-  _____ _             ____  _   _ ____  
- |_   _(_)_ __  _   _|  _ \| | | |  _ \ 
-   | | | | '_ \| | | | |_) | |_| | |_) |
-   | | | | | | | |_| |  __/|  _  |  __/ 
-   |_| |_|_| |_|\__, |_|   |_| |_|_|    
-                |___/                   v{$ver}
-
-Usage:
-  tphp <file.php> [<file2.php> ...] [-o <output>] [-cc <compiler>] [-os <target>] [-arch <arch>]
-  tphp -f <file.php> [-o <output>]
-  tphp .                     compile all .php in current dir
-
-Options:
-  -o <output>       output file path (default: named after entry file)
-  -cc <compiler>    specify C compiler (default: built-in TCC)
-  -os <target>      cross-compile target: windows, linux, macos, android
-  -arch <arch>      target architecture: x86_64, aarch64 (default: host)
-  TPHP_SYSROOT      env: sysroot path for clang -target cross-compile (e.g. \\wsl$\Ubuntu)
-  -shared           compile as shared library (.dll/.so/.dylib)
-  --debug           print full compile command
-  --ssa             enable SSA IR pipeline (FlatAst → SSA → optimize → C)
-  -v, --version     show version and exit
-  -h, --help        show help
-
-Examples:
-  tphp main.php demo.php
-  tphp .
-  tphp main.php -o app.exe
-  tphp main.php -cc gcc
-  tphp main.php -cc "clang -O2"
-  tphp main.php -os linux                          (x86_64 Linux)
-  tphp main.php -os linux -arch aarch64             (ARM64 Linux)
-  tphp main.php -os windows -cc gcc                 (x86_64 Windows via mingw)
-  tphp lib.php -shared -o mylib.dll                 (shared library with #[Export])
-  tphp . -os android                               (Android APK, auto gradle build)
-
-HELP;
-    exit(0);
 }
