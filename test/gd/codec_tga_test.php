@@ -213,8 +213,8 @@ class Main
         // ════════════════════════════════════════════════════════════
         echo "-- Uncompressed 24bpp bottom-up --\n";
 
-        tga_make_uncomp_24bpp_bottomup("tga_test1.tga");
-        $im = imagecreatefromtga("tga_test1.tga");
+        tga_make_uncomp_24bpp_bottomup("test/fixtures/images/tga_test1.tga");
+        $im = imagecreatefromtga("test/fixtures/images/tga_test1.tga");
 
         echo "1. width: " . imagesx($im) . "\n";
         echo "2. height: " . imagesy($im) . "\n";
@@ -229,8 +229,8 @@ class Main
         // ════════════════════════════════════════════════════════════
         echo "\n-- RLE 24bpp (RLE packets) --\n";
 
-        tga_make_rle_24bpp("tga_test2.tga");
-        $im2 = imagecreatefromtga("tga_test2.tga");
+        tga_make_rle_24bpp("test/fixtures/images/tga_test2.tga");
+        $im2 = imagecreatefromtga("test/fixtures/images/tga_test2.tga");
 
         echo "7. width: " . imagesx($im2) . "\n";
         echo "8. pixel(0,0) red: " . imagecolorat($im2, 0, 0) . "\n";
@@ -243,8 +243,8 @@ class Main
         // ════════════════════════════════════════════════════════════
         echo "\n-- Uncompressed 32bpp top-down --\n";
 
-        tga_make_uncomp_32bpp_topdown("tga_test3.tga");
-        $im3 = imagecreatefromtga("tga_test3.tga");
+        tga_make_uncomp_32bpp_topdown("test/fixtures/images/tga_test3.tga");
+        $im3 = imagecreatefromtga("test/fixtures/images/tga_test3.tga");
 
         echo "12. width: " . imagesx($im3) . "\n";
         // top-down: (0,0)=red, (1,0)=green, (0,1)=blue, (1,1)=white
@@ -258,8 +258,8 @@ class Main
         // ════════════════════════════════════════════════════════════
         echo "\n-- RLE 24bpp (raw packet) --\n";
 
-        tga_make_rle_raw_24bpp("tga_test4.tga");
-        $im4 = imagecreatefromtga("tga_test4.tga");
+        tga_make_rle_raw_24bpp("test/fixtures/images/tga_test4.tga");
+        $im4 = imagecreatefromtga("test/fixtures/images/tga_test4.tga");
 
         echo "17. width: " . imagesx($im4) . "\n";
         echo "18. pixel(0,0) red: " . imagecolorat($im4, 0, 0) . "\n";
@@ -272,8 +272,8 @@ class Main
         // ════════════════════════════════════════════════════════════
         echo "\n-- 32bpp alpha channel --\n";
 
-        tga_make_alpha_32bpp("tga_test5.tga");
-        $im5 = imagecreatefromtga("tga_test5.tga");
+        tga_make_alpha_32bpp("test/fixtures/images/tga_test5.tga");
+        $im5 = imagecreatefromtga("test/fixtures/images/tga_test5.tga");
 
         // (0,0) = red with alpha=255 → PHP alpha=0 (不透明)
         // (1,0) = red with alpha=0 → PHP alpha=127 (透明)
@@ -302,20 +302,20 @@ class Main
         echo "26. nonexistent file: caught" . $caught1 . "\n";
 
         // 不支持的 image type 3 (灰度)
-        tga_make_bad_type("tga_test6.tga");
+        tga_make_bad_type("test/fixtures/images/tga_test6.tga");
         $caught2 = 0;
         try {
-            imagecreatefromtga("tga_test6.tga");
+            imagecreatefromtga("test/fixtures/images/tga_test6.tga");
         } catch (Exception $e) {
             $caught2 = 1;
         }
         echo "27. unsupported type 3: caught" . $caught2 . "\n";
 
         // 不支持的 bpp 16
-        tga_make_bad_bpp("tga_test7.tga");
+        tga_make_bad_bpp("test/fixtures/images/tga_test7.tga");
         $caught3 = 0;
         try {
-            imagecreatefromtga("tga_test7.tga");
+            imagecreatefromtga("test/fixtures/images/tga_test7.tga");
         } catch (Exception $e) {
             $caught3 = 1;
         }

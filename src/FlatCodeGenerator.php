@@ -5,6 +5,10 @@ declare(strict_types=1);
 // ============================================================
 // FlatCodeGenerator — 消费 FlatAst 生成 C 代码
 //
+// @unwired: 此组件已实现但未接入主编译流水线（仅 tools/AST/flat_codegen_test.php 单元测试使用）。
+//   主编译路径通过 CodeGenerator.php（AST→C）和 SSAToCGenerator（SSA→C）覆盖。
+//   FlatCodeGenerator 设计用于 FlatAst→C 直接路径，若后续启用则接入，否则考虑移除。
+//
 // 设计目标：
 //   - 不修改现有 src/CodeGenerator.php（仍服务于主编译流水线）
 //   - 专门消费 FlatAst 数据结构（已被 FlatTypeChecker 标注 typ 字段）

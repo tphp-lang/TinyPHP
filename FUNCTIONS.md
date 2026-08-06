@@ -41,7 +41,7 @@
 | 异步与协程 (Channel/Future/chan_select) | `object/channel.h` | 20 |
 | C 互操作 (PHPC) | `phpc.h` | 40 |
 | `ext/ui` (图形界面，基于 sokol) | `ext/ui/src/ui*.php` + `ui.h` | 9 类 + 9 枚举 |
-| **合计** | | **490+** |
+| **合计** | | **450+** |
 
 ---
 

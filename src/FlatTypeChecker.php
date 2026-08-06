@@ -5,6 +5,10 @@ declare(strict_types=1);
 // ============================================================
 // FlatTypeChecker — 消费 FlatAst 的类型检查器
 //
+// @unwired: 此组件已实现但未接入主编译流水线。
+//   主编译路径通过 TypeChecker.php（AST 类型检查）覆盖。
+//   若 SSA 路径启用全量检查则接入，否则与 FlatCodeGenerator 一同评估去留。
+//
 // 设计目标：
 //   - 不重写现有 src/TypeChecker.php（仍服务于主编译流水线）
 //   - 专门消费 FlatAst 数据结构，验证 FlatAst 的可用性

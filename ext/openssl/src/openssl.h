@@ -194,7 +194,10 @@ static inline t_int tphp_fn_openssl_ctx_new(t_int method) {
         return 0;
     }
     mbedtls_ssl_conf_rng(&ctx->conf, mbedtls_ctr_drbg_random, &_mbedtls_ctr_drbg);
-    // 默认不验证对端证书（与 PHP 默认行为对齐，用户可调用 openssl_ctx_set_verify 启用）
+    // ⚠️ 安全警告：默认 SSL_VERIFY_NONE 不验证对端证书，存在中间人攻击风险。
+    // 生产环境务必调用 openssl_ctx_set_verify(ctx, SSL_VERIFY_PEER) 启用证书验证。
+    // 注意：这与 PHP 原生 OpenSSL 扩展默认行为不同（PHP 默认 verify_peer=true）。
+    // 此处保持 VERIFY_NONE 是为了兼容旧代码，后续版本可能改为默认验证。
     mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
 
     return (t_int)(intptr_t)ctx;

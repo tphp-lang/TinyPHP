@@ -61,10 +61,10 @@ class Main
         imagesetpixel($im, 5, 5, $white);
         imagesetpixel($im, 3, 7, $white);
 
-        $ok = imagewbmp($im, "test_wbmp_10x10.wbmp");
+        $ok = imagewbmp($im, "test/fixtures/images/test_wbmp_10x10.wbmp");
         echo "1. write: " . ($ok ? "1" : "0") . "\n";
 
-        $im2 = imagecreatefromwbmp("test_wbmp_10x10.wbmp");
+        $im2 = imagecreatefromwbmp("test/fixtures/images/test_wbmp_10x10.wbmp");
         echo "2. read w/h: " . imagesx($im2) . "," . imagesy($im2) . "\n";
         echo "3. pixel(0,0)=" . imagecolorat($im2, 0, 0) . "\n";
         echo "4. pixel(9,9)=" . imagecolorat($im2, 9, 9) . "\n";
@@ -84,10 +84,10 @@ class Main
         imagesetpixel($im3, 6, 2, $white);
         imagesetpixel($im3, 3, 1, $white);
 
-        $ok2 = imagewbmp($im3, "test_wbmp_7x3.wbmp");
+        $ok2 = imagewbmp($im3, "test/fixtures/images/test_wbmp_7x3.wbmp");
         echo "8. write: " . ($ok2 ? "1" : "0") . "\n";
 
-        $im4 = imagecreatefromwbmp("test_wbmp_7x3.wbmp");
+        $im4 = imagecreatefromwbmp("test/fixtures/images/test_wbmp_7x3.wbmp");
         echo "9. read w/h: " . imagesx($im4) . "," . imagesy($im4) . "\n";
         echo "10. pixel(0,0)=" . imagecolorat($im4, 0, 0) . "\n";
         echo "11. pixel(6,2)=" . imagecolorat($im4, 6, 2) . "\n";

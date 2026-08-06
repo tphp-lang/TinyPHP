@@ -6,7 +6,7 @@
 
 # TinyPHP
 
-> **PHP → C AOT 编译器** — 用 PHP 语法写原生二进制，零运行时依赖，性能飙 300-500 倍。
+> **PHP → C AOT 编译器** — 用 PHP 语法写原生二进制，零运行时依赖，性能最高达 36x（详见基准报告）。
 
 TinyPHP **不是** PHP 解释器或运行时替代品。它把 PHP 代码（强类型子集）编译成安全的 C，再由 GCC/Clang/TCC 编译为原生可执行文件。没有 Zend VM、没有 OPCache、不需要 PHP 环境。
 

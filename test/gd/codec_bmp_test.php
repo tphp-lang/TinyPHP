@@ -73,10 +73,10 @@ class Main
         imagesetpixel($im, 3, 7, $white);
         // (1,1) 保持默认黑色
 
-        $ok = imagebmp($im, "test_bmp_10x10.bmp");
+        $ok = imagebmp($im, "test/fixtures/images/test_bmp_10x10.bmp");
         echo "1. write: " . ($ok ? "1" : "0") . "\n";
 
-        $im2 = imagecreatefrombmp("test_bmp_10x10.bmp");
+        $im2 = imagecreatefrombmp("test/fixtures/images/test_bmp_10x10.bmp");
         echo "2. read w/h: " . imagesx($im2) . "," . imagesy($im2) . "\n";
         echo "3. pixel(0,0)=" . imagecolorat($im2, 0, 0) . "\n";
         echo "4. pixel(9,9)=" . imagecolorat($im2, 9, 9) . "\n";
@@ -97,10 +97,10 @@ class Main
         imagesetpixel($im3, 10, 7, $blue);
         imagesetpixel($im3, 5, 3, $white);
 
-        $ok2 = imagebmp($im3, "test_bmp_20x15.bmp");
+        $ok2 = imagebmp($im3, "test/fixtures/images/test_bmp_20x15.bmp");
         echo "8. write: " . ($ok2 ? "1" : "0") . "\n";
 
-        $im4 = imagecreatefrombmp("test_bmp_20x15.bmp");
+        $im4 = imagecreatefrombmp("test/fixtures/images/test_bmp_20x15.bmp");
         echo "9. read w/h: " . imagesx($im4) . "," . imagesy($im4) . "\n";
         echo "10. pixel(0,0)=" . imagecolorat($im4, 0, 0) . "\n";
         echo "11. pixel(19,14)=" . imagecolorat($im4, 19, 14) . "\n";
@@ -119,10 +119,10 @@ class Main
         imagesetpixel($im5, 6, 2, $green);
         imagesetpixel($im5, 3, 1, $white);
 
-        $ok3 = imagebmp($im5, "test_bmp_7x3.bmp");
+        $ok3 = imagebmp($im5, "test/fixtures/images/test_bmp_7x3.bmp");
         echo "14. write: " . ($ok3 ? "1" : "0") . "\n";
 
-        $im6 = imagecreatefrombmp("test_bmp_7x3.bmp");
+        $im6 = imagecreatefrombmp("test/fixtures/images/test_bmp_7x3.bmp");
         echo "15. read w/h: " . imagesx($im6) . "," . imagesy($im6) . "\n";
         echo "16. pixel(0,0)=" . imagecolorat($im6, 0, 0) . "\n";
         echo "17. pixel(6,2)=" . imagecolorat($im6, 6, 2) . "\n";
@@ -133,10 +133,10 @@ class Main
         // ════════════════════════════════════════════════════════════
         echo "\n-- compressed flag --\n";
 
-        $ok4 = imagebmp($im, "test_bmp_compressed.bmp", 1);
+        $ok4 = imagebmp($im, "test/fixtures/images/test_bmp_compressed.bmp", 1);
         echo "19. write compressed=1: " . ($ok4 ? "1" : "0") . "\n";
 
-        $im7 = imagecreatefrombmp("test_bmp_compressed.bmp");
+        $im7 = imagecreatefrombmp("test/fixtures/images/test_bmp_compressed.bmp");
         echo "20. read back: " . imagesx($im7) . "," . imagesy($im7) . "\n";
 
         // ════════════════════════════════════════════════════════════

@@ -64,21 +64,21 @@ class Main {
 
         // ── imagetype 全类型测试 ──
         echo "-- imagetype --\n";
-        exif_make_test_header("t_gif.jpg", 0x47, 0x49);
-        exif_make_test_header("t_jpg.jpg", 0xFF, 0xD8);
-        exif_make_test_header("t_png.jpg", 0x89, 0x50);
-        exif_make_test_header("t_bmp.jpg", 0x42, 0x4D);
-        exif_make_test_header("t_t2.jpg", 0x49, 0x49);
-        exif_make_test_header("t_t3.jpg", 0x4D, 0x4D);
-        exif_make_test_header("t_unk.jpg", 0x00, 0x00);
+        exif_make_test_header("test/fixtures/images/t_gif.jpg", 0x47, 0x49);
+        exif_make_test_header("test/fixtures/images/t_jpg.jpg", 0xFF, 0xD8);
+        exif_make_test_header("test/fixtures/images/t_png.jpg", 0x89, 0x50);
+        exif_make_test_header("test/fixtures/images/t_bmp.jpg", 0x42, 0x4D);
+        exif_make_test_header("test/fixtures/images/t_t2.jpg", 0x49, 0x49);
+        exif_make_test_header("test/fixtures/images/t_t3.jpg", 0x4D, 0x4D);
+        exif_make_test_header("test/fixtures/images/t_unk.jpg", 0x00, 0x00);
 
-        echo "1. JPEG: " . exif_imagetype("t_jpg.jpg") . "\n";
-        echo "2. GIF: " . exif_imagetype("t_gif.jpg") . "\n";
-        echo "3. PNG: " . exif_imagetype("t_png.jpg") . "\n";
-        echo "4. BMP: " . exif_imagetype("t_bmp.jpg") . "\n";
-        echo "5. TIFF_II: " . exif_imagetype("t_t2.jpg") . "\n";
-        echo "6. TIFF_MM: " . exif_imagetype("t_t3.jpg") . "\n";
-        echo "7. unknown: " . exif_imagetype("t_unk.jpg") . "\n";
+        echo "1. JPEG: " . exif_imagetype("test/fixtures/images/t_jpg.jpg") . "\n";
+        echo "2. GIF: " . exif_imagetype("test/fixtures/images/t_gif.jpg") . "\n";
+        echo "3. PNG: " . exif_imagetype("test/fixtures/images/t_png.jpg") . "\n";
+        echo "4. BMP: " . exif_imagetype("test/fixtures/images/t_bmp.jpg") . "\n";
+        echo "5. TIFF_II: " . exif_imagetype("test/fixtures/images/t_t2.jpg") . "\n";
+        echo "6. TIFF_MM: " . exif_imagetype("test/fixtures/images/t_t3.jpg") . "\n";
+        echo "7. unknown: " . exif_imagetype("test/fixtures/images/t_unk.jpg") . "\n";
         $caught1 = 0;
         try {
             exif_imagetype("no_such_file.jpg");
@@ -96,8 +96,8 @@ class Main {
 
         // ── read_data JPEG LE ──
         echo "\n-- read_data JPEG LE --\n";
-        exif_make_test_jpeg_ex("t_le.jpg", 1);
-        $d = exif_read_data("t_le.jpg");
+        exif_make_test_jpeg_ex("test/fixtures/images/t_le.jpg", 1);
+        $d = exif_read_data("test/fixtures/images/t_le.jpg");
         echo "12. Make: " . $d["Make"] . "\n";
         echo "13. Model: " . $d["Model"] . "\n";
         echo "14. Orientation: " . $d["Orientation"] . "\n";
@@ -110,8 +110,8 @@ class Main {
 
         // ── read_data JPEG BE ──
         echo "\n-- read_data JPEG BE --\n";
-        exif_make_test_jpeg_ex("t_be.jpg", 0);
-        $d2 = exif_read_data("t_be.jpg");
+        exif_make_test_jpeg_ex("test/fixtures/images/t_be.jpg", 0);
+        $d2 = exif_read_data("test/fixtures/images/t_be.jpg");
         echo "21. Make: " . $d2["Make"] . "\n";
         echo "22. ExposureTime: " . $d2["ExposureTime"] . "\n";
         echo "23. ISOSpeedRatings: " . $d2["ISOSpeedRatings"] . "\n";
@@ -119,24 +119,24 @@ class Main {
 
         // ── read_data TIFF II ──
         echo "\n-- read_data TIFF II --\n";
-        exif_make_test_tiff("t_t2.tif", 1);
-        $d3 = exif_read_data("t_t2.tif");
+        exif_make_test_tiff("test/fixtures/images/t_t2.tif", 1);
+        $d3 = exif_read_data("test/fixtures/images/t_t2.tif");
         echo "25. Make: " . $d3["Make"] . "\n";
         echo "26. ExposureTime: " . $d3["ExposureTime"] . "\n";
         echo "27. GPSAltitude: " . $d3["GPSAltitude"] . "\n";
 
         // ── read_data TIFF MM ──
         echo "\n-- read_data TIFF MM --\n";
-        exif_make_test_tiff("t_t3.tif", 0);
-        $d4 = exif_read_data("t_t3.tif");
+        exif_make_test_tiff("test/fixtures/images/t_t3.tif", 0);
+        $d4 = exif_read_data("test/fixtures/images/t_t3.tif");
         echo "28. Make: " . $d4["Make"] . "\n";
         echo "29. ExposureTime: " . $d4["ExposureTime"] . "\n";
         echo "30. GPSAltitude: " . $d4["GPSAltitude"] . "\n";
 
         // ── 边界情况 ──
         echo "\n-- edge cases --\n";
-        exif_make_test_header("t_noexif.jpg", 0xFF, 0xD8);
-        $d5 = exif_read_data("t_noexif.jpg");
+        exif_make_test_header("test/fixtures/images/t_noexif.jpg", 0xFF, 0xD8);
+        $d5 = exif_read_data("test/fixtures/images/t_noexif.jpg");
         echo "31. no-exif JPEG count: " . count($d5) . "\n";
         $caught2 = 0;
         try {
@@ -148,7 +148,7 @@ class Main {
 
         // ── thumbnail ──
         echo "\n-- thumbnail --\n";
-        $th = exif_thumbnail("t_le.jpg");
+        $th = exif_thumbnail("test/fixtures/images/t_le.jpg");
         echo "33. thumb imagetype: " . $th["imagetype"] . "\n";
         echo "34. thumb width: " . $th["width"] . "\n";
 

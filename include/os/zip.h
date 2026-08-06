@@ -609,16 +609,22 @@ static inline t_string tphp_fn_zip_entry_read(tphp_class_Resource* zip, t_int in
     int extra_len = _zip_le16(data + e->local_offset + 28);
     long data_off = e->local_offset + 30 + name_len + extra_len;
 
+    long read_len = (length > 0 && length < e->uncomp_size) ? (long)length : e->uncomp_size;
+
+    // 边界校验：store 方式用 read_len（uncomp_size）校验，压缩方式用 comp_size 校验
+    if (e->comp_method == 0) {
+        // store（无压缩）：实际读取长度 = read_len，必须用 read_len 校验边界
+        if (data_off + read_len > len) {
+            tp_throw_ex(new_tphp_class_Exception(STR_LIT("zip_entry_read: file data truncated (store)")));
+            return (t_string){0};
+        }
+        return _zip_mkstr((const char*)(data + data_off), (int)read_len);
+    }
+
+    // 压缩方式：用 comp_size 校验边界
     if (data_off + e->comp_size > len) {
         tp_throw_ex(new_tphp_class_Exception(STR_LIT("zip_entry_read: file data truncated")));
         return (t_string){0};
-    }
-
-    long read_len = (length > 0 && length < e->uncomp_size) ? (long)length : e->uncomp_size;
-
-    // comp_method 0 = store（无压缩）
-    if (e->comp_method == 0) {
-        return _zip_mkstr((const char*)(data + data_off), (int)read_len);
     }
 
     // comp_method 8 = deflate（raw DEFLATE，windowBits=-15）

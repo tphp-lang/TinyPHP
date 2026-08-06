@@ -51,6 +51,25 @@ include/                         C 运行时头文件（全 static inline）
       └── password.h             bcrypt 密码哈希（password_hash/password_verify，EksBlowfish）
 ```
 
+### 1.1 多路径架构决策（2026-08-06）
+
+TinyPHP 有两套编译路径：
+
+| 路径 | 编译器 | 状态 | 入口 |
+|------|--------|------|------|
+| **主编译路径** | CodeGenerator.php（14k行） | ✅ 主力，处理 class Main | `tphp.php`（默认） |
+| **SSA 优化路径** | FlatAst → SSA → 优化 → SSAToCGenerator | ✅ 已接线，仅处理独立函数 | `tphp.php --ssa` |
+
+另有 3 个已实现但未接线的组件（标记 `@unwired`）：
+
+| 组件 | 行数 | 状态 |
+|------|------|------|
+| `src/FlatCodeGenerator.php` | 906 | @unwired — 仅 tools 单元测试 |
+| `src/FlatTypeChecker.php` | 1,532 | @unwired — 仅 tools 单元测试 |
+| `src/MIR/` (MIR+MIRBuilder) | 1,134 | @unwired — 仅 tools 单元测试 |
+
+**决策**：保留 SSA 路径（已接入），保留 @unwired 组件（不删除，等 SSA 路径支持 class Main 后评估接入），不新增 SSA 集成测试（工具级单测已覆盖）。
+
 ---
 
 ## 2. 编译流水线详解

@@ -37,6 +37,10 @@
 #define strncasecmp _strnicmp
 #endif
 #endif
+// CSPRNG: 动态加载 RtlGenRandom (advapi32.dll)，兼容 TCC（无 bcrypt.h）
+//   RtlGenRandom 从 Windows XP SP2 起可用，无需 SDK 头文件
+//   原型: BOOLEAN RtlGenRandom(PVOID buf, ULONG len) — 用 __stdcall 调用约定
+typedef int (__stdcall *_pg_RtlGenRandom_t)(void*, unsigned long);
 #endif
 
 // ============================================================
@@ -103,17 +107,34 @@ static void _pg_free_conn(PGconn *conn) {
 
 // ============================================================
 // 辅助：随机数生成（用于 SCRAM nonce）
-//   注意：rand() 不是 CSPRNG，但 SCRAM 的安全性依赖于密码而非 nonce 的不可预测性
+//   使用 CSPRNG：Windows BCryptGenRandom / Linux /dev/urandom
+//   回退到 rand()+time()（仅当系统 CSPRNG 不可用时）
 // ============================================================
 static void _pg_gen_random(uint8_t *buf, int len) {
+    if (buf == NULL || len <= 0) return;
+#ifdef _WIN32
+    /* 动态加载 RtlGenRandom (advapi32.dll)，兼容 TCC */
+    static _pg_RtlGenRandom_t _pfn = NULL;
+    static int _tried = 0;
+    if (!_tried) {
+        _tried = 1;
+        HMODULE h = GetModuleHandleA("advapi32.dll");
+        if (h == NULL) h = LoadLibraryA("advapi32.dll");
+        if (h != NULL) _pfn = (_pg_RtlGenRandom_t)GetProcAddress(h, "SystemFunction036");
+    }
+    if (_pfn != NULL && _pfn(buf, (unsigned long)len)) return;
+#else
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f != NULL) {
+        size_t got = fread(buf, 1, (size_t)len, f);
+        fclose(f);
+        if ((int)got == len) return;
+    }
+#endif
+    /* CSPRNG 不可用时回退（安全性降低但不崩溃） */
     static int _pg_seeded = 0;
-    if (!_pg_seeded) {
-        srand((unsigned int)time(NULL));
-        _pg_seeded = 1;
-    }
-    for (int i = 0; i < len; i++) {
-        buf[i] = (uint8_t)(rand() & 0xFF);
-    }
+    if (!_pg_seeded) { srand((unsigned int)time(NULL)); _pg_seeded = 1; }
+    for (int i = 0; i < len; i++) buf[i] = (uint8_t)(rand() & 0xFF);
 }
 
 // ============================================================
@@ -423,6 +444,12 @@ static char _pg_recv_message(PGconn *conn, char **data, int *len) {
     int total_len = (int)_pg_read_be32((const uint8_t*)(header + 1));
     int payload_len = total_len - 4;
     if (payload_len < 0) payload_len = 0;
+
+    /* 限制消息长度上限 256MB，防止恶意服务器迫使客户端分配大内存 */
+    if (payload_len > 256 * 1024 * 1024) {
+        _pg_set_error(conn, "pg: server message too large (>256MB)");
+        return 0;
+    }
 
     char *buf = NULL;
     if (payload_len > 0) {
@@ -761,6 +788,17 @@ static int _pg_auth_scram_sha256(PGconn *conn, const char *mech_list, int len) {
         _pg_set_error(conn, "pg: SCRAM: invalid iteration count");
         free(sasl_data);
         return -1;
+    }
+
+    // RFC 5802 §5.1: 服务器返回的 nonce 必须以客户端 nonce 为前缀
+    {
+        int cn_len = (int)strlen(client_nonce);
+        int fn_len = (int)strlen(full_nonce);
+        if (fn_len < cn_len || memcmp(full_nonce, client_nonce, (size_t)cn_len) != 0) {
+            _pg_set_error(conn, "pg: SCRAM: server nonce does not start with client nonce");
+            free(sasl_data);
+            return -1;
+        }
     }
 
     // Step 7: 解码 salt

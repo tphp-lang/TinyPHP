@@ -29,8 +29,10 @@
 #include "val.h"
 #include "array.h"
 
-/* 自旋次数：阻塞前先自旋，减少高并发场景的 syscall（vlang 使用 750） */
-#define TPHP_CHAN_SPIN  750
+/* 自旋次数：阻塞前先自旋，减少高并发场景的 syscall。
+   750→64：原值过大，每次"自旋"实为 lock/unlock，高竞争下放大锁开销。
+   降低到 64 + 每轮 thrd_yield() 让出 CPU，减少无效锁竞争。 */
+#define TPHP_CHAN_SPIN  64
 
 /* ════════════════════════════════════════════════════════════
    Channel 类
@@ -122,6 +124,7 @@ static inline void tphp_class_Channel_push(tphp_class_Channel *self, t_var v) {
             return;
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     /* 阻塞等待 */
     mtx_lock(&self->mtx);
@@ -159,6 +162,7 @@ static inline t_var tphp_class_Channel_pop(tphp_class_Channel *self) {
             return VAR_NULL();
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     /* 阻塞等待 */
     mtx_lock(&self->mtx);
@@ -342,6 +346,7 @@ static inline t_var tphp_class_Future_await(tphp_class_Future *self) {
             cnd_wait(&self->done, &self->mtx);
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     if (self->state == _TP_FUTURE_REJECTED) {
         /* 抛出原始异常对象 */
@@ -385,6 +390,7 @@ static inline tphp_class_Future* tphp_class_Future_then(tphp_class_Future *self,
             cnd_wait(&self->done, &self->mtx);
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     if (self->state == _TP_FUTURE_REJECTED) {
         /* 原 Future 被 reject — 透传错误到 next */
@@ -414,6 +420,7 @@ static inline tphp_class_Future* tphp_class_Future_catch(tphp_class_Future *self
             cnd_wait(&self->done, &self->mtx);
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     if (self->state == _TP_FUTURE_REJECTED) {
         /* reject — 调用恢复回调 */
@@ -499,24 +506,21 @@ static inline tphp_class_Future* tphp_class_Future_race(t_array *futures) {
             return result;
         }
     }
-    /* 没有提前完成的 — 非抛出式等待第一个 */
-    if (n > 0) {
-        tphp_class_Future *f = (tphp_class_Future*)futures->entries[0].val.value._object;
-        for (int s = 0; s < TPHP_CHAN_SPIN; s++) {
-            if (f->state != _TP_FUTURE_PENDING) break;
-        }
-        if (f->state == _TP_FUTURE_PENDING) {
-            mtx_lock(&f->mtx);
-            while (f->state == _TP_FUTURE_PENDING) {
-                cnd_wait(&f->done, &f->mtx);
+    /* 没有提前完成的 — 轮询所有 Future，等待任意一个完成 */
+    while (n > 0) {
+        for (int i = 0; i < n; i++) {
+            tphp_class_Future *f = (tphp_class_Future*)futures->entries[i].val.value._object;
+            if (f->state != _TP_FUTURE_PENDING) {
+                if (f->state == _TP_FUTURE_REJECTED) {
+                    tphp_class_Future_reject(result, f->error);
+                } else {
+                    tphp_class_Future_resolve(result, f->result);
+                }
+                return result;
             }
-            mtx_unlock(&f->mtx);
         }
-        if (f->state == _TP_FUTURE_REJECTED) {
-            tphp_class_Future_reject(result, f->error);
-        } else {
-            tphp_class_Future_resolve(result, f->result);
-        }
+        /* 所有 Future 仍 pending — 让出 CPU 避免忙等浪费 */
+        thrd_yield();
     }
     return result;
 }

@@ -5,6 +5,8 @@ declare(strict_types=1);
 // ============================================================
 // MIRBuilder — 从 SSA 降低到 MIR（Task 14）
 //
+// @unwired: 同 MIR.php，全仓库无生产引用。
+//
 // 输入：SSAModule / SSAFunction（已构建并可选优化过的 SSA）
 // 输出：MIRModule / MIRFunction（含目标 ABI 元数据）
 //

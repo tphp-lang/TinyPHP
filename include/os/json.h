@@ -50,32 +50,58 @@ static inline int json_write_u32(uint32_t val, char *out) {
     return len;
 }
 
-/** 快速 int → 字符串 (int64, yyjson digit_table 风格) */
+/** 快速 int → 字符串 (int64 全程处理，安全处理 INT64_MIN) */
 static inline int json_itoa(t_int val, char *out) {
     if (val == 0) { out[0] = '0'; return 1; }
     int off = 0;
-    if (val < 0) { out[off++] = '-'; val = -val; }
-    return off + json_write_u32((uint32_t)val, out + off);
+    uint64_t uval;
+    if (val < 0) {
+        out[off++] = '-';
+        // 安全处理 INT64_MIN：-(INT64_MIN) 是 UB，用 uint64 转换
+        uval = (uint64_t)(-(val + 1)) + 1;
+    } else {
+        uval = (uint64_t)val;
+    }
+    char tmp[20];
+    int len = 0;
+    while (uval > 0) {
+        tmp[len++] = (char)('0' + (int)(uval % 10));
+        uval /= 10;
+    }
+    for (int i = 0; i < len; i++) out[off + i] = tmp[len - 1 - i];
+    return off + len;
 }
 
-/** 快速 int 位数 (不计负号, 0→1) — 用于 json_calc_size, 零写零开销 */
+/** 快速 int 位数 (不计负号, 0→1) — 用于 json_calc_size, 零写零开销
+ *  安全处理 INT64_MIN：用 uint64 比较，避免 -val UB */
 static inline int json_ilen(t_int val) {
     if (val == 0) return 1;
-    if (val < 0) val = -val;
-    // 查表法: 2次比较定位量级
-    if (val < 10000) {
-        if (val < 100) return (val < 10) ? 1 : 2;
-        return (val < 1000) ? 3 : 4;
+    uint64_t uval;
+    if (val < 0) {
+        uval = (uint64_t)(-(val + 1)) + 1;
+    } else {
+        uval = (uint64_t)val;
     }
-    if (val < 100000000) {
-        if (val < 1000000) return (val < 100000) ? 5 : 6;
-        return (val < 10000000) ? 7 : 8;
+    // 查表法: 分级比较定位量级（覆盖 1-20 位）
+    if (uval < 10000ULL) {
+        if (uval < 100ULL) return (uval < 10ULL) ? 1 : 2;
+        return (uval < 1000ULL) ? 3 : 4;
     }
-    if (val < 100000000000LL) {
-        if (val < 10000000000LL) return (val < 1000000000) ? 9 : 10;
-        return 11;
+    if (uval < 100000000ULL) {
+        if (uval < 1000000ULL) return (uval < 100000ULL) ? 5 : 6;
+        return (uval < 10000000ULL) ? 7 : 8;
     }
-    return 12; // int32 max ≈ 2.1B, fits in 10 digits normally; safe upper bound
+    if (uval < 1000000000000ULL) {
+        if (uval < 10000000000ULL) return (uval < 1000000000ULL) ? 9 : 10;
+        return (uval < 100000000000ULL) ? 11 : 12;
+    }
+    if (uval < 10000000000000000ULL) {
+        if (uval < 100000000000000ULL) return (uval < 10000000000000ULL) ? 13 : 14;
+        return (uval < 1000000000000000ULL) ? 15 : 16;
+    }
+    if (uval < 1000000000000000000ULL) return 17;
+    if (uval < 10000000000000000000ULL) return 18;
+    return 19; // INT64_MAX = 9223372036854775807 (19 digits)
 }
 
 /** fastesc: 字符串 JSON 转义 → 栈写入到 out，返回写入长度 */

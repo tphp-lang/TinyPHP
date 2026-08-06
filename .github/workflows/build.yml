@@ -63,6 +63,15 @@ jobs:
         run: |
           ./tphp.exe test/main/min.php
           ./min.exe
+          # 扩展 smoke test
+          ./tphp.exe test/array/array_full.php -o array_test.exe
+          ./array_test.exe
+          ./tphp.exe test/object/stdclass_basic.php -o oop_test.exe
+          ./oop_test.exe
+          ./tphp.exe test/object/closure_capture.php -o closure_test.exe
+          ./closure_test.exe
+          ./tphp.exe test/strings/strpos_basic.php -o strpos_test.exe
+          ./strpos_test.exe
 
       - name: Package
         shell: pwsh
@@ -121,6 +130,15 @@ jobs:
         run: |
           ./tphp test/main/min.php
           ./min
+          # 扩展 smoke test
+          ./tphp test/array/array_full.php -o array_test
+          ./array_test
+          ./tphp test/object/stdclass_basic.php -o oop_test
+          ./oop_test
+          ./tphp test/object/closure_capture.php -o closure_test
+          ./closure_test
+          ./tphp test/strings/strpos_basic.php -o strpos_test
+          ./strpos_test
 
       - name: Package
         run: |
@@ -179,6 +197,15 @@ jobs:
         run: |
           ./tphp test/main/min.php
           ./min
+          # 扩展 smoke test
+          ./tphp test/array/array_full.php -o array_test
+          ./array_test
+          ./tphp test/object/stdclass_basic.php -o oop_test
+          ./oop_test
+          ./tphp test/object/closure_capture.php -o closure_test
+          ./closure_test
+          ./tphp test/strings/strpos_basic.php -o strpos_test
+          ./strpos_test
 
       - name: Package
         run: |
@@ -236,6 +263,15 @@ jobs:
         run: |
           ./tphp test/main/min.php
           ./min
+          # 扩展 smoke test
+          ./tphp test/array/array_full.php -o array_test
+          ./array_test
+          ./tphp test/object/stdclass_basic.php -o oop_test
+          ./oop_test
+          ./tphp test/object/closure_capture.php -o closure_test
+          ./closure_test
+          ./tphp test/strings/strpos_basic.php -o strpos_test
+          ./strpos_test
 
       - name: Package
         run: |
