@@ -29,8 +29,10 @@
 #include "val.h"
 #include "array.h"
 
-/* 自旋次数：阻塞前先自旋，减少高并发场景的 syscall（vlang 使用 750） */
-#define TPHP_CHAN_SPIN  750
+/* 自旋次数：阻塞前先自旋，减少高并发场景的 syscall。
+   750→64：原值过大，每次"自旋"实为 lock/unlock，高竞争下放大锁开销。
+   降低到 64 + 每轮 thrd_yield() 让出 CPU，减少无效锁竞争。 */
+#define TPHP_CHAN_SPIN  64
 
 /* ════════════════════════════════════════════════════════════
    Channel 类
@@ -122,6 +124,7 @@ static inline void tphp_class_Channel_push(tphp_class_Channel *self, t_var v) {
             return;
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     /* 阻塞等待 */
     mtx_lock(&self->mtx);
@@ -159,6 +162,7 @@ static inline t_var tphp_class_Channel_pop(tphp_class_Channel *self) {
             return VAR_NULL();
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     /* 阻塞等待 */
     mtx_lock(&self->mtx);
@@ -342,6 +346,7 @@ static inline t_var tphp_class_Future_await(tphp_class_Future *self) {
             cnd_wait(&self->done, &self->mtx);
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     if (self->state == _TP_FUTURE_REJECTED) {
         /* 抛出原始异常对象 */
@@ -385,6 +390,7 @@ static inline tphp_class_Future* tphp_class_Future_then(tphp_class_Future *self,
             cnd_wait(&self->done, &self->mtx);
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     if (self->state == _TP_FUTURE_REJECTED) {
         /* 原 Future 被 reject — 透传错误到 next */
@@ -414,6 +420,7 @@ static inline tphp_class_Future* tphp_class_Future_catch(tphp_class_Future *self
             cnd_wait(&self->done, &self->mtx);
         }
         mtx_unlock(&self->mtx);
+        thrd_yield();
     }
     if (self->state == _TP_FUTURE_REJECTED) {
         /* reject — 调用恢复回调 */
