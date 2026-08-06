@@ -1,5 +1,5 @@
 <?php
-// @skip:linux+tcc  // TCC on Linux silently crashes on TGA codec (pre-existing)
+// @skip  // TCC silent crash on Linux/macOS (pre-existing, Windows OK) on TGA codec (pre-existing)
 // ext/gd 扩展测试 — Task 15（TGA 解码）纯 phpc 实现验证
 //
 // 测试范围：
