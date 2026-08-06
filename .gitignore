@@ -18,12 +18,4 @@ tcc-src/
 *.phar
 tmp/
 _test_fio.txt
-# 测试素材（test/fixtures/images/）
-/test/fixtures/images/t_*.jpg
-/test/fixtures/images/t_*.tif
-/test/fixtures/images/test_exif.jpg
-/test/fixtures/images/test_*.bmp
-/test/fixtures/images/test_*.wbmp
-/test/fixtures/images/test_*.xbm
-/test/fixtures/images/tga_test*.tga
 /font_test_custom.gdf
