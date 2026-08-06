@@ -122,7 +122,9 @@ $runOneTest = function(string $f, int $index) use ($testDir, $phpExe, $tphp, $cc
                 }
                 $tvSec = (int)$remaining;
                 $tvUsec = (int)(($remaining - $tvSec) * 1000000);
-                $n = @stream_select($read = [$pipes[1], $pipes[2]], $w = null, $e = null, $tvSec, $tvUsec);
+                $read = [$pipes[1], $pipes[2]];
+                $w = $e = null;
+                $n = @stream_select($read, $w, $e, $tvSec, $tvUsec);
                 if ($n > 0) {
                     foreach ($read as $p) {
                         $chunk = @fread($p, 65536);
