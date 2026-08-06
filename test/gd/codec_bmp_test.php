@@ -1,5 +1,4 @@
 <?php
-// @skip:linux+tcc  // TCC on Linux silently crashes on BMP codec (pre-existing)
 // ext/gd 扩展测试 — Task 12（BMP 编解码）纯 phpc 实现验证
 //
 // 测试范围：
