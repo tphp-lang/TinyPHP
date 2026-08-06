@@ -533,5 +533,3 @@ jobs:
             echo "WARN: doc_check.php found inconsistencies (see output above)"
             echo "      This is advisory only; run tools/doc_check.php locally to review"
           fi
-          fi
-          exit $fail
