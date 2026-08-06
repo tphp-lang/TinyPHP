@@ -178,6 +178,16 @@ $runOneTest = function(string $f, int $index) use ($testDir, $phpExe, $tphp, $cc
             }
         } else {
             $errLines = ['(compilation failed, NO error output — possible silent crash)'];
+            // 尝试重跑捕获原始 stderr（proc_open 在某些平台上可能丢失管道数据）
+            $cmd2 = escapeshellarg($phpExe) . ' ' . escapeshellarg($tphp) . ' '
+                  . $fileArgs . ' --debug ' . $ccFlag
+                  . ' -o ' . escapeshellarg($out) . ' 2>&1';
+            $tccOut = []; exec($cmd2, $tccOut, $ret2);
+            if (!empty($tccOut)) {
+                $errLines = array_slice($tccOut, -8);
+            } elseif ($ret2 !== 0) {
+                $errLines = ["(exit code $ret2, no output from PHP/TCC)"];
+            }
         }
         @unlink($log);
     } else {
