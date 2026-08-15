@@ -250,6 +250,7 @@ $commonH = __DIR__ . DIRECTORY_SEPARATOR . 'include' . DIRECTORY_SEPARATOR . 'co
 $srcHash .= is_file($commonH) ? hash_file('sha256', $commonH) : '';
 $cacheKey = hash('sha256', $srcHash . ($cc ?? 'tcc') . ($targetOS ?? '') . ($targetArch ?? ''));
 $cachedCFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.c';
+$cachedMetaFile = $cachedCFile . '.json';
 $cFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '.c';
 $cacheHit = false;
 
@@ -258,9 +259,39 @@ $debugMode = in_array('--debug', $argv, true);
 $extraFlags = '';
 $lateLinkFlags = '';
 
-if (is_file($cachedCFile)) {
+// 缓存命中判定：.c 与 .json 元数据必须同时存在。
+// 元数据记录转译阶段收集的编译上下文（#flag 标志、ext .c 源文件、
+// #import 入口重排、默认输出名），命中时恢复——否则编译阶段会丢失
+// -I 路径（如 mbedtls 头找不到）和 ext 源文件（链接失败）。
+$cacheMeta = null;
+if (is_file($cachedCFile) && is_file($cachedMetaFile)) {
+    $meta = json_decode((string)file_get_contents($cachedMetaFile), true);
+    // 元数据合法性：入口文件仍存在 + TinyPHP 根目录未移动（-I 绝对路径依赖）
+    if (is_array($meta)
+        && isset($meta['entry'], $meta['tphpRoot'])
+        && $meta['tphpRoot'] === __DIR__
+        && is_file($meta['entry'])) {
+        $cacheMeta = $meta;
+    }
+}
+
+if ($cacheMeta !== null) {
+    // 恢复转译阶段状态（仅 -o 未指定时才用元数据中的默认输出名）
+    $entryFile = $cacheMeta['entry'];
+    if ($outExe === '' && !empty($cacheMeta['outExe'])) $outExe = $cacheMeta['outExe'];
+    $extraFlags    = (string)($cacheMeta['extraFlags'] ?? '');
+    $lateLinkFlags = (string)($cacheMeta['lateLinkFlags'] ?? '');
+    $extraCFiles   = array_values(array_filter(
+        array_map('strval', (array)($cacheMeta['extraCFiles'] ?? [])), 'is_file'));
+
     if (!is_dir($outDir)) mkdir($outDir, 0777, true);
+    $cFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($entryFile, PATHINFO_FILENAME) . '.c';
     if (copy($cachedCFile, $cFile)) {
+        // 与非缓存路径保持一致：同步到 -o 输出名前缀（并行测试同名 .php 不冲突）
+        if ($outExe !== '') {
+            $altCFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($outExe, PATHINFO_FILENAME) . '.c';
+            if ($altCFile !== $cFile) { @rename($cFile, $altCFile); $cFile = $altCFile; }
+        }
         echo "[1/2] Transpiling {$allFilesStr} => C... [CACHED]\n";
         echo "       [YES] {$cFile}\n";
         $cacheHit = true;
@@ -892,9 +923,18 @@ echo "[1/2] Transpiling {$allFilesStr} => C...\n";
         $cFile = $altCFile;
     }
 
-    // 保存编译缓存
+    // 保存编译缓存（.c + .json 元数据，命中时恢复编译上下文）
     if (!is_dir($cacheDir)) @mkdir($cacheDir, 0777, true);
-    @copy($cFile, $cachedCFile);
+    if (@copy($cFile, $cachedCFile)) {
+        @file_put_contents($cachedMetaFile, json_encode([
+            'tphpRoot'      => __DIR__,
+            'entry'         => $entryFile,
+            'outExe'        => $outExe,
+            'extraFlags'    => $extraFlags,
+            'lateLinkFlags' => $lateLinkFlags,
+            'extraCFiles'   => array_values($extraCFiles),
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
 
 } catch (\Throwable $e) {
     fwrite(STDERR, "[NO] Transpile failed: " . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");

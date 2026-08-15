@@ -2,6 +2,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
+#include "runtime.h"   // str_pool_alloc（ext_str.h 的 ext_mk_str 依赖，static inline 需本 TU 可见）
 #include "ext_str.h"
 
 #define _mk_str(s) ext_mk_str(s)

@@ -69,7 +69,14 @@ static inline void tphp_fn_usleep(t_int microseconds) {
 #ifdef _WIN32
     Sleep((DWORD)(microseconds / 1000));
 #else
-    usleep((useconds_t)microseconds);
+    // 不用 usleep()：它在 POSIX.1-2008 已废弃，glibc 头在仅定义
+    // _POSIX_C_SOURCE>=200112 时会隐藏其声明（导致隐式声明警告）。
+    // nanosleep() 是正式替代，声明于 <time.h>（本文件已包含）
+    struct timespec ts = {
+        .tv_sec  = (time_t)(microseconds / 1000000),
+        .tv_nsec = (long)((microseconds % 1000000) * 1000)
+    };
+    nanosleep(&ts, NULL);
 #endif
 }
 

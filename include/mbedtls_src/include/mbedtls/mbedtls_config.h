@@ -90,9 +90,13 @@
 #define MBEDTLS_CTR_DRBG_C
 #define MBEDTLS_NO_PLATFORM_ENTROPY
 
-/* Windows 熵源 */
+/* 熵源：NO_PLATFORM_ENTROPY 禁用平台默认源，三平台统一走
+ * MBEDTLS_ENTROPY_HARDWARE_ALT —— 由应用提供 mbedtls_hardware_poll()
+ * （见 ext/openssl/src/openssl.h：Windows 用 rand_s，Unix 用 /dev/urandom）。
+ * 注意：不提供该函数时链接不会立即报错（.a 惰性提取），仅当 TLS 握手/
+ * 随机数路径拉入 entropy.o 后才 unresolved。 */
 #if defined(_WIN32)
-    #define MBEDTLS_ENTROPY_WINDOWS_IMPL
+    #define MBEDTLS_ENTROPY_HARDWARE_ALT
 #else
     #define MBEDTLS_ENTROPY_HARDWARE_ALT
     #define MBEDTLS_TIMING_C

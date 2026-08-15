@@ -27,6 +27,14 @@
 //   这样 TPHP_STREAM_TLS_IMPLEMENTED 先定义，stream.h 中的 stub 被跳过
 // ============================================================
 
+// Windows: rand_s 声明要求 _CRT_RAND_S，且必须在 <stdlib.h> 首次
+// include 之前定义（下方的 mbedtls_hardware_poll 依赖）
+#if defined(_WIN32)
+#  ifndef _CRT_RAND_S
+#    define _CRT_RAND_S
+#  endif
+#endif
+
 #include "types.h"
 #include "object/object.h"    // t_object 完整定义（exception.h 依赖）
 #include "object/exception.h"
@@ -56,6 +64,44 @@
 #include <mbedtls/pk.h>
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/version.h>
+
+// ── mbedtls_hardware_poll — 应用层熵源（必须是全局函数：libmbedtls.a 的
+//    entropy.o 引用 extern 符号；本头仅被主 TU include 一次，无重复定义）──
+//    mbedtls_config.h 定义 MBEDTLS_NO_PLATFORM_ENTROPY + MBEDTLS_ENTROPY_HARDWARE_ALT，
+//    禁用了 mbedtls 平台默认熵源，要求应用提供本入口。
+//    ctr_drbg 仅在 seed 时调用（每次随机/TLS 会话初始化一次），性能非关键。
+#if defined(_WIN32)
+// rand_s：加密安全（内部 RtlGenRandom）。_CRT_RAND_S 已在文件顶部定义。
+int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen) {
+    (void)data;
+    if (len == 0) { *olen = 0; return 0; }
+    unsigned int v;
+    size_t done = 0;
+    while (done < len) {
+        if (rand_s(&v) != 0) return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+        unsigned char *p = (unsigned char *)&v;
+        size_t chunk = (len - done < sizeof(v)) ? (len - done) : sizeof(v);
+        for (size_t i = 0; i < chunk; i++) output[done + i] = p[i];
+        done += chunk;
+    }
+    *olen = len;
+    return 0;
+}
+#else
+// Unix（Linux/macOS）：/dev/urandom，阻塞直到内核熵池就绪（现代内核启动即就绪）
+int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen) {
+    (void)data;
+    *olen = 0;
+    if (len == 0) return 0;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f == NULL) return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+    size_t n = fread(output, 1, len, f);
+    fclose(f);
+    if (n != len) return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+    *olen = n;
+    return 0;
+}
+#endif
 
 // ── 常量（CodeGenerator 需要 TPHP_CONST_ 前缀，与 PHP openssl 扩展兼容） ──
 #define TPHP_CONST_SSL_OP_NO_COMPRESSION              0x00020000L
